@@ -781,6 +781,12 @@ def _every_value(_match):
     return True
 
 
+def _no_head(_match):
+    """No head is cleared, so no top-level value ends early at an inner pair
+    and the spans stay comparable to a plain `finditer` sweep."""
+    return False
+
+
 def _swept_spans(text):
     """The secret_value span of every match a full left-to-right sweep finds."""
     return [m.span("secret_value") for m in E.FIELD_VALUE_RE.finditer(text)]
@@ -822,13 +828,13 @@ def test_the_field_value_sweep_finds_exactly_the_full_sweeps_spans(text):
     equal a full sweep's exactly — the pass rewrites the payload, so an
     over-match here would mangle legitimate content and an under-match would
     leak a credential."""
-    assert E._field_value_spans(text, _every_value) == _swept_spans(text)
+    assert E._field_value_spans(text, _every_value, _no_head) == _swept_spans(text)
 
 
 def test_the_field_value_sweep_corpus_actually_matches_something():
     """Non-vacuity: a corpus the regex never matches would pass the test above
     with two empty span lists."""
-    assert E._field_value_spans("token=" + "a" * 30, _every_value)
+    assert E._field_value_spans("token=" + "a" * 30, _every_value, _no_head)
 
 
 def test_the_field_value_anchor_matches_wherever_the_regex_can_start():
@@ -854,15 +860,17 @@ def test_the_field_value_sweep_falls_back_when_the_fold_is_refused(monkeypatch):
     than trust them — and still finds exactly the full sweep's spans."""
     monkeypatch.setattr(E, "fold", lambda text: None)
     text = "token=" + "a" * 30
-    assert E._field_value_spans(text, _every_value) == _swept_spans(text)
-    assert E._field_value_spans(text, _every_value)
+    assert E._field_value_spans(text, _every_value, _no_head) == _swept_spans(text)
+    assert E._field_value_spans(text, _every_value, _no_head)
 
 
 def test_the_field_value_sweep_yields_to_a_compute_deadline():
     """The anchor loop is one iteration per credential noun in the payload, so an
     exhausted budget must stop it there rather than after the whole pass."""
     with pytest.raises(E.RedactionBudgetExceeded, match="during field-value scan"):
-        E._field_value_spans("token=" + "a" * 30, _every_value, E._Deadline(-1))
+        E._field_value_spans(
+            "token=" + "a" * 30, _every_value, _no_head, E._Deadline(-1)
+        )
 
 
 def test_fold_by_replacement_chain_equals_one_translate():
@@ -890,4 +898,4 @@ def test_the_field_value_sweep_terminates_under_a_zero_width_anchor(monkeypatch)
     position, so this is the differential harness's own precondition."""
     monkeypatch.setattr(E, "_FIELD_NAME_ANCHOR", re.compile(""))
     text = "token=" + "a" * 30 + " tail"
-    assert E._field_value_spans(text, _every_value) == _swept_spans(text)
+    assert E._field_value_spans(text, _every_value, _no_head) == _swept_spans(text)

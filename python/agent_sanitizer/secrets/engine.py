@@ -650,6 +650,11 @@ def _field_value_re(*, nested: bool) -> re.Pattern[str]:
 
 FIELD_VALUE_RE = _field_value_re(nested=False)
 _NESTED_FIELD_VALUE_RE = _field_value_re(nested=True)
+# A pair delimiter that opens a further credential pair inside a top-level value
+# (`token_url=https://idp/x&password=…`): where `_field_value_spans` tries to
+# end that value early. Each attempt starts only at a delimiter and reads one
+# bounded `_FIELD_KEY`, so the search is linear in the value.
+_INNER_PAIR_RE = re.compile(rf"[&;,](?={_FIELD_KEY})", re.IGNORECASE)
 
 # A value under FIELD_VALUE_RE's 20-char floor, or one spanning whitespace, is
 # credible only where the key/value reading is unambiguous: the credential noun
@@ -1557,9 +1562,10 @@ def is_bare_pem_header(value: str) -> bool:
     key inside a JSON string is, carries a body and answers False. Line breaks after
     the header (real, or JSON escapes) are not a body.
     """
-    match = PEM_BLOCK_RE.fullmatch(value.strip())
-    return match is not None and _pem_gap_start(value.strip(), match.end()) == (
-        match.end("header")
+    stripped = value.strip()
+    match = PEM_BLOCK_RE.fullmatch(stripped)
+    return match is not None and _pem_gap_start(stripped, match.end()) == match.end(
+        "header"
     )
 
 
@@ -2494,14 +2500,39 @@ def _redact_lines(
     return redacted_lines
 
 
+def _benign_head(
+    match: re.Match[str], is_cleared: Callable[[re.Match[str]], bool]
+) -> bool:
+    """Whether the top-level ``match``'s value, cut at its first delimiter that
+    opens another credential pair, is a value ``is_cleared`` positively clears.
+
+    The top-level value class admits `&` `;` `,` — a password may hold them — so
+    `token_url=https://idp/x&password=<secret>` reads as ONE value, and the
+    secret in its tail redacts the public URL with it. Cut at the inner pair,
+    the URL is judged alone. Only a head a benign-shape gate clears counts: one
+    merely under the length floor (`password=hunter2&api_key=…`) is too short to
+    judge, not shown benign, and may be the start of one password, so the whole
+    value still redacts. A quoted value splits the same way (the regex's closing
+    quote is optional), keeping a cleared URL and judging its inner pair.
+    """
+    start, end = match.span("secret_value")
+    inner = _INNER_PAIR_RE.search(match.string, start, end)
+    if inner is None:
+        return False
+    head = FIELD_VALUE_RE.match(match.string, match.start(), inner.start())
+    return head is not None and is_cleared(head)
+
+
 def _field_value_spans(
     text: str,
     is_secret: Callable[[re.Match[str]], bool],
+    is_cleared: Callable[[re.Match[str]], bool],
     deadline: _Deadline = _NO_DEADLINE,
 ) -> list[tuple[int, int]]:
     """The ascending, disjoint redacted spans (see :func:`_field_secret_span`)
     of every credential ``field = value`` pair in ``text`` that ``is_secret``
-    judges a secret.
+    judges a secret. ``is_cleared`` is the benign-shape verdict alone, with no
+    length floor and no side effect (see :func:`_benign_head`).
 
     The pattern is tried only at the positions :data:`_FIELD_NAME_ANCHOR`
     matches, which is every position a match can START at (the guard beside that
@@ -2516,7 +2547,9 @@ def _field_value_spans(
     benign value's start, and every pair found inside it is tried with
     :data:`_NESTED_FIELD_VALUE_RE`, whose value stops at the next inner key; that
     bound is what keeps a run of nested benign pairs linear rather than re-scanning
-    the enclosing value once per key.
+    the enclosing value once per key. A top-level value whose head, before an
+    inner credential pair, is cleared on its own (:func:`_benign_head`) is
+    treated the same way, so that head survives and the inner pair is judged.
     """
     folded = fold(text)
     # A text `fold` refuses (a length-changing case fold, which no code point
@@ -2549,7 +2582,11 @@ def _field_value_spans(
         if match is None:
             at = start + 1
             continue
-        if not is_secret(match):
+        # The head goes first because `is_cleared` is pure while `is_secret`
+        # records a finding: the whole value is judged only when no cleared head
+        # ends it early.
+        nested = pattern is _NESTED_FIELD_VALUE_RE
+        if (not nested and _benign_head(match, is_cleared)) or not is_secret(match):
             benign_end = max(benign_end, match.end("secret_value"))
             # The value starts after the non-empty field prefix, so this advances.
             at = match.start("secret_value")
@@ -2651,7 +2688,12 @@ def _redact_core(
 
     spans = [
         SpliceSpan(offsets[start], offsets[end - 1] + 1, placeholder())
-        for start, end in _field_value_spans(view, _is_secret_field, deadline)
+        for start, end in _field_value_spans(
+            view,
+            _is_secret_field,
+            lambda m: is_benign(Candidate.from_field_match(m), web_ingress=web_ingress),
+            deadline,
+        )
     ]
     return _splice(rejoined, spans, entries), found
 

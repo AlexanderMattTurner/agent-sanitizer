@@ -83,12 +83,69 @@ def test_a_top_level_value_keeps_its_ampersand():
 @pytest.mark.parametrize("label", sorted(LEGITIMATE))
 @pytest.mark.parametrize("sep", ["&", ";", ","])
 def test_no_benign_prefix_shadows_a_following_secret(label, sep):
-    """Every legitimate line, glued to a credential pair: whatever the prefix's
-    verdict, the pair after it is judged on its own."""
-    text = f"{LEGITIMATE[label]}{sep}password={_OPAQUE}"
-    result = run_plain(text)
-    assert result is not None, text
-    assert _OPAQUE not in result["text"], text
+    """Every legitimate line, glued to a credential pair: the pair after it is
+    judged on its own, and the legitimate line survives byte-for-byte — even
+    one whose top-level value class would read on through the delimiter."""
+    prefix = LEGITIMATE[label]
+    result = run_plain(f"{prefix}{sep}password={_OPAQUE}")
+    assert result is not None, prefix
+    assert result["text"] == f"{prefix}{sep}password=[REDACTED]"
+
+
+@pytest.mark.parametrize("sep", ["&", ";", ","])
+def test_a_cleared_head_ends_the_value_before_an_inner_pair(sep):
+    """`token_url`'s value class admits `&`, so the URL and the pair read as one
+    value; cut at the inner pair, the public URL is judged alone and kept."""
+    head = "token_url=https://idp.example/x"
+    assert _plain(f"{head}{sep}password={_OPAQUE}&expires_in=3600") == (
+        f"{head}{sep}password=[REDACTED]&expires_in=3600"
+    )
+
+
+@pytest.mark.parametrize(
+    "text, cleared",
+    [
+        (f"token_url=https://idp.example/x&password={_OPAQUE}", True),
+        # The optional closing quote lets a quoted value's head match too.
+        (f'password="https://idp.example/x&token={_OPAQUE}"', True),
+        # Too short to judge is not shown benign: the whole may be one password.
+        (f"password=hunter2&api_key={_OPAQUE}", False),
+        # An `&` with no credential pair after it is the password's own byte.
+        (f"password=https://idp.example/x&{_OPAQUE}", False),
+    ],
+)
+def test_only_a_gate_cleared_head_before_an_inner_pair_ends_the_value(text, cleared):
+    def is_cleared(m):
+        return E.is_benign(E.Candidate.from_field_match(m), web_ingress=False)
+
+    match = E.FIELD_VALUE_RE.match(text)
+    assert match is not None
+    assert E._benign_head(match, is_cleared) is cleared
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"password=hunter2&api_key={_OPAQUE}",
+        f"password=https://idp.example/x&{_OPAQUE}",
+    ],
+)
+def test_a_value_with_no_cleared_head_still_redacts_whole(text):
+    assert _plain(text) == "password=[REDACTED]"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "token_url=https://oauth2.googleapis.com/token&token_type=bearer",
+        "token_url=https://oauth2.googleapis.com/token;secret_path=/run/secrets/db",
+        "auth_url=https://idp.example/authorize,token_url=https://idp.example/token",
+        "secret_file=/etc/app/secret.conf&password_file=/etc/app/pw.txt",
+    ],
+)
+def test_a_cleared_head_before_a_benign_pair_finds_nothing(text):
+    """The split only re-judges the inner pair; a legitimate one stays clean."""
+    assert run_plain(text) is None, text
 
 
 @pytest.mark.parametrize("sample", SAMPLES, ids=lambda s: s["name"])

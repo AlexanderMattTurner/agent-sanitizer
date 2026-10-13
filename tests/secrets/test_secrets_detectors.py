@@ -104,16 +104,20 @@ _UNBOUNDED_WITHOUT_LOOKBEHIND = {
     "attempt that reaches 36 chars succeeds and consumes the whole run",
     "IbmCloudIamKeyDetector": "opens on a not-a-word-char lookbehind before a keyword",
     "IbmCosHmacKeyDetector": "opens on a not-a-word-char lookbehind before a keyword",
-    # NOT linear — the one entry here that is a known gap rather than a reason:
-    "JwtFullTokenDetector": "KNOWN QUADRATIC in cross-line discovery only: with "
-    "its lookbehind stripped, every `eyJ` of a wrapped run re-reads up to 65536 "
-    "chars per segment. The per-line pass keeps the lookbehind and is linear",
     "PypiTokenDetector": "nothing follows its open-ended run, so an attempt that "
     "reaches 70 chars succeeds and consumes the whole run",
     "SlackDetector": "opens on `xox?-` or the webhook URL, which its runs "
     "exclude, and nothing it can fail on follows the last run",
     "SoftlayerCredentialsDetector": "keyword arm opens on a not-a-word-char "
     "lookbehind; the URL arm is bounded",
+}
+# The live patterns that ARE quadratic on some reachable path: accepted gaps,
+# not linearity proofs. Kept apart so growing this set is a deliberate edit
+# the pin below makes visible, never one more line among the proofs above.
+_KNOWN_QUADRATIC = {
+    "JwtFullTokenDetector": "cross-line discovery only: with its lookbehind "
+    "stripped, every `eyJ` of a wrapped run re-reads up to 65536 chars per "
+    "segment. The per-line pass keeps the lookbehind and is linear",
 }
 
 
@@ -148,7 +152,9 @@ def test_every_live_pattern_is_linear_by_shape_or_exempt_with_a_reason():
         for name, pattern in _live_patterns()
         if not _attempt_is_linear(name, pattern)
     }
-    exempt = set(_UNBOUNDED_WITHOUT_LOOKBEHIND)
+    assert set(_UNBOUNDED_WITHOUT_LOOKBEHIND).isdisjoint(_KNOWN_QUADRATIC)
+    assert set(_KNOWN_QUADRATIC) == {"JwtFullTokenDetector"}
+    exempt = set(_UNBOUNDED_WITHOUT_LOOKBEHIND) | set(_KNOWN_QUADRATIC)
     assert offenders == exempt, {
         "unexempted": sorted(offenders - exempt),
         "stale exemption": sorted(exempt - offenders),
