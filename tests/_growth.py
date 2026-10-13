@@ -148,6 +148,13 @@ def opcode_growth(call_for: CallFor, sizes) -> Growth:
     return Growth(fit_exponent(sizes, costs), tuple(sizes), costs)
 
 
+def _visit_order(count: int) -> list[int]:
+    """The order :func:`cpu_growth` visits ``count`` sizes in on its even rounds
+    (0, 2, 1, 3 for four), reversed on odd rounds. The JS twin's ``visitOrder``
+    explains why ascending order lets one fast stretch cover half the curve."""
+    return [*range(0, count, 2), *range(1, count, 2)]
+
+
 def cpu_growth(call_for: CallFor, sizes) -> Growth:
     """CPU-time growth across ``sizes``: interleaved fastest-of-:data:`ROUNDS`
     per-call ``process_time``, every block matched to the largest size's cost
@@ -178,7 +185,7 @@ def cpu_growth(call_for: CallFor, sizes) -> Growth:
     rings = [[call_for(size, 2 + i) for i in range(_BLOCK_RING)] for size in sizes]
     taken = [0] * len(sizes)
     best = [math.inf] * len(sizes)
-    order = list(range(len(sizes)))
+    order = _visit_order(len(sizes))
     for round_ in range(ROUNDS):
         for i in reversed(order) if round_ % 2 else order:
             ring = rings[i]

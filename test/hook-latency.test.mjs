@@ -95,6 +95,11 @@ const SHAPES = {
  * Between machines the same ratio moves further: `sanitizeText/payload-scattered`
  * costs 9.9ms of CPU on the runner against 6.5ms here for the same ~0.89ms unit,
  * so the ceiling has to be the dearest microarchitecture's, not the developer's.
+ * The calibration loop is pure ALU while the cases lean on the regex engine and
+ * memory, so a runner whose cores are fast for their memory reads every heavy
+ * case dearer: one calibrating at 0.475ms read `scanText/vs-dense` at 18.8 units
+ * for 9.1ms of CPU, where a 0.725ms runner read 13.1 units for 9.3ms, and its
+ * readings set the heavy `sanitizeText` and `scanText` ceilings.
  * Every ceiling still sits under twice its case's median on the environment that
  * set it, which is the standard: a doubling is red, and anything looser is a
  * ceiling nothing is under. The per-case diagnostic each gate emits is what makes
@@ -140,11 +145,11 @@ const ENTRIES = {
       // least for: it is parse5 building a 256 KB fragment, so it moves with
       // the parser rather than with anything here.
       "html-prose": 250,
-      "joiner-dense": 43,
-      "vs-dense": 38,
-      "payload-run": 59,
+      "joiner-dense": 45,
+      "vs-dense": 48,
+      "payload-run": 69,
       "emoji-zwj": 38,
-      "run-dense": 32,
+      "run-dense": 35,
     },
   },
   scanText: {
@@ -155,14 +160,14 @@ const ENTRIES = {
     cheap: ["ascii-prose", "cjk-prose", "emoji-prose", "html-prose"],
     budget: {
       "joiner-dense": 22,
-      "vs-dense": 17,
+      "vs-dense": 25,
       // One 256 KB run decodes as a single payload, so this case is dominated by
       // one large allocation and swings with the collector — the widest budget
       // here buys tolerance for that rather than for a slower machine.
-      "payload-run": 64,
-      "payload-scattered": 17,
-      "emoji-zwj": 19,
-      "run-dense": 34,
+      "payload-run": 84,
+      "payload-scattered": 21,
+      "emoji-zwj": 21,
+      "run-dense": 43,
     },
   },
 };

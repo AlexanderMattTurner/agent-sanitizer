@@ -478,7 +478,7 @@ describe("every scanner-rendered untrusted string goes through displayUntrusted"
     // A JSON key path inside the model's own tool input.
     "claude-hooks/lib/placeholder-grammar.mjs::path",
     // A JSON key path built from Layer-1-cleaned keys.
-    "claude-hooks/sanitize-output.mjs::path",
+    "src/output.mjs::path",
     // The model's own Write/Edit file_path, echoed back in its own verdict.
     "claude-hooks/lib/secret-drop-guard.mjs::filePath",
     "src/rehydrate.mjs::filePath",

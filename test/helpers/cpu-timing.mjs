@@ -256,12 +256,46 @@ export function fitExponent(sizes, costs) {
  */
 
 /**
+ * `built`, with a string replaced by a flat copy of itself. A string built by
+ * concatenation is a V8 rope that the first regex or scan flattens, charging a
+ * whole-text copy to whichever timed call reads it first; the hook never pays it
+ * (its text comes off `JSON.parse` flat), and it lands unevenly across sizes,
+ * inflating the top of the curve (`sanitizeText` over a soft hyphen every other
+ * character read 1.00-1.19 on ropes, 0.98-1.02 flattened). A structured clone
+ * is a flat copy that keeps its representation (Latin-1 stays one byte a unit).
+ * @template T
+ * @param {T} built
+ * @returns {T}
+ */
+const flat = (built) =>
+  typeof built === "string" ? structuredClone(built) : built;
+
+/**
+ * The order {@link growth} visits `count` sizes in on its even rounds (every
+ * other size from the smallest, then the ones between: 0, 2, 1, 3 for four),
+ * reversed on its odd rounds. Plain ascending order runs sizes 1, 0, 0, 1 and
+ * 2, 3, 3, 2 back to back at round boundaries, so one fast stretch of the runner
+ * can cover just the smaller or the larger half of the curve and move a
+ * four-size fit by 0.4 (CI read `sanitizeText/cjk-prose` at 1.36 that way). In
+ * this order no contiguous stretch holds one half without the other.
+ * @param {number} count
+ * @returns {number[]}
+ */
+function visitOrder(count) {
+  const indices = Array.from({ length: count }, (_, i) => i);
+  return [
+    ...indices.filter((i) => i % 2 === 0),
+    ...indices.filter((i) => i % 2 === 1),
+  ];
+}
+
+/**
  * How `fn`'s per-call CPU cost grows across `sizes`, as a fitted exponent.
  *
  * Three things make the number survive a loaded runner, each closing a way a
  * single ratio of two samples did not:
  *
- * - EVERY size is sampled {@link ROUNDS} times, INTERLEAVED (sizes in order,
+ * - EVERY size is sampled {@link ROUNDS} times, INTERLEAVED ({@link visitOrder},
  *   then reversed, round after round), and each keeps its fastest per-call
  *   reading. A burst of load lands on every size alike rather than on
  *   whichever size happened to be timing, and a collector pause has to hit the
@@ -286,17 +320,21 @@ export function fitExponent(sizes, costs) {
  */
 export async function growth(input, fn, sizes) {
   assertHeapPinned();
+  const build = (/** @type {number} */ size, /** @type {number} */ attempt) =>
+    flat(input(size, attempt));
   // The first call per size warms the code. When even that is past the block
   // cap it sizes the block (one call); otherwise one more call, now warm, does.
   // Its noise only moves how many calls a block holds.
   const single = [];
   for (const size of sizes) {
+    const warm = build(size, 0);
     let mark = process.cpuUsage();
-    await fn(input(size, 0));
+    await fn(warm);
     let spent = cpuSince(mark);
     if (spent < MAX_BLOCK_MS) {
+      const sizing = build(size, 1);
       mark = process.cpuUsage();
-      await fn(input(size, 1));
+      await fn(sizing);
       spent = cpuSince(mark);
     }
     single.push(spent);
@@ -306,11 +344,11 @@ export async function growth(input, fn, sizes) {
     Math.max(1, Math.ceil(blockMs / Math.max(ms, 1e-3))),
   );
   const rings = sizes.map((size) =>
-    Array.from({ length: BLOCK_RING }, (_, i) => input(size, 2 + i)),
+    Array.from({ length: BLOCK_RING }, (_, i) => build(size, 2 + i)),
   );
   const next = sizes.map(() => 0);
   const costs = sizes.map(() => Infinity);
-  const order = sizes.map((_, i) => i);
+  const order = visitOrder(sizes.length);
   for (let round = 0; round < ROUNDS; round++)
     for (const i of round % 2 ? [...order].reverse() : order) {
       const mark = process.cpuUsage();
