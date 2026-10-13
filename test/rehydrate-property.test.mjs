@@ -31,7 +31,7 @@ import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fc from "fast-check";
 import { rehydrateRedacted } from "../src/rehydrate.mjs";
-import { applyLayer1 } from "../src/layer1.mjs";
+import { applyLayer1WellFormed } from "../src/layer1.mjs";
 import { occurrences as occ } from "../src/view-map.mjs";
 import { fcRunOptions } from "./test-helpers.mjs";
 import {
@@ -61,10 +61,11 @@ const realIo = (content) => ({
   redact: (text) => realRedact(text),
 });
 
-/** Sanitized view of `disk` exactly as the model would read it: Layer 1 (JS),
- * then the real redactor. Async — it awaits the engine. */
+/** Sanitized view of `disk` exactly as the model would read it: Layer 1 (JS)
+ * with lone surrogates normalized, then the real redactor. Async — it awaits
+ * the engine. */
 async function modelView(disk) {
-  const { cleaned } = applyLayer1(disk);
+  const { cleaned } = applyLayer1WellFormed(disk);
   const view = await realRedactMap(cleaned);
   return view.text;
 }
@@ -81,6 +82,16 @@ const REGRESSION_EXAMPLES = [[`${ESC}${ESC}[3${ZW}2m[32m\n`, 0, 0, "append"]];
 const runOptions = fcRunOptions({
   numRuns: 300,
   examples: REGRESSION_EXAMPLES,
+});
+// A lone surrogate pair split by a stripped ANSI run: the model's view carries
+// U+FFFD for each half, so only a well-formed oracle view round-trips.
+const writeRunOptions = fcRunOptions({
+  numRuns: 300,
+  examples: [
+    [
+      `\u{1F511}\uD83D${ESC}${ESC}[0m[32m\uDD11 TOKEN=${SECRET_B}\nalpha beta gamma\n`,
+    ],
+  ],
 });
 
 const KEY = String.fromCodePoint(0x1f511); // 🔑 astral (2 UTF-16 units)
@@ -277,7 +288,7 @@ describe("rehydrate: properties", () => {
           "faithful write-back is not byte-identical to disk",
         );
       }),
-      runOptions,
+      writeRunOptions,
     );
     assert.ok(sawRestore > 0, "no restore ever exercised — invariant vacuous");
   });
