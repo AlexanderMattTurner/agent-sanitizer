@@ -174,8 +174,8 @@ export const MAX_HTML_DEPTH = 4096;
  * the name up to its first `#` or `.`, lowercased.
  *
  * WHY IT MATTERS — the converter then recurses into the parse5 node's `content`,
- * which only an HTML-namespace `<template>` has. A `template` inside SVG or
- * MathML, or an HTML `template.x` tag, has none, the converter throws,
+ * which only an HTML-namespace `<template>` has. An `<svg><template>`, a
+ * `<math><template>` or an HTML `<template.x>` has none, the converter throws,
  * and the whole document would be withheld over a benign element.
  */
 const CONVERTS_AS_TEMPLATE = /^template(?:[#.]|$)/i;
@@ -189,6 +189,15 @@ const CONVERTS_AS_TEMPLATE = /^template(?:[#.]|$)/i;
  * changes it (lowercasing, the SVG case map). The element then converts the way
  * any element without template content does: its children as `children`, where
  * every scan of the hast tree reads them, which is also where the DOM has them.
+ *
+ * WHY A MASK, and not an empty parse5 `content` handed to the element so the
+ * converter has a fragment to recurse into: hastscript's `h` and `s` (the
+ * converter builds every element with one of them) move the children of ANY
+ * element they name `template` into the hast node's `content` and leave its
+ * `children` empty, and the converter then overwrites that `content` with its
+ * conversion of the parse5 fragment. Handed an empty one, the element's
+ * children would vanish with no error, and every Layer 2/3 scan in
+ * `./html.mjs` would go blind to them.
  */
 const TEMPLATE_MASK = " ";
 

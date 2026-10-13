@@ -29,7 +29,7 @@
  * module that one writes). `pnpm install` runs both in order
  * (scripts/gen-unicode.mjs); the JSON is git-ignored, never committed.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,6 +39,7 @@ import {
 } from "../src/ansi.mjs";
 import { VS, BLANK_NON_CF } from "../src/invisible.mjs";
 import { cfCodepoints, unicodeVersion } from "./gen-cf-charset.mjs";
+import { writeGenerated } from "./lib/write-generated.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -91,7 +92,7 @@ function main() {
   // The JSON is the directory's only file and is git-ignored, so a fresh clone
   // has no python/agent_sanitizer/data/ to write into.
   mkdirSync(dirname(OUTPUT_PATH), { recursive: true });
-  writeFileSync(OUTPUT_PATH, JSON.stringify(charsetDoc(), null, 2) + "\n");
+  writeGenerated(OUTPUT_PATH, JSON.stringify(charsetDoc(), null, 2) + "\n");
   console.log(
     `wrote ${OUTPUT_PATH} (${extraCodepoints().length} extra + ${cfCodepoints().length} Cf code points)`,
   );
