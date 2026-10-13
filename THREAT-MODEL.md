@@ -857,8 +857,10 @@ it, so what anchors its trust is worth stating exactly.
   identity by a branch ruleset on `refs/heads/plugin-dist` blocking creation,
   update, deletion and non-fast-forward for everyone but the repository's admin
   bypass actors. That ruleset is repository configuration, not code in this
-  tree, so nothing here creates or checks it: without it, any collaborator with write access can push the branch and
-  ship code to every installed user. With it, the residual writers are the
+  tree, so nothing here creates it; `plugin-dist-ruleset.yaml` only detects
+  its absence, failing daily and on any marketplace change while no active
+  `update` rule covers the branch. Without it, any collaborator with write
+  access can push the branch and ship code to every installed user. With it, the residual writers are the
   admins and anything that can run a workflow holding that secret — a workflow
   edited onto a branch of this repository can read it, so write access to the
   repository still reaches `plugin-dist` through Actions, as it reaches `main`'s

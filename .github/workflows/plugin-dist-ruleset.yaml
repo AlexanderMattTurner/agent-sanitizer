@@ -1,0 +1,52 @@
+name: Plugin dist ruleset
+
+# Detects a missing or deleted push restriction on the branch the plugin
+# marketplace installs from (plugin-dist). The restriction is a repository
+# ruleset, so no code change can add it and no other check notices it gone;
+# check-plugin-dist-ruleset.sh turns its absence into a red run. On the default
+# branch, CI failure notify pages on that red run.
+#
+# A repo whose marketplace names no install branch passes, so this is inert
+# where template-sync delivers it without a plugin.
+on:
+  pull_request: # not-required-check — reports repository configuration, which no PR can fix, so it must never gate a merge
+    paths:
+      - .claude-plugin/marketplace.json
+      - .github/scripts/check-plugin-dist-ruleset.sh
+      - .github/workflows/plugin-dist-ruleset.yaml
+  push:
+    branches: [main]
+    paths:
+      - .claude-plugin/marketplace.json
+      - .github/scripts/check-plugin-dist-ruleset.sh
+      - .github/workflows/plugin-dist-ruleset.yaml
+  schedule:
+    # Daily, off the hour; a ruleset deleted in the settings UI fires no event.
+    - cron: "23 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-dist-ruleset-${{ github.ref }}
+  # A PR run is superseded by its next push; a main or scheduled run is an
+  # alert and is never dropped.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: plugin-dist push restriction is active
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Check the ruleset covering the install branch
+        run: bash .github/scripts/check-plugin-dist-ruleset.sh
+        env:
+          # Reading rulesets and branch rules needs only metadata access, which
+          # the stock token always carries.
+          GH_TOKEN: ${{ github.token }}
