@@ -5,6 +5,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,6 +39,7 @@ import {
   DATA_URI_LENGTH_THRESHOLD,
 } from "../src/html.mjs";
 import { sanitize } from "../src/index.mjs";
+import { MAX_HTML_DEPTH } from "../src/html-tree-adapter.mjs";
 import { HTML_UNPARSEABLE_WARNING } from "../src/warnings.mjs";
 import { SEVERITY } from "../src/severity.mjs";
 
@@ -1918,14 +1920,16 @@ describe("unit: sanitizeHtml exact result shapes", () => {
     assert.equal(sanitizeHtml("plain prose, nothing to do"), null));
 });
 
-// R1: a pathologically nested fragment overflows the recursive remark/rehype
-// tree walk with a RangeError. The HTML layer is the only seam the top-level
-// `sanitize`/`sanitizeText` callers own, so it must fail CLOSED here rather than
-// let the exception escape and break their never-throw contract.
-describe("R1: parser stack overflow fails closed (never throws)", () => {
+// R1: a fragment nested past MAX_HTML_DEPTH makes the parse throw a RangeError
+// (it once did by overflowing the stack, at a depth that moved with the JIT
+// tier). The HTML layer is the only seam the top-level `sanitize`/`sanitizeText`
+// callers own, so it must fail CLOSED here rather than let the exception escape
+// and break their never-throw contract.
+describe("R1: pathological nesting fails closed (never throws)", () => {
   const deeplyNested = (depth) =>
     "<div>".repeat(depth) + "x" + "</div>".repeat(depth);
-  const OVERFLOW = deeplyNested(3000);
+  // The `x` sits one level past the bound.
+  const OVERFLOW = deeplyNested(MAX_HTML_DEPTH);
 
   it("sanitizeHtml withholds the input behind a placeholder instead of throwing", () => {
     const result = sanitizeHtml(OVERFLOW);
@@ -1999,7 +2003,11 @@ describe("R1: parser stack overflow fails closed (never throws)", () => {
       fc.property(
         fc.tuple(
           fc.constantFrom("div", "span", "p", "section", "b"),
-          fc.integer({ min: 2000, max: 4000 }),
+          // Straddles the bound, so both answers are drawn.
+          fc.integer({
+            min: MAX_HTML_DEPTH - 1000,
+            max: MAX_HTML_DEPTH + 1000,
+          }),
         ),
         ([tag, depth]) => {
           const nested =
@@ -2017,6 +2025,43 @@ describe("R1: parser stack overflow fails closed (never throws)", () => {
       // A few deep runs are enough; each parse is expensive, so keep numRuns low.
       fcRunOptions({ numRuns: 15 }),
     );
+  });
+});
+
+// Depth up to MAX_HTML_DEPTH is judged, not withheld, on the first call in a
+// process and on a small stack. Conversion to hast used to recurse three frames
+// per level, so ~2500 levels overflowed while the code was still interpreted
+// and converted once it was optimized: the same document was sanitized or
+// withheld depending on what had run before it. A fresh process is the only
+// cold call a test can make, and a quarter of the default stack leaves the
+// bound no room to be passing on headroom alone.
+describe("deep nesting is judged the same on a cold, small stack", () => {
+  it("splits every inherited region of a document nested to the bound", () => {
+    const html = new URL("../src/html.mjs", import.meta.url).href;
+    // Two elements per level, and the `v` text one level under the second.
+    const levels = Math.floor((MAX_HTML_DEPTH - 1) / 2);
+    const runner = `
+      import { sanitizeHtml } from ${JSON.stringify(html)};
+      const level = '<div style="font-size:0">s<b style="font-size:9px">v';
+      const result = sanitizeHtml(
+        level.repeat(${levels}) + "</b></div>".repeat(${levels}),
+      );
+      process.stdout.write(JSON.stringify({
+        unparseable: result.unparseable ?? false,
+        hiddenLeft: result.text.includes(">s<"),
+        visibleKept: result.text.split(">v<").length - 1,
+      }));
+    `;
+    const out = execFileSync(
+      process.execPath,
+      ["--stack-size=250", "--input-type=module", "-e", runner],
+      { encoding: "utf8" },
+    );
+    assert.deepEqual(JSON.parse(out), {
+      unparseable: false,
+      hiddenLeft: false,
+      visibleKept: levels,
+    });
   });
 });
 

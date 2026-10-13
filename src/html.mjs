@@ -2744,7 +2744,8 @@ export function sanitizeHtml(text) {
         ? scanFragmentTree(spliced.text, sourceTree)
         : scanMarkdown(spliced.text);
     } catch {
-      // The parse/visit blew up (stack overflow on pathological nesting, or any
+      // The parse/visit blew up (HTML nested past MAX_HTML_DEPTH, markdown
+      // nested deep enough to overflow a remark plugin's recursive walk, or any
       // other parser error). Fail CLOSED at this boundary so `sanitize`/
       // `sanitizeText` keep their never-throw contract: withhold the whole input
       // behind a placeholder and report it as hidden content removed.
@@ -3686,7 +3687,7 @@ export function detectExfil(text, options = {}) {
       threats.push({ isImage, autoFetched, reason, target: urlHost(url) });
     }
   } catch {
-    // The parse/visit blew up (stack overflow on pathological nesting). Fail
+    // The parse/visit blew up (pathological nesting, as in sanitizeHtml). Fail
     // CLOSED so the never-throw contract holds: report one sentinel threat so
     // the caller still warns rather than crashing, since an input too nested to
     // scan could itself be hiding an exfil URL.

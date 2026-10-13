@@ -139,5 +139,117 @@ export function parseHtmlFragment(html) {
     treeAdapter: adapter,
   });
   settle();
-  return fromParse5(fragment, { file: new VFile(html) });
+  return fromParse5Bounded(fragment, new VFile(html));
+}
+
+/**
+ * How many levels of the tree one `fromParse5` call converts.
+ *
+ * WHY IT EXISTS — `hast-util-from-parse5` converts by recursion, three frames
+ * (`one` → `all` → `element`) per level, so how deep a tree it survives is
+ * whatever stack is left, and that depends on the JIT tier: a cold call's
+ * interpreted frames are bigger than an optimized one's. ~2500 nested elements
+ * overflowed on the first call in a process and converted fine on a later one,
+ * so the same document came back withheld or sanitized depending on what had
+ * run before it. 128 levels still convert cold on a 100 KB stack, a tenth of
+ * Node's default.
+ */
+export const CONVERT_DEPTH = 128;
+
+/**
+ * The deepest a node may sit below the fragment root; a deeper parse throws, so
+ * the caller fails closed on it.
+ *
+ * Conversion no longer limits depth (see {@link CONVERT_DEPTH}), so this is the
+ * one place that does, and it answers the same way at every JIT tier. No real
+ * document comes near it — Blink's parser flattens anything nested past 512 —
+ * and what lies past it is built to cost: parse5's scope checks walk the
+ * open-element stack per tag, so parsing is quadratic in depth.
+ */
+export const MAX_HTML_DEPTH = 4096;
+
+/**
+ * `fromParse5(tree, { file })`, recursing at most `chunkDepth` levels at a time.
+ *
+ * Every node a multiple of `chunkDepth` levels down is converted on its own,
+ * deepest first, and then stands in its parent's `childNodes` as a placeholder
+ * text node carrying the converted subtree's position — the one thing about a
+ * child its parent's conversion reads (an unclosed element ends where its last
+ * child does). One walk then swaps each placeholder for its subtree. The result
+ * is the tree a single `fromParse5` call returns, which
+ * `html-tree-adapter.test` holds it to.
+ *
+ * Mutates `tree`: {@link parseHtmlFragment} owns the parse and drops it after.
+ * @param {any} tree
+ * @param {VFile} file
+ * @param {number} [chunkDepth]
+ * @returns {any}
+ */
+export function fromParse5Bounded(tree, file, chunkDepth = CONVERT_DEPTH) {
+  /** @type {Array<{ siblings: any[], index: number }>} */
+  const cuts = [];
+  const stack = [{ node: tree, depth: 0 }];
+  while (stack.length > 0) {
+    const { node, depth } = /** @type {{ node: any, depth: number }} */ (
+      stack.pop()
+    );
+    if (depth > MAX_HTML_DEPTH)
+      throw new RangeError(`HTML nested deeper than ${MAX_HTML_DEPTH} levels`);
+    // A template's content is a root its template's conversion recurses into.
+    if (node.content) stack.push({ node: node.content, depth: depth + 1 });
+    const siblings = node.childNodes ?? [];
+    const childDepth = depth + 1;
+    for (let index = 0; index < siblings.length; index++) {
+      if (childDepth % chunkDepth === 0) cuts.push({ siblings, index });
+      stack.push({ node: siblings[index], depth: childDepth });
+    }
+  }
+  // The walk reaches a cut before any cut below it, so going backwards converts
+  // a subtree only once everything cut out of it already stands as a
+  // placeholder.
+  const grafts = new Map();
+  for (let i = cuts.length - 1; i >= 0; i--) {
+    const { siblings, index } = cuts[i];
+    const converted = fromParse5(siblings[index], { file });
+    const token = {};
+    grafts.set(token, converted);
+    siblings[index] = {
+      nodeName: "#text",
+      value: token,
+      sourceCodeLocation: parse5Location(converted.position),
+    };
+  }
+  const root = fromParse5(tree, { file });
+  /** @type {any[]} */
+  const pending = [root];
+  while (grafts.size > 0 && pending.length > 0) {
+    const node = pending.pop();
+    if (node.content) pending.push(node.content);
+    const children = node.children ?? [];
+    for (let i = 0; i < children.length; i++) {
+      children[i] = grafts.get(children[i].value) ?? children[i];
+      pending.push(children[i]);
+    }
+  }
+  return root;
+}
+
+/**
+ * The parse5 location `hast-util-from-parse5` turns back into `position`.
+ *
+ * A position it built always has both points: it drops one only when parse5
+ * gave no line, and parse5 gives a location whole or not at all.
+ * @param {any} position
+ */
+function parse5Location(position) {
+  if (!position) return undefined;
+  const { start, end } = position;
+  return {
+    startLine: start.line,
+    startCol: start.column,
+    startOffset: start.offset,
+    endLine: end.line,
+    endCol: end.column,
+    endOffset: end.offset,
+  };
 }

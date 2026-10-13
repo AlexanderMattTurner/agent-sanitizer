@@ -39281,14 +39281,72 @@ function parseHtmlFragment(html4) {
     treeAdapter: adapter
   });
   settle();
-  return fromParse5(fragment, { file: new VFile(html4) });
+  return fromParse5Bounded(fragment, new VFile(html4));
 }
+function fromParse5Bounded(tree, file, chunkDepth = CONVERT_DEPTH) {
+  const cuts = [];
+  const stack = [{ node: tree, depth: 0 }];
+  while (stack.length > 0) {
+    const { node: node2, depth } = (
+      /** @type {{ node: any, depth: number }} */
+      stack.pop()
+    );
+    if (depth > MAX_HTML_DEPTH)
+      throw new RangeError(`HTML nested deeper than ${MAX_HTML_DEPTH} levels`);
+    if (node2.content) stack.push({ node: node2.content, depth: depth + 1 });
+    const siblings = node2.childNodes ?? [];
+    const childDepth = depth + 1;
+    for (let index2 = 0; index2 < siblings.length; index2++) {
+      if (childDepth % chunkDepth === 0) cuts.push({ siblings, index: index2 });
+      stack.push({ node: siblings[index2], depth: childDepth });
+    }
+  }
+  const grafts = /* @__PURE__ */ new Map();
+  for (let i = cuts.length - 1; i >= 0; i--) {
+    const { siblings, index: index2 } = cuts[i];
+    const converted = fromParse5(siblings[index2], { file });
+    const token = {};
+    grafts.set(token, converted);
+    siblings[index2] = {
+      nodeName: "#text",
+      value: token,
+      sourceCodeLocation: parse5Location(converted.position)
+    };
+  }
+  const root2 = fromParse5(tree, { file });
+  const pending = [root2];
+  while (grafts.size > 0 && pending.length > 0) {
+    const node2 = pending.pop();
+    if (node2.content) pending.push(node2.content);
+    const children = node2.children ?? [];
+    for (let i = 0; i < children.length; i++) {
+      children[i] = grafts.get(children[i].value) ?? children[i];
+      pending.push(children[i]);
+    }
+  }
+  return root2;
+}
+function parse5Location(position3) {
+  if (!position3) return void 0;
+  const { start, end } = position3;
+  return {
+    startLine: start.line,
+    startCol: start.column,
+    startOffset: start.offset,
+    endLine: end.line,
+    endCol: end.column,
+    endOffset: end.offset
+  };
+}
+var CONVERT_DEPTH, MAX_HTML_DEPTH;
 var init_html_tree_adapter = __esm({
   "src/html-tree-adapter.mjs"() {
     "use strict";
     init_dist();
     init_hast_util_from_parse5();
     init_vfile();
+    CONVERT_DEPTH = 128;
+    MAX_HTML_DEPTH = 4096;
   }
 });
 

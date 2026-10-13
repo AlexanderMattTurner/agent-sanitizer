@@ -28,6 +28,7 @@ import {
 } from "../src/output.mjs";
 import { LONE_SURROGATE_RE } from "../src/layer1.mjs";
 import { layer2Placeholder, UNPARSEABLE_PLACEHOLDER } from "../src/html.mjs";
+import { MAX_HTML_DEPTH } from "../src/html-tree-adapter.mjs";
 
 const hid = (original) => layer2Placeholder("hidden", original);
 
@@ -161,9 +162,10 @@ describe("invariant: no string leaves sanitizeText unvetted by Layer 4", () => {
   // placeholder rather than splicing spans, so the pre-splice text is the ONLY
   // copy of everything the input held — including a secret in plain sight, not
   // just one inside a spliced comment. It must ride the same reveal-and-vet
-  // path as an ordinary splice.
+  // path as an ordinary splice. The secret sits one level past the nesting
+  // bound, which is what makes the parse fail.
   const UNPARSEABLE_INPUT =
-    "<div>".repeat(3000) + SECRET + "</div>".repeat(3000);
+    "<div>".repeat(MAX_HTML_DEPTH) + SECRET + "</div>".repeat(MAX_HTML_DEPTH);
 
   it("captures and vets the reveal when the HTML parse fails", async () => {
     const r = await sanitizeText(UNPARSEABLE_INPUT, {
