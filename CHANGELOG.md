@@ -8,6 +8,19 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.64.0] - 2026-10-13
+
+### Changed
+- Unicode tables are now generated at install and pack time instead of being committed to the repository.
+- StandardizedVariants.txt is now fetched from unicode.org instead of being vendored in the repository.
+- StandardizedVariants.txt pinning now uses a single SHA-256 constant for verification.
+
+### Fixed
+- Fixed invisible charset data directory creation to ensure it exists before writing the JSON file.
+
+### Performance
+- Ported the SessionStart-scan latency fix and re-derived ceilings from #445 to the invisible module.
+
 ## [2.63.1] - 2026-10-13
 
 ### Added
