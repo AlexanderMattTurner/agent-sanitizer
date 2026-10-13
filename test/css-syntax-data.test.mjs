@@ -1,6 +1,6 @@
-// drift-guard-ok: a tool-generated artifact kept for a hard constraint (the
-// bundle must not carry css-tree's 400 KB mdn-data load), guarded by exactly
-// this committed == regenerate(css-tree, src/html.mjs) freshness check.
+// drift-guard-ok: a git-ignored, install-time artifact (the bundle must not
+// carry css-tree's 400 KB mdn-data load); this generated == regenerate(css-tree,
+// src/html.mjs) check catches an html.mjs edit made since the last `pnpm install`.
 /**
  * `src/css-syntax-data.mjs` must equal what `scripts/gen-css-syntax.mjs`
  * derives from the INSTALLED css-tree and the CURRENT src/html.mjs, or the
@@ -17,7 +17,7 @@ import { deriveCssSyntax } from "../scripts/gen-css-syntax.mjs";
 import { CSS_SYNTAX } from "../src/css-syntax-data.mjs";
 
 describe("css-syntax-data SSOT", () => {
-  it("the committed grammar tables equal the derivation", () => {
+  it("the generated grammar tables equal the derivation", () => {
     const derived = deriveCssSyntax();
     // Non-vacuity: an emptied derivation would compare equal to an emptied
     // module and prove nothing.
