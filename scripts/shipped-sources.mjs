@@ -31,8 +31,10 @@ export const SRC_SCOPE = "src/";
 /**
  * THIRD-PARTY code this package ships verbatim, held to a different bar.
  *
- * `src/vendor/gfm-autolink-literal.mjs` is a copy of one of `remark-gfm`'s
- * micromark extensions carrying a performance fix (see its header). It ships,
+ * `src/vendor/gfm-autolink-literal.mjs` is one of `remark-gfm`'s micromark
+ * extensions carrying a performance fix. It is not committed: it is generated
+ * at install time from the pinned upstream plus a patch
+ * (`scripts/gen-gfm-autolink.mjs`, whose header says why). It ships,
  * so it must be packed and type-checked; it is not ours, so a 100% coverage
  * floor and a mutation ratchet would measure upstream's branch structure rather
  * than this repo's tests, and every mutant of a parser arm no fixture reaches
@@ -43,8 +45,8 @@ export const SRC_SCOPE = "src/";
  * published `remark-gfm`, and asserts identical trees. Upstream is the oracle,
  * so the check cannot go stale the way a golden table does.
  *
- * A file lands here only when it is an unmodified-except-for-a-named-fix copy
- * of a published package. Code this repo wrote goes under `src/` and takes the
+ * A file lands here only when it is a published package's source modified by
+ * nothing but a named patch. Code this repo wrote goes under `src/` and takes the
  * floor with it.
  */
 export const VENDOR_SCOPE = "src/vendor/";

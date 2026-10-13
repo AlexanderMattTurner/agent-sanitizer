@@ -45,6 +45,10 @@ on:
       # The shared, hardened esbuild config the plugin build calls — a change
       # here moves the artifact just as surely as a change to plugin/scripts/.
       - scripts/lib/**
+      # The bundle inlines src/vendor/gfm-autolink-literal.mjs, which is
+      # git-ignored and generated from these two at install time.
+      - scripts/gen-gfm-autolink.mjs
+      - scripts/patches/**
       - plugin/requirements.in
       - plugin/requirements.txt
 
