@@ -122,8 +122,23 @@ range is preserved verbatim** (no re-serialization). Unclosed hidden markup
 extends to the end of the fragment—fail-closed for truncated input.
 
 Scripting/resource tags (`script`, `style`, `object`, `embed`, `iframe`, `svg`,
-`math`) and `data:` URI resources are **reported, not removed**: their bodies are
-page source the model may legitimately need to inspect.
+`math`, `template`) and `data:` URI resources are **reported, not removed**:
+their bodies are page source the model may legitimately need to inspect.
+
+A `<template>`'s content is a fragment the browser parses but never renders, so
+instructions placed there reach a model reading the source and no human reading
+the page. It is also where web components and client-side renderers keep their
+UI markup, so the template is reported rather than spliced, and its content is
+scanned like any other markup: a hidden element or comment inside it is
+spliced, a `<script>` inside it reported, a URL inside it read by Layer 3. A
+declarative shadow root (`shadowrootmode="open"`/`"closed"`) is reported too,
+since one the parser fails to attach (a second root on one host, say) is an
+ordinary inert template; its content is laid out in its host's box, so a flex
+host blockifies it as it would a light-DOM child. Slot assignment is not
+modelled: a hidden `<slot>` splices only itself, not the light-DOM children
+the browser renders through it. A `template` inside SVG or MathML (or an HTML
+`template.x`) is not reported: it has no template content, so its children are
+ordinary children and are scanned as such.
 
 HTML comments (`<!--…-->`, and the bogus `<!…>`/`<?…?>` forms) are spliced
 like hidden elements — a human viewing the rendered page never sees them. But
@@ -146,9 +161,12 @@ Report—never rewrite—URLs in markdown links/images/definitions, every HTML/S
 URL attribute in `src/url-attributes.mjs` (`src`, `href`, `xlink:href`,
 `srcset`/`imagesrcset`, `ping`, `poster`, `object data`, form
 `action`/`formaction`, `meta refresh`, …), CSS `url()` in `style` attributes and
-`<style>` elements, and the same again inside HTML comments, that are shaped to
-carry data off-origin. A URL's scheme is read by the WHATWG URL parser, and
-`srcset` and `meta refresh` by ports of the HTML Standard's own parsing steps:
+`<style>` elements, and the same again inside HTML comments and `<template>`
+content, that are shaped to carry data off-origin. A URL inside a comment or an
+inert template is reported as not auto-fetched: nothing there loads until a
+reader or a script acts on it. A URL's scheme is read by the WHATWG URL parser,
+and `srcset` and `meta refresh` by ports of the HTML Standard's own parsing
+steps:
 
 - suspicious query/fragment parameters (long base64/hex blobs, credential-shaped
   tokens), tuned to skip request-signing / pagination / analytics parameters
