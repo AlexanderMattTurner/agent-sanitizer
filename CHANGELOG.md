@@ -8,6 +8,15 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.62.1] - 2026-10-12
+
+### Fixed
+
+- Fixed handling of `**/.dot` and `**/.claude` glob patterns on Node.js versions with the globSync bug, ensuring they are correctly discovered and rewritten when necessary.
+- Improved glob-compat classification to correctly identify Node version constraints as facts rather than floor claims.
+- Fixed test rehydrate property derivation to use the lone-surrogate-normalized view.
+- Enhanced lock freshness checking to verify uv.lock consistency and prevent stale lock files.
+
 ## [2.62.0] - 2026-10-12
 
 ### Added

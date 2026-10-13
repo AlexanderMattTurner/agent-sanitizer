@@ -139,6 +139,11 @@ const FUZZ_EXEMPT = Object.freeze({
   scanInstructionFiles: "reads files and delegates the parse to scanText",
   walkContextGlobs:
     "expands globs and normalizes each walked entry to a relative path; it parses nothing of its own",
+  compatGlobs: "version gate in front of expandDotGlobstar",
+  expandDotGlobstar:
+    "rewrites caller-supplied glob config, never untrusted content; its exact outputs are pinned in glob-compat.test.mjs",
+  globstarSkipsDotSegments:
+    "numeric compare of process.versions.node against a fixed release table",
 
   // ── compositions and views fuzzed through the entry point above them ─────
   applyLayer1:
