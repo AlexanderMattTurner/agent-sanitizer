@@ -73,6 +73,22 @@ export const WHEEL_PATH = join(
  * @returns {string}
  */
 export function buildEngineWheel() {
+  // The charset JSON is git-ignored, generated at install time, and hatch's
+  // `artifacts` skips a missing file without complaint: a wheel built before
+  // `pnpm install` (or `node scripts/gen-unicode.mjs`) would ship without it and
+  // fail closed at import in the daemon.
+  const charset = join(
+    ROOT,
+    "python",
+    "agent_sanitizer",
+    "data",
+    "invisible-charset.json",
+  );
+  if (!existsSync(charset))
+    throw new Error(
+      `${charset} is missing, so the wheel would ship without it. It is ` +
+        "generated, not committed: run `pnpm install` or `node scripts/gen-unicode.mjs`.",
+    );
   // `python/` is staged without `_bundled/` first. pyproject force-includes the
   // git-ignored `_bundled/sanitize-cli.mjs` WHEN IT EXISTS, so building straight
   // off the checkout would let the builder's local state decide the bytes of a

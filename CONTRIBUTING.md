@@ -9,8 +9,20 @@ notes below before opening a PR.
 Use [pnpm](https://pnpm.io/) (not npm) for all package operations.
 
 ```bash
-pnpm install   # installs deps and configures git hooks (core.hooksPath .hooks)
+pnpm install   # installs deps, generates the Unicode tables, configures git hooks (core.hooksPath .hooks)
 ```
+
+The Unicode tables are **generated, never committed**: `src/cf-charset.mjs`,
+`src/joining-type.mjs`, `src/standardized-variants.mjs`,
+`src/unicode-properties.mjs` and
+`python/agent_sanitizer/data/invisible-charset.json` are git-ignored build
+output of `scripts/gen-unicode.mjs`, which `pnpm install` runs through
+`prepare` and `npm pack`/`publish` through `prepack`. A clean checkout cannot
+run the tests until that has happened; after editing a `scripts/gen-*.mjs`, or
+`src/invisible.mjs`'s `VS` / `BLANK_NON_CF`, re-run `pnpm gen:unicode`. To move
+to a new Unicode, bump the pinned `@unicode/unicode-*` package and install; there
+is no regenerated file to commit. Anything that builds the Python wheel
+(`uv build`) must generate first, because hatchling runs no Node.
 
 ## Workflow
 

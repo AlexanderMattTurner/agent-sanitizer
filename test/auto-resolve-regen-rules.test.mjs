@@ -11,7 +11,7 @@
  * real. `.github/scripts/resolve-generated.test.mjs` is the schema's test and
  * runs entirely against synthesized temp repos, so it never reads this file.
  *
- * The gap is silent by construction: rename `src/joining-type.mjs` and the rule
+ * The gap is silent by construction: rename `scripts/gen-fail-open-lib.mjs` and the rule
  * keeps claiming the old path. The oracle reports ownership of a file that does
  * not exist, the real conflict routes to the model to hand-edit, and every check
  * stays green — a misroute in the one place the pipeline is documented to fail

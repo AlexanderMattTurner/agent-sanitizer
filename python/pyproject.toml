@@ -68,16 +68,21 @@ secrets = ["detect-secrets>=1.5.0"]
 agent-secret-redactor = "agent_sanitizer.secrets.cli:main"
 agent-secret-redactor-daemon = "agent_sanitizer.secrets.daemon:main"
 
-# The bundled CLI is git-ignored (a build artifact), so hatchling's VCS-aware
-# file collection skips it by default. `artifacts` force-includes it into BOTH
-# the sdist and the wheel — the release build regenerates it before packaging.
+# The bundled CLI and the invisible-charset SSOT are git-ignored (build
+# artifacts), so hatchling's VCS-aware file collection skips them by default.
+# `artifacts` force-includes them into BOTH the sdist and the wheel — the
+# wheel is normally built FROM the sdist, so listing them for the wheel alone
+# would leave them out of it. The release build regenerates both before
+# packaging (hatchling runs no Node: `node scripts/gen-unicode.mjs` writes the
+# JSON, `node scripts/bundle-python-cli.mjs` the CLI).
 [tool.hatch.build]
-artifacts = ["agent_sanitizer/_bundled/sanitize-cli.mjs"]
+artifacts = [
+  "agent_sanitizer/_bundled/sanitize-cli.mjs",
+  "agent_sanitizer/data/invisible-charset.json",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["agent_sanitizer"]
-# The invisible-charset SSOT is data, not code, so it is not auto-included.
-artifacts = ["agent_sanitizer/data/invisible-charset.json"]
 # `license-files` (the `[project]` glob above) only resolves against files already
 # present in THIS build's source tree; when `uv build`/`pip wheel` build the wheel
 # FROM the sdist (the normal path, not straight off this checkout), the sdist's own
