@@ -102,6 +102,9 @@ importers:
       c8:
         specifier: 11.0.0
         version: 11.0.0
+      diff:
+        specifier: 9.0.0
+        version: 9.0.0
       esbuild:
         specifier: 0.28.1
         version: 0.28.1
@@ -120,6 +123,9 @@ importers:
       lint-staged:
         specifier: ^17.0.5
         version: 17.2.0
+      micromark-extension-gfm-autolink-literal:
+        specifier: 2.1.0
+        version: 2.1.0
       prettier:
         specifier: ^3.0.0
         version: 3.9.6
@@ -1161,6 +1167,10 @@ packages:
 
   diff-match-patch@1.0.5:
     resolution: {integrity: sha512-IayShXAgj/QMXgB0IWmKx+rOPuGMhqm5w6jvFxmVenXKIzRqTAAsbBPT3kWQeGANj3jGgvcvv4yK6SxqYmikgw==}
+
+  diff@9.0.0:
+    resolution: {integrity: sha512-svtcdpS8CgJyqAjEQIXdb3OjhFVVYjzGAPO8WGCmRbrml64SPw/jJD4GoE98aR7r25A0XcgrK3F02yw9R/vhQw==}
+    engines: {node: '>=0.3.1'}
 
   dunder-proto@1.0.1:
     resolution: {integrity: sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==}
@@ -3234,6 +3244,8 @@ snapshots:
       dequal: 2.0.3
 
   diff-match-patch@1.0.5: {}
+
+  diff@9.0.0: {}
 
   dunder-proto@1.0.1:
     dependencies:

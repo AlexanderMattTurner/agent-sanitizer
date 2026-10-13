@@ -29288,11 +29288,7 @@ function tokenizeEmailAutolink(effects, ok3, nok) {
   }
   function emailDomain(code4) {
     if (code4 === 46) {
-      return effects.check(
-        emailDomainDotTrail,
-        emailDomainAfter,
-        emailDomainDot
-      )(code4);
+      return effects.check(emailDomainDotTrail, emailDomainAfter, emailDomainDot)(code4);
     }
     if (code4 === 45 || code4 === 95 || asciiAlphanumeric(code4)) {
       data = true;
@@ -29324,11 +29320,7 @@ function tokenizeWwwAutolink(effects, ok3, nok) {
     }
     effects.enter("literalAutolink");
     effects.enter("literalAutolinkWww");
-    return effects.check(
-      wwwPrefix,
-      effects.attempt(domain, effects.attempt(path, wwwAfter), nok),
-      nok
-    )(code4);
+    return effects.check(wwwPrefix, effects.attempt(domain, effects.attempt(path, wwwAfter), nok), nok)(code4);
   }
   function wwwAfter(code4) {
     effects.exit("literalAutolinkWww");
@@ -29378,11 +29370,7 @@ function tokenizeProtocolAutolink(effects, ok3, nok) {
     return nok(code4);
   }
   function afterProtocol(code4) {
-    return code4 === null || asciiControl(code4) || markdownLineEndingOrSpace(code4) || unicodeWhitespace(code4) || unicodePunctuation(code4) ? nok(code4) : effects.attempt(
-      domain,
-      effects.attempt(path, protocolAfter),
-      nok
-    )(code4);
+    return code4 === null || asciiControl(code4) || markdownLineEndingOrSpace(code4) || unicodeWhitespace(code4) || unicodePunctuation(code4) ? nok(code4) : effects.attempt(domain, effects.attempt(path, protocolAfter), nok)(code4);
   }
   function protocolAfter(code4) {
     effects.exit("literalAutolinkHttp");

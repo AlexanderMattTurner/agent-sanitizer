@@ -43,7 +43,7 @@ function makeCheckout() {
       prepare: "exit 17",
       prepack: "exit 17",
     },
-    files: ["src/*.mjs"],
+    files: ["src/*.mjs", "src/vendor/*.mjs"],
   };
   writeFileSync(
     join(dir, "package.json"),
@@ -56,12 +56,24 @@ function makeCheckout() {
   );
   // A generated, git-ignored module, as src/cf-charset.mjs and friends are:
   // `git archive HEAD` omits it, so the install has to generate and stage it.
-  writeFileSync(join(dir, ".gitignore"), "src/table.mjs\n");
+  writeFileSync(
+    join(dir, ".gitignore"),
+    "src/table.mjs\nsrc/vendor/patched.mjs\n",
+  );
   mkdirSync(join(dir, "scripts"));
   writeFileSync(
     join(dir, "scripts", "gen-unicode.mjs"),
     `import { writeFileSync } from "node:fs";
 writeFileSync(new URL("../src/table.mjs", import.meta.url), "export const TABLE = 1;\\n");
+`,
+  );
+  // The second generator, whose output sits one directory down as
+  // src/vendor/gfm-autolink-literal.mjs does: the pathspec has to reach it.
+  writeFileSync(
+    join(dir, "scripts", "gen-gfm-autolink.mjs"),
+    `import { mkdirSync, writeFileSync } from "node:fs";
+mkdirSync(new URL("../src/vendor", import.meta.url), { recursive: true });
+writeFileSync(new URL("../src/vendor/patched.mjs", import.meta.url), "export const PATCHED = 1;\\n");
 `,
   );
   // Outside `files`: proves the install still ships the PUBLISHED tree rather
@@ -94,6 +106,9 @@ test("installs the local checkout without running its lifecycle scripts", () => 
   const hasEntry = existsSync(join(installed, "src", "index.mjs"));
   const hasUnpublished = existsSync(join(installed, "unpublished.txt"));
   const hasGenerated = existsSync(join(installed, "src", "table.mjs"));
+  const hasVendorGenerated = existsSync(
+    join(installed, "src", "vendor", "patched.mjs"),
+  );
   rmSync(dir, { recursive: true, force: true });
 
   assert.equal(ok, true, `install failed:\n${res.stdout}\n${res.stderr}`);
@@ -106,6 +121,11 @@ test("installs the local checkout without running its lifecycle scripts", () => 
     hasGenerated,
     true,
     "the git-ignored generated module was not staged into the install",
+  );
+  assert.equal(
+    hasVendorGenerated,
+    true,
+    "the git-ignored generated module under src/vendor/ was not staged",
   );
   assert.equal(
     hasUnpublished,

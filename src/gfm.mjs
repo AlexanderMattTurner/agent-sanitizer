@@ -4,8 +4,9 @@
  * This is `remark-gfm@4.0.1`'s own plugin body and
  * `micromark-extension-gfm@3.0.0`'s own `gfm()` composition, inlined so that
  * `gfmAutolinkLiteral` can come from `./vendor/gfm-autolink-literal.mjs`
- * instead of the published package — see that file for what differs and when
- * to delete both. Every other extension, and the mdast layer, are the upstream
+ * instead of the published package. That module is generated, not committed:
+ * `scripts/gen-gfm-autolink.mjs` patches the pinned upstream at install time,
+ * and its header says what differs and when to delete both. Every other extension, and the mdast layer, are the upstream
  * ones at the versions `remark-gfm` pins.
  *
  * Assembling the list here rather than adding an extension beside `remark-gfm`
