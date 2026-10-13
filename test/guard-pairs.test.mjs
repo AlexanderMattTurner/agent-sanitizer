@@ -276,8 +276,8 @@ describe("guarded-data scan (the map is derived from the tests)", () => {
         "module-relative join",
       ],
       [
-        "python/agent_sanitizer/data/invisible-charset.json",
-        "test/invisible-charset.test.mjs",
+        "plugin/dist/hooks/hook-binaries.sha256",
+        "plugin/test/plugin-bundle.test.mjs",
         "generator-exported path",
       ],
       [
@@ -378,8 +378,8 @@ describe("guarded-data scan (the map is derived from the tests)", () => {
       ),
       "pathspec `*` no longer crosses a directory separator",
     );
-    assert.deepEqual(expandPathspec("scripts/data/StandardizedVariants.txt"), [
-      "scripts/data/StandardizedVariants.txt",
+    assert.deepEqual(expandPathspec("scripts/lib/ucd.mjs"), [
+      "scripts/lib/ucd.mjs",
     ]);
     assert.throws(
       () => expandPathspec("src/[ai]*.mjs"),

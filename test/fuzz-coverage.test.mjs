@@ -207,7 +207,7 @@ const FUZZ_EXEMPT = Object.freeze({
   ]),
   ...withReason(
     "parse5 behind sanitizeHtml, fuzzed through it and pinned by html-tree-adapter.test",
-    ["createTreeAdapter", "parseHtmlFragment"],
+    ["createTreeAdapter", "fromParse5Bounded", "parseHtmlFragment"],
   ),
   ...withReason(
     "the micromark GFM assembly behind the markdown pipeline, fuzzed through sanitize; the vendored copy is held to upstream by gfm-autolink-parity",

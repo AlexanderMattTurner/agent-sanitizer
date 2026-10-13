@@ -31,7 +31,8 @@ SANITIZER_VERSION="2.0.0"
 # and took the whole review job down before it read a single diff. Staging keeps
 # npm as the packer, so the installed tree is still exactly what `files`
 # publishes. `git archive` stages the COMMITTED tree; every caller runs on a
-# pristine actions/checkout, so that is the tree on disk.
+# pristine actions/checkout, so that is the tree on disk (plus the generated,
+# git-ignored Unicode tables, copied in below).
 #
 # Only the install SPEC differs between the two paths, so the branch produces
 # just that and one invocation carries the flags — a second flag list is a
@@ -55,6 +56,27 @@ local_pkg_name="$(node -p "try { require('./package.json').name } catch { '' }")
 if [ "${local_pkg_name}" = "agent-sanitizer" ]; then
   staged="$(mktemp -d)"
   git archive --format=tar HEAD | tar -x -C "${staged}"
+  # The Unicode tables are generated at install time and git-ignored, so
+  # `git archive` left them out, and the staged copy cannot generate them itself
+  # (no node_modules, hence no UCD package, and its lifecycle scripts are
+  # stripped below). Generate them in the checkout, which has both, then copy in
+  # exactly the git-ignored files `files` would pack: src/*.mjs and the charset
+  # JSON. Plain `node`, no pnpm: this must work in the jobs that have none.
+  node scripts/gen-unicode.mjs
+  copied=0
+  while IFS= read -r generated; do
+    # bare-mkdir-ok: ${staged} is a fresh mktemp -d, and the cp below fails loudly if the directory is missing.
+    mkdir -p "${staged}/$(dirname "${generated}")"
+    cp "${generated}" "${staged}/${generated}"
+    copied=$((copied + 1))
+  done < <(git ls-files --others --ignored --exclude-standard -- \
+    'src/*.mjs' 'python/agent_sanitizer/data/invisible-charset.json')
+  # `gen-unicode.mjs` exiting 0 while the ignore rules matched nothing would
+  # install a package whose entry point throws on its first import.
+  if [ "${copied}" -eq 0 ]; then
+    echo "install-sanitizer: gen-unicode.mjs produced no git-ignored file to stage" >&2
+    exit 1
+  fi
   # Fails loudly on an unreadable manifest or a missing `scripts` block: a
   # silently-unstripped copy would reintroduce the pnpm dependency this exists
   # to remove, and only in the jobs that lack pnpm.

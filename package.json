@@ -25,7 +25,7 @@
     "build:types": "tsc -p tsconfig.build.json && tsc -p tsconfig.build-hooks.json",
     "build:plugin": "node plugin/scripts/build-plugin.mjs",
     "build:redactor": "node plugin/scripts/build-redactor-pyz.mjs",
-    "prepack": "pnpm build:types",
+    "prepack": "pnpm gen:unicode && pnpm build:types",
     "gen:joining-type": "node scripts/gen-joining-type.mjs",
     "gen:unicode": "node scripts/gen-unicode.mjs",
     "gen:unicode-properties": "node scripts/gen-unicode-properties.mjs",

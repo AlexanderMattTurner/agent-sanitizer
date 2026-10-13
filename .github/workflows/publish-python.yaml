@@ -57,6 +57,12 @@ jobs:
       - name: Install Node dependencies
         run: pnpm install
 
+      # The charset JSON uv build force-includes (hatch `artifacts`) is
+      # git-ignored build output and hatchling runs no Node, so generate it
+      # explicitly rather than rely on `pnpm install`'s `prepare` having run.
+      - name: Generate the Unicode tables the wheel ships
+        run: node scripts/gen-unicode.mjs
+
       # Regenerate the bundled CLI from src/; uv build force-includes it into the
       # sdist/wheel (see python/pyproject.toml).
       - name: Bundle the CLI into the Python package

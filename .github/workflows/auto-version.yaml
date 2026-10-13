@@ -103,6 +103,14 @@ jobs:
         if: steps.release.outputs.released == 'true'
         run: node scripts/bundle-python-cli.mjs
 
+      # The charset JSON the wheel force-includes (hatch `artifacts`) is
+      # git-ignored build output, and hatchling runs no Node. `pnpm install`
+      # above already generated it; regenerating here makes the wheel's contents
+      # independent of that, and of anything version-bump.sh did to the tree.
+      - name: Generate the Unicode tables the wheel ships
+        if: steps.release.outputs.released == 'true'
+        run: node scripts/gen-unicode.mjs
+
       - name: Set the wheel version to the released version
         if: steps.release.outputs.released == 'true'
         env:
