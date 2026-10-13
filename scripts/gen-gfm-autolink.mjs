@@ -46,6 +46,8 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { applyPatch as applyUnifiedDiff, parsePatch } from "diff";
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export const UPSTREAM_PACKAGE = "micromark-extension-gfm-autolink-literal";
@@ -74,83 +76,22 @@ export function readUpstream() {
 }
 
 /**
- * Apply a unified diff of one file, hunk by hunk, requiring every context and
- * removed line to match at exactly the position the hunk names. No fuzz and no
- * offset search: the input is pinned by hash, so any mismatch is a bug.
+ * Apply a unified diff of one file with jsdiff, without fuzz. The input is
+ * pinned by hash, so jsdiff's offset search can only land the hunks where the
+ * patch names them or not at all; either way a patch that fails to apply
+ * throws instead of returning upstream's slow code.
  *
  * @param {string} source
  * @param {string} patch
  * @returns {string}
  */
 export function applyPatch(source, patch) {
-  const lines = source.split("\n");
-  const out = [];
-  let cursor = 0; // next unread index into `lines`
-  let hunks = 0;
-  const patchLines = patch.split("\n");
-  // A trailing newline in the patch is not a line of the patch.
-  if (patchLines[patchLines.length - 1] === "") patchLines.pop();
-  let i = 0;
-  while (i < patchLines.length && !patchLines[i].startsWith("@@")) {
-    if (!/^(---|\+\+\+) /.test(patchLines[i]))
-      throw new Error(
-        `patch: unexpected header line ${JSON.stringify(patchLines[i])}`,
-      );
-    i++;
-  }
-  while (i < patchLines.length) {
-    const header = /^@@ -(\d+),(\d+) \+(\d+),(\d+) @@/.exec(patchLines[i]);
-    if (!header)
-      throw new Error(
-        `patch: bad hunk header ${JSON.stringify(patchLines[i])}`,
-      );
-    const [oldStart, oldCount, , newCount] = header.slice(1).map(Number);
-    i++;
-    if (oldStart - 1 < cursor)
-      throw new Error(`patch: hunk ${hunks + 1} overlaps the previous one`);
-    out.push(...lines.slice(cursor, oldStart - 1));
-    cursor = oldStart - 1;
-    let oldSeen = 0;
-    let newSeen = 0;
-    while (i < patchLines.length && !patchLines[i].startsWith("@@")) {
-      const line = patchLines[i];
-      const tag = line[0];
-      const text = line.slice(1);
-      if (tag === "\\") {
-        // "\ No newline at end of file" marks the last line of the file. It is
-        // only safe to ignore when that line is untouched context, because
-        // `split("\n")`/`join("\n")` round-trips the missing newline as-is.
-        if (patchLines[i - 1][0] !== " ")
-          throw new Error("patch: a changed final line is not supported");
-        i++;
-        continue;
-      }
-      if (tag === " " || tag === "-") {
-        if (lines[cursor] !== text)
-          throw new Error(
-            `patch: hunk ${hunks + 1} does not apply at line ${cursor + 1}: ` +
-              `expected ${JSON.stringify(text)}, found ${JSON.stringify(lines[cursor])}`,
-          );
-        cursor++;
-        oldSeen++;
-      }
-      if (tag === " " || tag === "+") {
-        out.push(text);
-        newSeen++;
-      } else if (tag !== "-") {
-        throw new Error(`patch: unexpected line ${JSON.stringify(line)}`);
-      }
-      i++;
-    }
-    if (oldSeen !== oldCount || newSeen !== newCount)
-      throw new Error(
-        `patch: hunk ${hunks + 1} line counts disagree with its header`,
-      );
-    hunks++;
-  }
-  if (hunks === 0) throw new Error("patch: no hunks");
-  out.push(...lines.slice(cursor));
-  return out.join("\n");
+  const files = parsePatch(patch);
+  if (files.length !== 1 || files[0].hunks.length === 0)
+    throw new Error("patch: expected hunks for exactly one file");
+  const patched = applyUnifiedDiff(source, files[0]);
+  if (patched === false) throw new Error("patch: a hunk does not apply");
+  return patched;
 }
 
 /**

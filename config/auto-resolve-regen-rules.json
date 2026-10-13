@@ -30,8 +30,12 @@
     },
     {
       "generator": "plugin/scripts/build-plugin.mjs",
-      "sources": ["package.json", "scripts/lib/bundle-esbuild.mjs"],
-      "sourcesPattern": "^(claude-hooks|src)/.*\\.mjs$",
+      "sources": [
+        "package.json",
+        "scripts/lib/bundle-esbuild.mjs",
+        "scripts/gen-gfm-autolink.mjs"
+      ],
+      "sourcesPattern": "^(claude-hooks|src)/.*\\.mjs$|^scripts/patches/",
       "owns": [
         "plugin/dist/hooks/plugin-hooks.bundle.mjs",
         "plugin/requirements.in"
