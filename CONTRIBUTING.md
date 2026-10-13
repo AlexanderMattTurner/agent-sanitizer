@@ -14,7 +14,8 @@ pnpm install   # installs deps, generates the Unicode tables, configures git hoo
 
 The Unicode tables are **generated, never committed**: `src/cf-charset.mjs`,
 `src/joining-type.mjs`, `src/standardized-variants.mjs`,
-`src/unicode-properties.mjs` and
+`src/unicode-properties.mjs`, `src/css-syntax-data.mjs` (CSS grammars from
+css-tree's mdn-data) and
 `python/agent_sanitizer/data/invisible-charset.json` are git-ignored build
 output of `scripts/gen-unicode.mjs`, which `pnpm install` runs through
 `prepare` and `npm pack`/`publish` through `prepack`. A clean checkout cannot

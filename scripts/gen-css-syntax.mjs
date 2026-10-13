@@ -4,8 +4,9 @@
  * src/html.mjs names in a string literal (plus a vendor-prefixed one's
  * basename) and the closure of what they reference, so the bundle skips
  * css-tree's ~400 KB of mdn-data. A property outside the table is "Unknown" to
- * the lexer, which the cascade treats as valid. Re-run from the repo root when
- * test/css-syntax-data.test.mjs reports drift.
+ * the lexer, which the cascade treats as valid. Git-ignored and never committed:
+ * scripts/gen-unicode.mjs runs this at `pnpm install` and pack time. Re-run
+ * (`pnpm gen:unicode`) when test/css-syntax-data.test.mjs reports drift.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
