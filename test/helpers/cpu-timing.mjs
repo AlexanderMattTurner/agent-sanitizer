@@ -256,16 +256,78 @@ export function fitExponent(sizes, costs) {
  */
 
 /**
+ * `built`, with a string replaced by a flat copy of itself.
+ *
+ * A string a gate builds by concatenation — a shape plus an attempt marker, as
+ * nearly every gate's inputs are — is a V8 rope, and the first regex or scan
+ * over it flattens it: a copy of the whole text into a fresh string, a fresh
+ * large-object allocation from 128 KB up. That copy is charged to whichever
+ * timed call reads the input first, and it is not a cost the hook pays: its
+ * text comes off `JSON.parse` already flat. Nor does the charge land evenly:
+ * {@link growth} gives every call its own input, so a size's blocks meet first
+ * uses until {@link BLOCK_RING} calls have run, and the larger the size the
+ * fewer calls a block holds. A size batching eight calls a block is clear of
+ * them from its second round, one batching two only in its last, and the
+ * largest — one call a block whenever that call takes {@link MIN_BLOCK_MS} or
+ * more — never, so the minimum strips the surcharge from the bottom of the
+ * curve and keeps it at the top. `sanitizeText` over a soft hyphen every other
+ * character, where the surcharge is large, read 1.00-1.19 on ropes (its 256 KB
+ * call at 5.6-7.5 ms) and 0.98-1.02 on the same texts flattened (4.9 ms), and
+ * CI failed it at 1.42.
+ *
+ * A structured clone of a string is a fresh flat copy that keeps its
+ * representation (Latin-1 text stays one byte per unit, so a gate times the
+ * same regex code the hook runs), made here before any clock starts. Anything
+ * else passes through untouched, so an object carrying a rope still pays for
+ * it.
+ * @template T
+ * @param {T} built
+ * @returns {T}
+ */
+const flat = (built) =>
+  typeof built === "string" ? structuredClone(built) : built;
+
+/**
+ * The order {@link growth} visits `count` sizes in on its even rounds — every
+ * other size from the smallest, then the ones between (0, 2, 1, 3 for four) —
+ * reversed on its odd rounds.
+ *
+ * A runner's speed is not constant within a run: one CI job read
+ * `sanitizeText/cjk-prose` at 1.147/1.247/2.494/10.346 ms, its smallest and
+ * largest sizes each about twice what the middle two put them at, and the
+ * fastest-of-rounds corrects a size only if one of its blocks fell in a fast
+ * stretch. Plain ascending order, reversed on odd rounds, runs 1, 0, 0, 1 and
+ * 2, 3, 3, 2 back to back at alternate round boundaries, so one short fast
+ * stretch can cover exactly the smaller or the larger half of the curve. That
+ * is the split that moves a four-size fit furthest, 0.4 for a 2x level, and it
+ * is the shape CI failed on: `sanitizeText/cjk-prose` read
+ * 0.737/1.385/5.091/10.972 ms, the two small sizes on the fast level and the
+ * two large ones on the slow, exponent 1.36, for a call that allocates nothing
+ * a collector could charge it for. In this order no contiguous stretch holds
+ * one half without the other; the most any stretch moves the fit is the 0.3 of
+ * a single end size, which ascending order allows as well.
+ * @param {number} count
+ * @returns {number[]}
+ */
+function visitOrder(count) {
+  const indices = Array.from({ length: count }, (_, i) => i);
+  return [
+    ...indices.filter((i) => i % 2 === 0),
+    ...indices.filter((i) => i % 2 === 1),
+  ];
+}
+
+/**
  * How `fn`'s per-call CPU cost grows across `sizes`, as a fitted exponent.
  *
  * Three things make the number survive a loaded runner, each closing a way a
  * single ratio of two samples did not:
  *
- * - EVERY size is sampled {@link ROUNDS} times, INTERLEAVED (sizes in order,
- *   then reversed, round after round), and each keeps its fastest per-call
- *   reading. A burst of load lands on every size alike rather than on
- *   whichever size happened to be timing, and a collector pause has to hit the
- *   same size in every round to survive the minimum.
+ * - EVERY size is sampled {@link ROUNDS} times, INTERLEAVED in
+ *   {@link visitOrder}, and each keeps its fastest per-call reading. A burst of
+ *   load lands on every size alike rather than on whichever size happened to be
+ *   timing, and a collector pause has to hit the same size in every round to
+ *   survive the minimum.
  * - Every timed block lasts about as long as one call at the LARGEST size (at
  *   least {@link MIN_BLOCK_MS}, at most {@link MAX_BLOCK_MS}), with smaller
  *   sizes batched to match. Fastest-of-N is fair only between blocks of
@@ -277,7 +339,8 @@ export function fitExponent(sizes, costs) {
  * Each call gets its own input from `input(size, attempt)`; `attempt` counts
  * up from 0, and inputs at one size should differ only by a unit, so a memo
  * that remembers its last argument cannot answer for the work (see
- * {@link measure}).
+ * {@link measure}). Every input is built, and a string one made {@link flat},
+ * before the clock starts.
  * @template T
  * @param {(size: number, attempt: number) => T} input
  * @param {(built: T) => unknown | Promise<unknown>} fn
@@ -286,17 +349,21 @@ export function fitExponent(sizes, costs) {
  */
 export async function growth(input, fn, sizes) {
   assertHeapPinned();
+  const build = (/** @type {number} */ size, /** @type {number} */ attempt) =>
+    flat(input(size, attempt));
   // The first call per size warms the code. When even that is past the block
   // cap it sizes the block (one call); otherwise one more call, now warm, does.
   // Its noise only moves how many calls a block holds.
   const single = [];
   for (const size of sizes) {
+    const warm = build(size, 0);
     let mark = process.cpuUsage();
-    await fn(input(size, 0));
+    await fn(warm);
     let spent = cpuSince(mark);
     if (spent < MAX_BLOCK_MS) {
+      const sizing = build(size, 1);
       mark = process.cpuUsage();
-      await fn(input(size, 1));
+      await fn(sizing);
       spent = cpuSince(mark);
     }
     single.push(spent);
@@ -306,11 +373,11 @@ export async function growth(input, fn, sizes) {
     Math.max(1, Math.ceil(blockMs / Math.max(ms, 1e-3))),
   );
   const rings = sizes.map((size) =>
-    Array.from({ length: BLOCK_RING }, (_, i) => input(size, 2 + i)),
+    Array.from({ length: BLOCK_RING }, (_, i) => build(size, 2 + i)),
   );
   const next = sizes.map(() => 0);
   const costs = sizes.map(() => Infinity);
-  const order = sizes.map((_, i) => i);
+  const order = visitOrder(sizes.length);
   for (let round = 0; round < ROUNDS; round++)
     for (const i of round % 2 ? [...order].reverse() : order) {
       const mark = process.cpuUsage();
