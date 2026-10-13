@@ -63,6 +63,11 @@ jobs:
       - name: Generate the Unicode tables the wheel ships
         run: node scripts/gen-unicode.mjs
 
+      # The CLI bundle inlines src/vendor/gfm-autolink-literal.mjs, git-ignored
+      # output of the patch generator; generate it explicitly for the same reason.
+      - name: Generate the patched GFM autolink module the bundle inlines
+        run: node scripts/gen-gfm-autolink.mjs
+
       # Regenerate the bundled CLI from src/; uv build force-includes it into the
       # sdist/wheel (see python/pyproject.toml).
       - name: Bundle the CLI into the Python package
