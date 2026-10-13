@@ -3137,6 +3137,12 @@ describe("an HTML template's content is scanned, and the template reported", () 
   for (const [label, [html, tags]] of Object.entries(NOT_TEMPLATES))
     it(`does not report a template with no template content: ${label}`, () =>
       assert.deepEqual(sanitizeHtml(html), reported(html, tags)));
+  // Pinned divergence: the markdown inline branch parses each tag alone, so it
+  // cannot see the enclosing namespace and reports the template.
+  it("reports an inline SVG's template in markdown prose", () => {
+    const md = "Intro <svg><template><circle/></template></svg> more.";
+    assert.deepEqual(sanitizeHtml(md), reported(md, { svg: 1, template: 1 }));
+  });
   it("does not report a template with no template content: HTML template.x", () =>
     assert.equal(
       sanitizeHtml("<p>a</p><template.x>t</template.x><p>b</p>"),

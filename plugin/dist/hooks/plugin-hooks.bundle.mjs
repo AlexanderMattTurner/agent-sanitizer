@@ -50925,7 +50925,6 @@ function isHiddenStyle(styleStr) {
   return declarations.length > 0 && styleHides(resolveCascade(declarations), false).size > 0;
 }
 function isInertTemplate(node2) {
-  if (node2.tagName !== "template" || node2.content === void 0) return false;
   const mode = String(node2.properties.shadowRootMode ?? "").toLowerCase();
   return mode !== "open" && mode !== "closed";
 }

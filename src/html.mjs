@@ -1521,17 +1521,13 @@ export const REPORTED_TAGS = new Set([
 ]);
 
 /**
- * True for a `template` whose content the page never renders. Only the HTML
- * namespace's `template` has template content: one inside SVG or MathML, or the
- * `template.x` the tree adapter converts under that name, is an ordinary
- * element of its namespace whose children are scanned as children. And a
- * declarative shadow root (`shadowrootmode` of `open` or `closed`) renders: the
- * browser's parser attaches its content to the parent as a shadow tree.
- * @param {any} node a hast element
+ * True for a template whose content the page never renders: every one but a
+ * declarative shadow root (`shadowrootmode` of `open` or `closed`), whose
+ * content the browser's parser attaches to the parent as a shadow tree.
+ * @param {any} node a hast element with template content (a `content` root)
  * @returns {boolean}
  */
 function isInertTemplate(node) {
-  if (node.tagName !== "template" || node.content === undefined) return false;
   const mode = String(node.properties.shadowRootMode ?? "").toLowerCase();
   return mode !== "open" && mode !== "closed";
 }
@@ -2550,6 +2546,10 @@ function scanInlineChildren(node, text, ranges, warned) {
           // A raw-text open tag starts an opaque region (a self-closing `/>`
           // does not apply to these in HTML — they always open).
           if (RAW_TEXT_ELEMENTS.has(el.tagName)) rawText = el.tagName;
+          // `el` is one tag parsed alone, so a `<template>` inside an inline
+          // `<svg>`/`<math>` reads as HTML here and is reported, where the
+          // source branch, which sees the namespace, does not: this errs toward
+          // reporting.
           if (isReportedElement(el)) countTag(warned, el.tagName);
           if (hasDataSrc(el)) warned.dataSrc += 1;
         }
