@@ -83,6 +83,7 @@ const scratchRelease = (marketplace = MARKETPLACE) => {
   git(repo, "config", "user.email", "seed@example.invalid");
   writeFile(repo, ".claude-plugin/marketplace.json", marketplace);
   writeFile(repo, "plugin/.claude-plugin/plugin.json", '{"version":"0.0.0"}\n');
+  writeFile(repo, "plugin/scripts/build-plugin.mjs", "// fixture\n");
   writeFile(repo, "src/a.mjs", "export const a = 1;\n");
   git(repo, "add", "-A");
   git(repo, "commit", "-m", "feat: seed");
@@ -265,6 +266,20 @@ test("resolve-release-tag refuses a dispatch for a tag HEAD does not carry, and 
   const [ambiguous, , why] = resolveTag(repo);
   assert.notEqual(ambiguous, 0);
   assert.match(why, /several release tags/);
+});
+
+test("resolve-release-tag bakes nothing in a repo that ships no plugin, however HEAD is tagged", () => {
+  // Template-sync delivers plugin-dist.yaml to repos with no plugin/; there a
+  // released, tagged HEAD and even a dispatch must resolve to "no tag".
+  const { repo } = scratchRelease();
+  git(repo, "rm", "-q", "plugin/scripts/build-plugin.mjs");
+  git(repo, "commit", "-q", "-m", "chore: no plugin");
+  git(repo, "tag", "v1.2.3");
+  for (const args of [[], ["v1.2.3"], ["v9.9.9"]]) {
+    const [status, output, stderr] = resolveTag(repo, ...args);
+    assert.deepEqual([status, output], [0, "tag=\n"]);
+    assert.match(stderr, /no plugin to bake/);
+  }
 });
 
 test("the bake listens to the release workflow by its real name", () => {

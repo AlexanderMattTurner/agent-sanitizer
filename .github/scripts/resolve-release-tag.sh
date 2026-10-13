@@ -17,6 +17,16 @@ log() { echo "$@" >&2; }
 WANTED="${1:-}"
 OUTPUT="${GITHUB_OUTPUT:?GITHUB_OUTPUT must be set}"
 
+# Template-sync delivers this workflow to repos that ship no plugin. There is
+# nothing to bake there, and build-plugin-dist.sh would die on the missing build
+# script, so resolve to "no tag" before looking at tags at all.
+ROOT="$(git rev-parse --show-toplevel)"
+if [[ ! -f "$ROOT/plugin/scripts/build-plugin.mjs" ]]; then
+  log "No plugin/scripts/build-plugin.mjs in this repo: no plugin to bake."
+  echo "tag=" >>"$OUTPUT"
+  exit 0
+fi
+
 # Captured first so a failing `git tag` aborts here instead of reading as "no
 # tag" and silently skipping the bake.
 ON_HEAD="$(git tag --points-at HEAD --list 'v*')"
