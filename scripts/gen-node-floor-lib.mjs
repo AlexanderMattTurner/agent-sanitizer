@@ -16,9 +16,10 @@
  * Usage: `pnpm gen:node-floor-lib` (writes the file), or `node
  * scripts/gen-node-floor-lib.mjs --stdout` to inspect the bytes.
  */
-import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { writeGenerated } from "./lib/write-generated.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 export const OUTPUT_PATH = join("plugin", "scripts", "lib", "node-floor.sh");
@@ -120,5 +121,5 @@ if (
 ) {
   if (process.argv.includes("--stdout"))
     process.stdout.write(nodeFloorShellLib());
-  else writeFileSync(join(ROOT, OUTPUT_PATH), nodeFloorShellLib());
+  else writeGenerated(join(ROOT, OUTPUT_PATH), nodeFloorShellLib());
 }

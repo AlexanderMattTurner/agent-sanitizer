@@ -41,12 +41,14 @@
  * Run from the repo root: `node scripts/gen-gfm-autolink.mjs`.
  */
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { applyPatch as applyUnifiedDiff, parsePatch } from "diff";
+
+import { writeGenerated } from "./lib/write-generated.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -132,7 +134,7 @@ ${applyPatch(upstream, patch).replace(/\n?$/, "\n")}`;
 }
 
 function main() {
-  writeFileSync(OUTPUT_PATH, renderGfmAutolink());
+  writeGenerated(OUTPUT_PATH, renderGfmAutolink());
   console.log(`wrote ${OUTPUT_PATH}`);
 }
 

@@ -9,7 +9,7 @@
  * Usage: `pnpm gen:fail-open-lib` (writes the file), or `node
  * scripts/gen-fail-open-lib.mjs --stdout` to inspect the bytes.
  */
-import { realpathSync, writeFileSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -17,6 +17,7 @@ import {
   FAIL_CLOSED_VALUES,
   FAIL_OPEN_ENV,
 } from "../claude-hooks/lib/hook-io.mjs";
+import { writeGenerated } from "./lib/write-generated.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 export const OUTPUT_PATH = join("plugin", "scripts", "lib", "fail-open.sh");
@@ -64,5 +65,5 @@ if (
 ) {
   if (process.argv.includes("--stdout"))
     process.stdout.write(failOpenShellLib());
-  else writeFileSync(join(ROOT, OUTPUT_PATH), failOpenShellLib());
+  else writeGenerated(join(ROOT, OUTPUT_PATH), failOpenShellLib());
 }
