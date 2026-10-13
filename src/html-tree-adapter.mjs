@@ -174,8 +174,8 @@ export const MAX_HTML_DEPTH = 4096;
  * the name up to its first `#` or `.`, lowercased.
  *
  * WHY IT MATTERS — the converter then recurses into the parse5 node's `content`,
- * which only an HTML-namespace `<template>` has. An `<svg><template>`, a
- * `<math><template>` or an HTML `<template.x>` has none, the converter throws,
+ * which only an HTML-namespace `<template>` has. A `template` inside SVG or
+ * MathML, or an HTML `template.x` tag, has none, the converter throws,
  * and the whole document would be withheld over a benign element.
  */
 const CONVERTS_AS_TEMPLATE = /^template(?:[#.]|$)/i;

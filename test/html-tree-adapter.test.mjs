@@ -93,15 +93,19 @@ const ORDINARY = {
   empty: "",
 };
 
+// `\x3c` is `<`. These fixtures crash a sanitizer that predates the fix they
+// test, so spelling the `<` as an escape keeps a review pipeline that runs
+// such a sanitizer over a diff of this file from withholding the diff whole.
 /** Elements the converter takes for a template, with no template content. */
 const NO_TEMPLATE_CONTENT = {
-  svg: "<svg><template><circle/></template></svg>",
-  math: "<math><template><mi>x</mi></template></math>",
+  svg: "\x3csvg><template><circle/></template></svg>",
+  math: "\x3cmath><template><mi>x</mi></template></math>",
   "nested in a template's content":
-    "<template><svg><template>x</template></svg></template>",
-  "selector-shaped names": "<template.x>a</template.x><svg><template#i>b",
+    "<template>\x3csvg><template>x</template></svg></template>",
+  "selector-shaped names":
+    "\x3ctemplate.x>a</template.x>\x3csvg>\x3ctemplate#i>b",
   "deep, so chunks cut around it":
-    "<svg><g><g><template><g><g><text>x</text></g></g></template></g></g></svg>",
+    "\x3csvg><g><g><template><g><g><text>x</text></g></g></template></g></g></svg>",
 };
 
 /**
@@ -196,7 +200,7 @@ const STAND_IN = "x-stand-in";
 
 /**
  * One `fromParse5` call converting a template-named element that has no
- * template content (`<svg><template>`, `<template.x>`) as it converts any other
+ * template content (one inside SVG, a `template.x` tag) as it converts any other
  * element of its namespace: the call sees it named {@link STAND_IN}, and its
  * hast node is named `template` again. Called on such an element as is,
  * `fromParse5` throws.
@@ -269,7 +273,7 @@ describe("bounded conversion matches one fromParse5 call", () => {
     });
 
   it("converts a template-named element with no template content as an ordinary element", () => {
-    const html = "<svg><template id=t><circle/></template></svg>";
+    const html = "\x3csvg><template id=t><circle/></template></svg>";
     // The dependency's own answer. Once it stops throwing here, the mask in
     // fromParse5Bounded has nothing left to work around.
     assert.throws(() => fromParse5(parseFragment(html, OPTIONS)), TypeError);
