@@ -50924,6 +50924,14 @@ function isHiddenStyle(styleStr) {
   const declarations = parseDeclarations(styleStr);
   return declarations.length > 0 && styleHides(resolveCascade(declarations), false).size > 0;
 }
+function isInertTemplate(node2) {
+  if (node2.tagName !== "template" || node2.content === void 0) return false;
+  const mode = String(node2.properties.shadowRootMode ?? "").toLowerCase();
+  return mode !== "open" && mode !== "closed";
+}
+function isReportedElement(node2) {
+  return node2.tagName === "template" ? isInertTemplate(node2) : REPORTED_TAGS.has(node2.tagName);
+}
 function isSelfClosedForeign(tagName, value) {
   return FOREIGN_ELEMENTS.has(tagName) && /\/\s*>\s*$/.test(value);
 }
@@ -51123,6 +51131,11 @@ function walk2(tree, test, visitor, treeParent = void 0) {
     const result = test === null || node2.type === test ? visitor(node2, index2, parent) : void 0;
     if (result === EXIT) return;
     if (result === SKIP) continue;
+    if (node2.type === "element" && node2.content !== void 0) {
+      nodes.push(node2.content);
+      indices.push(void 0);
+      parents2.push(node2);
+    }
     const children = node2.children;
     if (children === void 0) continue;
     for (let i = children.length - 1; i >= 0; i--) {
@@ -51216,7 +51229,7 @@ function scanFragmentTree(html4, tree) {
   const ranges = [];
   const warned = newWarned();
   const countElement = (node2) => {
-    if (REPORTED_TAGS.has(node2.tagName)) countTag(warned, node2.tagName);
+    if (isReportedElement(node2)) countTag(warned, node2.tagName);
     if (hasDataSrc(node2)) warned.dataSrc += 1;
   };
   const pending = [[tree, void 0]];
@@ -51366,7 +51379,7 @@ function scanInlineChildren(node2, text6, ranges, warned) {
         const el = parseHtmlTag(value);
         if (el) {
           if (RAW_TEXT_ELEMENTS.has(el.tagName)) rawText = el.tagName;
-          if (REPORTED_TAGS.has(el.tagName)) countTag(warned, el.tagName);
+          if (isReportedElement(el)) countTag(warned, el.tagName);
           if (hasDataSrc(el)) warned.dataSrc += 1;
         }
       }
@@ -51782,10 +51795,21 @@ function documentUrls(text6, parseMd, parseHtml) {
     });
   });
   const comments = [];
-  walk2(parseHtml(text6), null, (node2) => {
-    if (node2.type === "comment") comments.push(node2.value);
-    else if (node2.type === "element") urls.push(...elementUrls(node2));
-  });
+  const inert = /* @__PURE__ */ new Set();
+  walk2(
+    parseHtml(text6),
+    null,
+    (node2, _index, parent) => {
+      if (inert.has(parent) || parent?.content === node2 && isInertTemplate(parent))
+        inert.add(node2);
+      if (node2.type === "comment") comments.push(node2.value);
+      else if (node2.type === "element")
+        for (const url of elementUrls(node2))
+          urls.push(
+            inert.has(node2) ? { ...url, autoFetched: false, context: "resource" } : url
+          );
+    }
+  );
   return { urls, comments };
 }
 function collectUrls(text6) {
@@ -52126,7 +52150,8 @@ var init_html4 = __esm({
       "embed",
       "iframe",
       "svg",
-      "math"
+      "math",
+      "template"
     ]);
     VOID_ELEMENTS2 = /* @__PURE__ */ new Set([
       "area",

@@ -1502,7 +1502,11 @@ export function isHiddenStyle(styleStr) {
 // Scripting / resource-loading tags whose PRESENCE is reported to the model
 // but whose content is preserved: their bodies are page source the model may
 // legitimately need to inspect (how a page's scripts work, its styles, its
-// SVGs), so unlike hidden elements they are never removed.
+// SVGs), so unlike hidden elements they are never removed. An inert
+// `template` (see {@link isInertTemplate}) is here because the browser parses
+// its content into a fragment it never renders — a reader of the source sees
+// it, a reader of the page does not — while that content is also where a
+// component's UI markup legitimately lives.
 export const REPORTED_TAGS = new Set([
   "script",
   "style",
@@ -1511,7 +1515,35 @@ export const REPORTED_TAGS = new Set([
   "iframe",
   "svg",
   "math",
+  "template",
 ]);
+
+/**
+ * True for a `template` whose content the page never renders. Only the HTML
+ * namespace's `template` has template content: one inside SVG or MathML, or the
+ * `template.x` the tree adapter converts under that name, is an ordinary
+ * element of its namespace whose children are scanned as children. And a
+ * declarative shadow root (`shadowrootmode` of `open` or `closed`) renders: the
+ * browser's parser attaches its content to the parent as a shadow tree.
+ * @param {any} node a hast element
+ * @returns {boolean}
+ */
+function isInertTemplate(node) {
+  if (node.tagName !== "template" || node.content === undefined) return false;
+  const mode = String(node.properties.shadowRootMode ?? "").toLowerCase();
+  return mode !== "open" && mode !== "closed";
+}
+
+/**
+ * True when Layer 2 reports `node`'s presence (see {@link REPORTED_TAGS}).
+ * @param {any} node a hast element
+ * @returns {boolean}
+ */
+function isReportedElement(node) {
+  return node.tagName === "template"
+    ? isInertTemplate(node)
+    : REPORTED_TAGS.has(node.tagName);
+}
 
 // HTML void elements: they never carry content and never emit a closing tag, so
 // a hidden one (<img hidden>, <input hidden>, …) must be spliced as a single node
@@ -1893,6 +1925,13 @@ function hasDataSrc(el) {
  * the `unist-util-visit` contract, which is what the call sites here are
  * written against.
  *
+ * One addition to that contract: an HTML `template`'s content (hast keeps it
+ * as a `content` root beside the element's empty `children`) is walked after
+ * its children, with the template as its parent, and `SKIP` leaves it
+ * unvisited too. Rendered or not (see {@link isInertTemplate}), that markup is
+ * in the source a model reads, so a scan that stopped at `children` would pass
+ * any hidden element, script or URL placed in it unseen.
+ *
  * Spelled out rather than imported because `unist-util-visit` allocates a fresh
  * ancestors array and a closure per node, and on a document that is one long
  * flat sibling list — 32k `<p>` elements per megabyte of ordinary HTML — that
@@ -1921,6 +1960,11 @@ function walk(tree, test, visitor, treeParent = undefined) {
         : undefined;
     if (result === EXIT) return;
     if (result === SKIP) continue;
+    if (node.type === "element" && node.content !== undefined) {
+      nodes.push(node.content);
+      indices.push(undefined);
+      parents.push(node);
+    }
     const children = node.children;
     if (children === undefined) continue;
     for (let i = children.length - 1; i >= 0; i--) {
@@ -2163,7 +2207,7 @@ function scanFragmentTree(html, tree) {
   const warned = newWarned();
   /** @param {any} node */
   const countElement = (node) => {
-    if (REPORTED_TAGS.has(node.tagName)) countTag(warned, node.tagName);
+    if (isReportedElement(node)) countTag(warned, node.tagName);
     if (hasDataSrc(node)) warned.dataSrc += 1;
   };
   // Subtrees still to scan, each with its parent: the tree itself, then the
@@ -2485,7 +2529,7 @@ function scanInlineChildren(node, text, ranges, warned) {
           // A raw-text open tag starts an opaque region (a self-closing `/>`
           // does not apply to these in HTML — they always open).
           if (RAW_TEXT_ELEMENTS.has(el.tagName)) rawText = el.tagName;
-          if (REPORTED_TAGS.has(el.tagName)) countTag(warned, el.tagName);
+          if (isReportedElement(el)) countTag(warned, el.tagName);
           if (hasDataSrc(el)) warned.dataSrc += 1;
         }
       }
@@ -3628,20 +3672,40 @@ function documentUrls(text, parseMd, parseHtml) {
   });
   /** @type {string[]} */
   const comments = [];
-  walk(parseHtml(text), null, (/** @type {any} */ node) => {
-    if (node.type === "comment") comments.push(node.value);
-    else if (node.type === "element") urls.push(...elementUrls(node));
-  });
+  // Nodes inside an inert template's content, where nothing loads, submits or
+  // redirects until a script clones it into the page.
+  const inert = new Set();
+  walk(
+    parseHtml(text),
+    null,
+    (/** @type {any} */ node, _index, /** @type {any} */ parent) => {
+      if (
+        inert.has(parent) ||
+        (parent?.content === node && isInertTemplate(parent))
+      )
+        inert.add(node);
+      if (node.type === "comment") comments.push(node.value);
+      else if (node.type === "element")
+        for (const url of elementUrls(node))
+          urls.push(
+            inert.has(node)
+              ? { ...url, autoFetched: false, context: "resource" }
+              : url,
+          );
+    },
+  );
   return { urls, comments };
 }
 
 // Every URL a Layer-3 detector reads: markdown links/images/definitions and
-// the URL attributes of every element, also inside comments. Both detectors
-// below consume this, so a node type is in scope for all of them or for none;
-// `parseMarkdown` memoizes its tree, so back-to-back detectors share the parse.
-// A comment is invisible on the page but not to a model reading the source:
-// its text is read one level deep with its markup openers defused, and what it
-// names is not fetched and has no off-origin rule.
+// the URL attributes of every element, also inside comments and template
+// content. Both detectors below consume this, so a node type is in scope for
+// all of them or for none; `parseMarkdown` memoizes its tree, so back-to-back
+// detectors share the parse. A comment is invisible on the page but not to a
+// model reading the source: its text is read one level deep with its markup
+// openers defused, and what it names is not fetched and has no off-origin
+// rule. An inert template's content gets the same two answers: nothing in it
+// is fetched, submitted or followed until a script clones it into the page.
 /** @param {string} text @returns {CollectedUrl[]} */
 function collectUrls(text) {
   const { urls, comments } = documentUrls(text, parseMarkdown, parseFragment);
