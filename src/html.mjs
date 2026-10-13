@@ -50,8 +50,7 @@ import cssWalk from "css-tree/walker";
 import cssGenerate from "css-tree/generator";
 // @ts-ignore -- see above.
 import { ident as cssIdent } from "css-tree/utils";
-// @ts-ignore -- see above. The lexer is built over ./css-syntax-data.mjs, the
-// grammar strings alone, for the same bundle-size reason as the subpaths.
+// @ts-ignore -- see above. Built over ./css-syntax-data.mjs (bundle size).
 import { Lexer as CssLexer } from "css-tree/lexer";
 import { CSS_SYNTAX } from "./css-syntax-data.mjs";
 import { unified } from "unified";
@@ -86,13 +85,12 @@ export {
 //
 // Values are tokenized by css-tree (its spec-compliant tokenizer/AST), not by
 // hand-rolled regexes: `parseDeclarations` splits declarations, decodes CSS
-// escapes, and reads the `!important` flag through css-tree, `resolveCascade`
-// picks the declaration a browser applies, and the structural detectors below
-// inspect its typed value nodes (Number, Dimension, Percentage, Function, …)
-// directly. So an exponent (`scale(1e-3)`), an FF/CR escape terminator, an
-// escaped `!important`, or a `;` inside a quoted value is read exactly as a
-// browser reads it — the tokenizer-divergence bugs a hand-rolled parser kept
-// re-introducing simply cannot arise. Ambiguity still
+// escapes, and strips `!important` through css-tree, and the structural
+// detectors below inspect the resulting typed value nodes (Number, Dimension,
+// Percentage, Function, …) directly. So an exponent (`scale(1e-3)`), an FF/CR
+// escape terminator, an escaped `!important`, or a `;` inside a quoted value is
+// read exactly as a browser reads it — the tokenizer-divergence bugs a
+// hand-rolled parser kept re-introducing simply cannot arise. Ambiguity still
 // fails OPEN (treated as visible): an unresolved unit, `calc()`, or `var()`
 // never counts as hidden.
 //
@@ -1307,10 +1305,9 @@ const RESETTING_SHORTHANDS = {
 };
 
 /**
- * `winnerOf` is the declaration a browser applies for a property (its own, a
- * resetting shorthand's or `all`'s); `nodeOf`/`textOf` the value of its OWN
- * winning declaration (null/"" when a shorthand won); `exhausted` is set once
- * a lookup ran out of {@link VALIDATION_BUDGET}.
+ * `winnerOf`: the declaration applied (its own, a shorthand's or `all`'s);
+ * `nodeOf`/`textOf`: its value when it is the property's OWN (else null/"");
+ * `exhausted`: a lookup ran out of {@link VALIDATION_BUDGET}.
  * @typedef {{
  *   winnerOf: (property: string) => StyleDeclaration | null,
  *   nodeOf: (property: string) => any,
@@ -1808,12 +1805,11 @@ function regionVerdicts(root, kinds) {
 }
 
 // The splice of an element hidden by inherited `kinds` alone whose descendant
-// overrides them (`<span style="font-size:0">a<b style="font-size:9px">`):
-// each maximal run of hidden siblings becomes one range, comments outside a run
-// keep their own, and elements outside a run go back to `rescan`. `mixed` holds
-// the elements left standing. Null when nothing overrides, or when a position
-// is missing or out of source order (parse5 recovery): the caller then splices
-// the whole element.
+// overrides them (`<span style="font-size:0">a<b style="font-size:9px">`): one
+// range per maximal run of hidden siblings, comments outside a run keeping their
+// own, other elements going back to `rescan`; `mixed` is the elements left
+// standing. Null when nothing overrides or a position is missing or out of
+// source order (parse5 recovery): the caller splices the whole element.
 /** @param {any} root @param {Set<InheritedHide>} kinds @returns {{ ranges: SpliceRange[], rescan: Array<[any, any]>, mixed: any[] } | null} */
 function inheritedRegionSplice(root, kinds) {
   const verdicts = regionVerdicts(root, kinds);

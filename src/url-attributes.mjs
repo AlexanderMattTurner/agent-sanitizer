@@ -1,13 +1,11 @@
 /**
- * The HTML and SVG attributes a browser resolves as URLs: the one table every
- * Layer-3 URL read (and Layer 2's data: resource count) goes through.
- * test/html-url-extraction.test.mjs partitions the HTML Standard's URL-valued
- * attributes between this table and an exempt list.
- *
- * `property` is the hast spelling; `elements` null means any element; a "form"
- * or "refresh" `context` is also flagged for leaving the page's origin;
- * `fetched` says the browser loads it with nobody deciding to, except on
- * `notFetchedOn`. A row states only where it differs from {@link DEFAULTS}.
+ * The attributes a browser resolves as URLs: the one table every Layer-3 URL
+ * read (and Layer 2's data: resource count) goes through; its test partitions
+ * the HTML Standard's URL attributes between it and an exempt list. `property`
+ * is the hast spelling; `elements` null means any element; a "form" or
+ * "refresh" `context` is also flagged for leaving the origin; `fetched` is a
+ * load nobody decides on, except on `notFetchedOn`. Rows state only where they
+ * differ from {@link DEFAULTS}.
  */
 
 /**
@@ -22,7 +20,6 @@
  * }} UrlAttribute
  */
 
-// A single URL, on any element, fetched as a resource.
 const DEFAULTS = Object.freeze({
   grammar: "url",
   elements: null,
@@ -35,8 +32,7 @@ const DEFAULTS = Object.freeze({
 export const URL_ATTRIBUTES = Object.freeze(
   /** @type {Array<Partial<UrlAttribute> & { attribute: string, property: string }>} */ ([
     { attribute: "src", property: "src" },
-    // A link waits for a click; `<base>` only changes how the page's relative
-    // URLs resolve.
+    // A link waits for a click; `<base>` only re-bases relative URLs.
     {
       attribute: "href",
       property: "href",

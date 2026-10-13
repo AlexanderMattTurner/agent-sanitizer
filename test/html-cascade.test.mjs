@@ -10,7 +10,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { isHiddenElement, isHiddenStyle, sanitizeHtml } from "../src/html.mjs";
+import { isHiddenStyle, sanitizeHtml } from "../src/html.mjs";
 
 /** `n` declarations `${prefix}0` … `${prefix}${n - 1}`. @param {string} prefix @param {number} n */
 const repeat = (prefix, n) =>
@@ -154,6 +154,8 @@ const RENDERED_CORPUS = [
   '<img style="color:transparent" src="a.png">',
   // A later `!important` declaration shows the text.
   '<div style="display:block!important;display:none">VISIBLE important</div>',
+  // A block parent does not blockify an inline child.
+  '<div style="display:block"><span style="transform:scale(0)">S</span></div>',
 ];
 
 describe("element context: the rendered corpus is left untouched", () => {
@@ -162,103 +164,55 @@ describe("element context: the rendered corpus is left untouched", () => {
       assert.equal(sanitizeHtml(input), null));
 });
 
-// [input, the page as rendered, with each spliced span shown as [X] or [C]].
+// Markup with the bytes that get spliced marked [[hidden]] and {{comment}}.
 const SPLICE_CASES = [
   // Text hidden behind an invalid override is spliced.
-  [
-    'Hi <span style="display:none;display:bogus">IGNORE PREVIOUS</span> there',
-    "Hi [X] there",
-  ],
+  'Hi [[<span style="display:none;display:bogus">IGNORE PREVIOUS</span>]] there',
   // ── an inline box blockified by its own style or its parent ──
-  [
-    '<div style="display:flex"><span style="transform:scale(0)">S</span></div>',
-    '<div style="display:flex">[X]</div>',
-  ],
+  '<div style="display:flex">[[<span style="transform:scale(0)">S</span>]]</div>',
+  '<div style="display:inline-grid">[[<span style="transform:scale(0)">S</span>]]</div>',
   // A `display:contents` parent has no box: the flex container is its parent.
-  [
-    '<div style="display:flex"><i style="display:contents"><span style="transform:scale(0)">S</span></i></div>',
-    '<div style="display:flex"><i style="display:contents">[X]</i></div>',
-  ],
-  ['<span style="position:absolute;transform:scale(0)">S</span>', "[X]"],
-  ['<span style="float:left;text-indent:-9999px">S</span>', "[X]"],
-  ['<span style="display:block;transform:scale(0)">S</span>', "[X]"],
-  ['<span style="display:inline-block;transform:scale(0)">S</span>', "[X]"],
-  ['<div style="transform:scale(0)">S</div>', "[X]"],
+  '<div style="display:flex"><i style="display:contents">[[<span style="transform:scale(0)">S</span>]]</i></div>',
+  '[[<span style="position:absolute;transform:scale(0)">S</span>]]',
+  '[[<span style="float:left;text-indent:-9999px">S</span>]]',
+  '[[<span style="display:block;transform:scale(0)">S</span>]]',
+  '[[<span style="display:inline-block;transform:scale(0)">S</span>]]',
+  '[[<div style="transform:scale(0)">S</div>]]',
+  '[[<img hidden src="a.png">]]',
+  '[[<img style="visibility:hidden" src="a.png">]]',
   // Every hide that DOES apply to an inline box still splices it.
-  ['<p>a <span style="opacity:0">S</span> b</p>', "<p>a [X] b</p>"],
-  ['<p>a <span style="font-size:0">S</span> b</p>', "<p>a [X] b</p>"],
+  '<p>a [[<span style="opacity:0">S</span>]] b</p>',
+  '<p>a [[<span style="font-size:0">S</span>]] b</p>',
   // ── an inherited hide stops at the descendant that overrides it ──
-  [
-    '<p>A <span style="font-size:0">S1 <b style="font-size:14px">SHOWN</b> S2</span> Z</p>',
-    '<p>A <span style="font-size:0">[X]<b style="font-size:14px">SHOWN</b>[X]</span> Z</p>',
-  ],
-  [
-    '<div style="font-size:0">S1 <i><b style="font-size:12px">SHOWN</b> S2</i> S3</div>',
-    '<div style="font-size:0">[X]<i><b style="font-size:12px">SHOWN</b>[X]</i>[X]</div>',
-  ],
-  [
-    '<div style="visibility:hidden">S1<span style="visibility:visible">SHOWN</span><span>S2</span></div>',
-    '<div style="visibility:hidden">[X]<span style="visibility:visible">SHOWN</span>[X]</div>',
-  ],
-  [
-    '<div style="color:#fff;background:#fff">S1 <b style="color:#000">SHOWN</b> S2</div>',
-    '<div style="color:#fff;background:#fff">[X]<b style="color:#000">SHOWN</b>[X]</div>',
-  ],
-  [
-    '<div style="text-indent:-9999px">S1 <p style="text-indent:0">SHOWN</p></div>',
-    '<div style="text-indent:-9999px">[X]<p style="text-indent:0">SHOWN</p></div>',
-  ],
+  '<p>A <span style="font-size:0">[[S1 ]]<b style="font-size:14px">SHOWN</b>[[ S2]]</span> Z</p>',
+  '<div style="font-size:0">[[S1 ]]<i><b style="font-size:12px">SHOWN</b>[[ S2]]</i>[[ S3]]</div>',
+  '<div style="visibility:hidden">[[S1]]<span style="visibility:visible">SHOWN</span>[[<span>S2</span>]]</div>',
+  '<div style="color:#fff;background:#fff">[[S1 ]]<b style="color:#000">SHOWN</b>[[ S2]]</div>',
+  '<div style="text-indent:-9999px">[[S1 ]]<p style="text-indent:0">SHOWN</p></div>',
   // An image keeps its place between the spliced runs.
-  [
-    '<div style="font-size:0">S1 <img src="x.png"> S2</div>',
-    '<div style="font-size:0">[X]<img src="x.png">[X]</div>',
-  ],
+  '<div style="font-size:0">[[S1 ]]<img src="x.png">[[ S2]]</div>',
   // Comments keep their own splice outside a run, and join the run inside one.
-  [
-    '<div style="font-size:0"><!--c1-->S1<!--c2-->S2<!--c3--><b style="font-size:9px">SHOWN</b><!--c4--></div>',
-    '<div style="font-size:0">[C][X][C]<b style="font-size:9px">SHOWN</b>[C]</div>',
-  ],
+  '<div style="font-size:0">{{<!--c1-->}}[[S1<!--c2-->S2]]{{<!--c3-->}}<b style="font-size:9px">SHOWN</b>{{<!--c4-->}}</div>',
   // A box hide inside the region, and a hide inside the visible descendant.
-  [
-    '<div style="font-size:0"><span style="display:none">S</span><b style="font-size:9px">SHOWN <i hidden>S2</i></b></div>',
-    '<div style="font-size:0">[X]<b style="font-size:9px">SHOWN [X]</b></div>',
-  ],
+  '<div style="font-size:0">[[<span style="display:none">S</span>]]<b style="font-size:9px">SHOWN [[<i hidden>S2</i>]]</b></div>',
   // ── a descendant that keeps the hide stays hidden with it ──
   // An inline box cannot reset an indent: it sits on the shifted line.
-  [
-    '<div style="text-indent:-9999px">S1 <span style="text-indent:0">S2</span></div>',
-    "[X]",
-  ],
+  '[[<div style="text-indent:-9999px">S1 <span style="text-indent:0">S2</span></div>]]',
   // Visibility reaches an image; a font-size hide does not.
-  ['<div style="visibility:hidden">S1 <img src="x.png"> S2</div>', "[X]"],
+  '[[<div style="visibility:hidden">S1 <img src="x.png"> S2</div>]]',
   // ── a block keeps an indent it does not set, or hands back ──
-  ['<div style="text-indent:-9999px">S1<p>S2</p></div>', "[X]"],
-  [
-    '<div style="text-indent:-9999px">S1<p style="text-indent:inherit">S2</p></div>',
-    "[X]",
-  ],
+  '[[<div style="text-indent:-9999px">S1<p>S2</p></div>]]',
+  '[[<div style="text-indent:-9999px">S1<p style="text-indent:inherit">S2</p></div>]]',
   // ── an overriding descendant that hides in its own way is spliced too ──
-  [
-    '<div style="font-size:0">S1<b style="visibility:hidden">S2</b><i style="font-size:9px">V</i></div>',
-    '<div style="font-size:0">[X]<i style="font-size:9px">V</i></div>',
-  ],
+  '<div style="font-size:0">[[S1<b style="visibility:hidden">S2</b>]]<i style="font-size:9px">V</i></div>',
   // ── empty elements and whitespace beside the shown part stay as written ──
-  [
-    '<div style="font-size:0">S1<i></i><b style="font-size:9px">V</b><i></i> </div>',
-    '<div style="font-size:0">[X]<i></i><b style="font-size:9px">V</b><i></i> </div>',
-  ],
+  '<div style="font-size:0">[[S1]]<i></i><b style="font-size:9px">V</b><i></i> </div>',
   // parse5 synthesizes a <tbody> with no source position, so a run through it
   // cannot be trusted: the whole element is spliced.
-  [
-    '<div style="font-size:0">S<table><tr><td><b style="font-size:9px">V</b></td></tr></table></div>',
-    "[X]",
-  ],
+  '[[<div style="font-size:0">S<table><tr><td><b style="font-size:9px">V</b></td></tr></table></div>]]',
   // parse5 moves the overriding child out of source order (foster parenting
   // out of a table), so no run can be trusted: the whole element is spliced.
-  [
-    '<div style="font-size:0">S1<table><b style="font-size:12px">SHOWN</b>S2<tr><td>x</td></tr></table></div>',
-    "[X]",
-  ],
+  '[[<div style="font-size:0">S1<table><b style="font-size:12px">SHOWN</b>S2<tr><td>x</td></tr></table></div>]]',
 ];
 
 // [a region's style, its `<b>` child's style]. The child keeps the hide, so
@@ -299,53 +253,21 @@ const OVERRIDES_HIDE_CASES = [
 ];
 
 describe("element context: exactly the bytes that stay hidden are spliced", () => {
-  for (const [input, expected] of [
+  for (const marked of [
     ...SPLICE_CASES,
-    ...KEEPS_HIDE_CASES.map(([outer, inner]) => [
-      `<div style="${outer}">S1 <b style="${inner}">S2</b></div>`,
-      "[X]",
-    ]),
-    ...OVERRIDES_HIDE_CASES.map(([outer, inner]) => [
-      `<div style="${outer}">S1 <b style="${inner}">V</b></div>`,
-      `<div style="${outer}">[X]<b style="${inner}">V</b></div>`,
-    ]),
-  ])
+    ...KEEPS_HIDE_CASES.map(
+      ([outer, inner]) =>
+        `[[<div style="${outer}">S1 <b style="${inner}">S2</b></div>]]`,
+    ),
+    ...OVERRIDES_HIDE_CASES.map(
+      ([outer, inner]) =>
+        `<div style="${outer}">[[S1 ]]<b style="${inner}">V</b></div>`,
+    ),
+  ]) {
+    const input = marked.replace(/\[\[|\]\]|\{\{|\}\}/g, "");
+    const expected = marked
+      .replace(/\[\[.*?\]\]/gs, "[X]")
+      .replace(/\{\{.*?\}\}/gs, "[C]");
     it(JSON.stringify(input), () => assert.equal(shown(input), expected));
-});
-
-// [tag, its properties, its parent's style (null: no parent given), hidden].
-/** @type {Array<[string, Record<string, unknown>, string | null, boolean]>} */
-const ELEMENT_CASES = [
-  // A transform does not apply to an inline box unless a flex or grid parent
-  // blockifies it; a div is a block box whatever its parent.
-  ["span", { style: "transform:scale(0)" }, null, false],
-  ["span", { style: "transform:scale(0)" }, "display:flex", true],
-  ["span", { style: "transform:scale(0)" }, "display:inline-grid", true],
-  ["span", { style: "transform:scale(0)" }, "display:block", false],
-  ["div", { style: "transform:scale(0)" }, null, true],
-  // The hidden attribute and visibility hide an image; font-size does not.
-  ["img", { hidden: true }, null, true],
-  ["img", { style: "visibility:hidden" }, null, true],
-  ["img", { style: "font-size:0" }, null, false],
-];
-
-describe("element context: isHiddenElement reads the parent it is given", () => {
-  /** @param {string} tagName @param {Record<string, unknown>} properties */
-  const elem = (tagName, properties) => ({
-    type: "element",
-    tagName,
-    properties,
-    children: [],
-  });
-  for (const [tag, properties, parentStyle, hidden] of ELEMENT_CASES)
-    it(`<${tag} ${JSON.stringify(properties)}> in ${parentStyle ?? "no parent"}`, () =>
-      assert.equal(
-        isHiddenElement(
-          elem(tag, properties),
-          parentStyle === null
-            ? undefined
-            : elem("div", { style: parentStyle }),
-        ),
-        hidden,
-      ));
+  }
 });

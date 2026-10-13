@@ -39308,8 +39308,7 @@ var init_url_attributes = __esm({
       /** @type {Array<Partial<UrlAttribute> & { attribute: string, property: string }>} */
       [
         { attribute: "src", property: "src" },
-        // A link waits for a click; `<base>` only changes how the page's relative
-        // URLs resolve.
+        // A link waits for a click; `<base>` only re-bases relative URLs.
         {
           attribute: "href",
           property: "href",
