@@ -28,7 +28,7 @@ instead.
 Both SessionStart provisioners read that directory from `CLAUDE_PLUGIN_DATA`,
 which Claude Code sets only for a hook it loaded from a plugin. A sandbox that
 re-runs plugin hooks from its own root-owned settings tier leaves it unset, so
-each provisioner skips: the redaction engine then runs from the committed
+each provisioner skips: the redaction engine then runs from the shipped
 `dist/redactor/daemon.pyz` and the hooks run on node, both under the same
 never-silent posture.
 
@@ -185,7 +185,7 @@ When even that search comes up empty — a host with no node install at all — 
 SessionStart hook (`scripts/provision-hook-binary.sh`) downloads a
 self-contained hook executable for the platform (darwin-arm64, darwin-x64,
 linux-x64, linux-arm64) from this repository's GitHub release for the installed
-plugin version, verifies its SHA-256 against the manifest committed at
+plugin version, verifies its SHA-256 against the manifest shipped at
 `dist/hooks/hook-binaries.sha256` before it is ever installed, and puts it at
 `${CLAUDE_PLUGIN_DATA}/hook-binary/agent-sanitizer-hooks`. With that binary
 present and executable the launcher runs it directly — no node needed at all —
@@ -252,59 +252,74 @@ scripts/build-hook-binaries.mjs  compiles the bundle into the per-platform relea
 scripts/lib/provision-common.sh  the scaffolding both SessionStart provisioners share
 scripts/lib/hook-timing.sh   shell port of the hook timer, for the SessionStart scripts
 scripts/lib/node-resolve.sh  the node search, for hosts whose PATH never saw a shell rc
-scripts/lib/node-floor.sh    the node version floor (generated from engines.node — do not edit)
-scripts/lib/fail-open.sh     the shared posture-knob reader (generated — do not edit)
 scripts/lock-redactor-deps.mjs  compiles requirements.in into the hash-pinned requirements.txt
-dist/hooks/*.bundle.mjs      the committed, self-contained bundle (generated — do not edit)
-dist/hooks/hook-binaries.sha256  SHA-256 manifest of the release binaries (generated — do not edit)
-dist/redactor/daemon.pyz     the committed redaction engine zipapp (generated — do not edit)
-dist/redactor/*.whl          the committed engine wheel both the zipapp and the venv install
-requirements.in              the engine's third-party dependencies (generated — do not edit)
+scripts/baked-artifacts.mjs  the one list of the build outputs below
 requirements.txt             the compiled, hash-pinned dependency lock (generated — do not edit)
 ```
 
+Built, never committed to `main` (ignored there; the release bake commits them
+to the `plugin-dist` branch, which is what the marketplace installs):
+
+```
+dist/hooks/*.bundle.mjs      the self-contained hook bundle
+dist/hooks/hook-binaries.sha256  SHA-256 manifest of the release binaries
+dist/redactor/daemon.pyz     the redaction engine zipapp
+dist/redactor/*.whl          the engine wheel both the zipapp and the venv install
+requirements.in              the engine's direct third-party dependencies
+scripts/lib/node-floor.sh    the node version floor, from engines.node
+scripts/lib/fail-open.sh     the shared posture-knob reader
+```
+
+### Where the installed plugin comes from
+
+`.claude-plugin/marketplace.json` points the plugin at the `plugin-dist` branch
+of this repository (a `git-subdir` source, path `plugin`). Each commit on that
+branch is this repository's tree at a release tag plus the build output above,
+with two parents: the previous `plugin-dist` tip and the tagged `main` commit.
+The branch only fast-forwards.
+
+After `auto-version.yaml` cuts a release, `.github/workflows/plugin-dist.yaml`
+checks out the tag, stamps `plugin.json` with its version, builds everything
+above, compiles the hook binaries and attaches them to the GitHub release, then
+commits the build onto `plugin-dist` and pushes. Re-baking a tag the branch
+already contains is a no-op; a lost run is recovered by dispatching the
+workflow with the tag.
+
 Both halves of the engine are built from this repository's own sources — the JS
 from `src/`, the Python wheel from `python/` — so the shipped hooks, the zipapp
-and the provisioned venv are one commit and cannot be three versions.
-`dist/hooks/*.bundle.mjs` and `requirements.in` are regenerated offline by
-`node plugin/scripts/build-plugin.mjs` and verified byte-for-byte in CI; they
-change only when the hook sources or the engine's dependencies do. The digest
-manifest beside them is the exception — see below.
-
-The compiled hook binaries are a third artifact class. At ~100 MB each they are
-not committed; they are attached to this repository's GitHub release
-`v<version>` as `agent-sanitizer-hooks-<platform>` (darwin-arm64, darwin-x64,
-linux-x64, linux-arm64), compiled from the committed bundle with the pnpm-pinned
-bun (`bun build --compile`) by `plugin/scripts/build-hook-binaries.mjs`. What is
-committed is their SHA-256 manifest, `dist/hooks/hook-binaries.sha256`, which
-the same script generates — and because bun's compile is byte-deterministic for
-a fixed bun version, target, input bundle and outfile name, the release
-regenerates the binaries and byte-checks their digests against the manifest
-before uploading them: the reproducibility gate survives as a digest round-trip.
-The provisioner verifies a downloaded binary against that manifest before it is
-ever installed, so a release asset that does not hash to the committed digest
-never runs.
-
-Unlike everything above it, the manifest is refreshed only on the default
-branch, by `auto-version.yaml` ahead of the release — never on a PR branch,
-where regenerating it rewrites every digest and makes any two such branches
-conflict irreconcilably. So a merge leaves it briefly describing the previous
-bundle; the provisioner notices (it compares its own bundle against the
-manifest's `# bundle=` pin) and declines to install rather than running a binary
-built from other code.
-
-`requirements.txt` is the fully resolved third-party tree, every version and
-artifact hash pinned. It is what both `dist/redactor/daemon.pyz` is built from
-and what `scripts/provision-redactor.sh` installs at SessionStart, so the
-committed zipapp floor and the provisioned venv carry the identical tree.
-Compiling it reaches PyPI, so it is not part of the offline rebuild:
+and the provisioned venv are one commit and cannot be three versions. Build
+them locally with:
 
 ```bash
-node plugin/scripts/lock-redactor-deps.mjs   # refresh transitives (deliberate)
-node plugin/scripts/build-redactor-pyz.mjs   # rebuild the wheel and zipapp
+pnpm build:plugin     # bundle, requirements.in, node-floor.sh, fail-open.sh (offline; `pnpm install` runs it)
+pnpm build:redactor   # the wheel and zipapp (resolves from PyPI)
+```
+
+The compiled hook binaries ship on no branch. At ~100 MB each they are attached
+to this repository's GitHub release `v<version>` as
+`agent-sanitizer-hooks-<platform>` (darwin-arm64, darwin-x64, linux-x64,
+linux-arm64), compiled from the bundle with the pnpm-pinned bun
+(`bun build --compile`) by `plugin/scripts/build-hook-binaries.mjs` in the same
+bake that writes their SHA-256 manifest, `dist/hooks/hook-binaries.sha256`; the
+release step checks every binary against it before uploading. The provisioner
+verifies a downloaded binary against that manifest before it is ever installed,
+so a release asset that does not hash to the shipped digest never runs. The
+manifest also pins the bundle it was compiled from (`# bundle=`), and a
+provisioner whose bundle differs declines to install.
+
+`requirements.txt` is the fully resolved third-party tree, every version and
+artifact hash pinned, and the one plugin build input committed to `main`. It is
+what both `dist/redactor/daemon.pyz` is built from and what
+`scripts/provision-redactor.sh` installs at SessionStart, so the zipapp floor
+and the provisioned venv carry the identical tree. Compiling it reaches PyPI,
+so refreshing the transitives is deliberate:
+
+```bash
+node plugin/scripts/lock-redactor-deps.mjs
 ```
 
 The lock is what keeps the zipapp reproducible: without every transitive
 (certifi, charset-normalizer, idna, pyyaml, requests, urllib3) pinned by version
 and hash, any of their releases changes the zipapp's bytes with no diff anywhere
-in this repo, turning the reproducibility byte-compare red on unrelated PRs.
+in this repo. `plugin/test/lock-redactor-deps.test.mjs` fails when the lock was
+not compiled from the current `secrets` extra.

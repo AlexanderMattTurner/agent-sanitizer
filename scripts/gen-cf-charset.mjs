@@ -17,11 +17,11 @@
  * Run from the repo root: `node scripts/gen-cf-charset.mjs`; `pnpm install`
  * does (scripts/gen-unicode.mjs). The output is git-ignored, never committed.
  */
-import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { UNICODE_VERSION, codePointsOf, ucdSpans } from "./lib/ucd.mjs";
+import { writeGenerated } from "./lib/write-generated.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -77,7 +77,7 @@ ${hex}
 export const CF_MODULE_PATH = join(__dirname, "..", "src", "cf-charset.mjs");
 
 function main() {
-  writeFileSync(CF_MODULE_PATH, cfCharsetModule());
+  writeGenerated(CF_MODULE_PATH, cfCharsetModule());
   console.log(
     `wrote ${CF_MODULE_PATH} (${cfCodepoints().length} Cf code points)`,
   );

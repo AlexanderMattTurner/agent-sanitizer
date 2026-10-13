@@ -212,8 +212,8 @@ export function runtimeRequires(text) {
  * Bundle one entry into a self-contained ESM string. Deterministic: no minify
  * (the shipped bytes stay auditable), `node:` builtins left external (present in
  * every target runtime). esbuild's output for a given version + inputs is
- * byte-stable, which is what lets the plugin's reproducibility test compare
- * committed vs freshly built.
+ * byte-stable, which is what lets the plugin's freshness test compare the
+ * built bundle against a fresh build of the same tree.
  *
  * Throws rather than returning a bundle that keeps an unresolvable runtime
  * require — the caller writes the file, so a throw here means nothing is
@@ -287,7 +287,7 @@ export const BUNDLE_TARGETS = [
     // repo (package.json devDependencies carries `agent-sanitizer: link:.`), so
     // the bundle inlines the same `src/` the suite runs against and the shipped
     // hooks cannot lag the engine they are tested with.
-    // The committed artifact is byte-compared against a fresh build, and it was
+    // The built bundle is byte-compared against a fresh build, and it was
     // generated without license comments; keeping them out also keeps the
     // shipped bytes reviewable.
     legalComments: "none",

@@ -14,7 +14,6 @@
  * Run from the repo root: `node scripts/gen-unicode-properties.mjs`; `pnpm
  * install` does. The output is git-ignored, never committed.
  */
-import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -23,6 +22,7 @@ import {
   spansOf,
   ucdSpans,
 } from "./lib/ucd.mjs";
+import { writeGenerated } from "./lib/write-generated.mjs";
 
 const presentation = new Set(
   codePointsOf(await ucdSpans("Binary_Property/Emoji_Presentation")),
@@ -107,6 +107,6 @@ export const MODULE_PATH = fileURLToPath(
 );
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  writeFileSync(MODULE_PATH, renderUnicodeProperties());
+  writeGenerated(MODULE_PATH, renderUnicodeProperties());
   console.log(`wrote ${MODULE_PATH} (Unicode ${UNICODE_VERSION})`);
 }

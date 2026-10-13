@@ -276,8 +276,8 @@ describe("guarded-data scan (the map is derived from the tests)", () => {
         "module-relative join",
       ],
       [
-        "plugin/dist/hooks/hook-binaries.sha256",
-        "plugin/test/plugin-bundle.test.mjs",
+        "plugin/requirements.txt",
+        "plugin/test/lock-redactor-deps.test.mjs",
         "generator-exported path",
       ],
       [
@@ -426,7 +426,8 @@ describe("guarded-data scan (the map is derived from the tests)", () => {
     // step id renders empty rather than erroring, so the whole coupled half
     // no-opped silently. And the generated fail-open shell lib landed on main
     // with no pair at all, because the branch that taught the scan to see .sh
-    // sources never saw the file.
+    // sources never saw the file; the lib is build output now, so its
+    // generator is what carries the pair.
     assertGuardedBy(
       derived,
       ".github/workflows/auto-version.yaml",
@@ -441,7 +442,7 @@ describe("guarded-data scan (the map is derived from the tests)", () => {
     );
     assertGuardedBy(
       derived,
-      "plugin/scripts/lib/fail-open.sh",
+      "scripts/gen-fail-open-lib.mjs",
       "plugin/test/fail-open-parity.test.mjs",
       "fail-open parity guard",
     );

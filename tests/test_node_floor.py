@@ -67,9 +67,9 @@ KNOWN_FLOOR_COPIES = (
     "python/pyproject.toml",
 )
 
-# Tracked but not hand-written: a generated bundle, the lockfiles and the
-# append-only release notes restate versions nobody here chose.
-GENERATED_PREFIXES = ("plugin/dist/", "CHANGELOG.md")
+# Tracked but not hand-written: the lockfiles and the append-only release notes
+# restate versions nobody here chose.
+GENERATED_PREFIXES = ("CHANGELOG.md",)
 GENERATED_NAMES = ("pnpm-lock.yaml", "uv.lock")
 
 

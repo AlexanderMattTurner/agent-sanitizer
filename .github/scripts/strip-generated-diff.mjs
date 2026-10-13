@@ -2,9 +2,9 @@
 // Drop GENERATED files' sections from a unified diff, so the automated reviewer
 // reads the hand-written change instead of a rebuilt artifact.
 //
-// PROBLEM CLASS — a review budget spent on bytes nobody wrote. This repo commits
-// its build outputs (plugin/dist/hooks/plugin-hooks.bundle.mjs and friends), so a
-// 25-line source edit arrives as a ~30k-line diff. That is over
+// PROBLEM CLASS — a review budget spent on bytes nobody wrote. A repo that
+// commits a build output (a bundle, a generated table) sees a 25-line source
+// edit arrive as a ~30k-line diff. That is over
 // prepare-pr-review-input.sh's MAX_DIFF_LINES, so the review is skipped
 // entirely and the source edit gets no automated read at all — the opposite of
 // what the size guard is for. The artifacts need no review anyway: CI rebuilds

@@ -32,7 +32,7 @@ SANITIZER_VERSION="2.0.0"
 # npm as the packer, so the installed tree is still exactly what `files`
 # publishes. `git archive` stages the COMMITTED tree; every caller runs on a
 # pristine actions/checkout, so that is the tree on disk (plus the generated,
-# git-ignored Unicode tables, copied in below).
+# git-ignored Unicode tables and patched GFM autolink module, copied in below).
 #
 # Only the install SPEC differs between the two paths, so the branch produces
 # just that and one invocation carries the flags — a second flag list is a
@@ -56,13 +56,16 @@ local_pkg_name="$(node -p "try { require('./package.json').name } catch { '' }")
 if [ "${local_pkg_name}" = "agent-sanitizer" ]; then
   staged="$(mktemp -d)"
   git archive --format=tar HEAD | tar -x -C "${staged}"
-  # The Unicode tables are generated at install time and git-ignored, so
-  # `git archive` left them out, and the staged copy cannot generate them itself
-  # (no node_modules, hence no UCD package, and its lifecycle scripts are
-  # stripped below). Generate them in the checkout, which has both, then copy in
-  # exactly the git-ignored files `files` would pack: src/*.mjs and the charset
-  # JSON. Plain `node`, no pnpm: this must work in the jobs that have none.
+  # The Unicode tables and the patched GFM autolink module are generated at
+  # install time and git-ignored, so `git archive` left them out, and the staged
+  # copy cannot generate them itself (no node_modules, hence no UCD or upstream
+  # micromark package, and its lifecycle scripts are stripped below). Generate
+  # them in the checkout, which has both, then copy in exactly the git-ignored
+  # files `files` would pack: src/*.mjs (a git pathspec `*` crosses `/`, so that
+  # includes src/vendor/) and the charset JSON. Plain `node`, no pnpm: this must
+  # work in the jobs that have none.
   node scripts/gen-unicode.mjs
+  node scripts/gen-gfm-autolink.mjs
   copied=0
   while IFS= read -r generated; do
     # bare-mkdir-ok: ${staged} is a fresh mktemp -d, and the cp below fails loudly if the directory is missing.
@@ -71,10 +74,10 @@ if [ "${local_pkg_name}" = "agent-sanitizer" ]; then
     copied=$((copied + 1))
   done < <(git ls-files --others --ignored --exclude-standard -- \
     'src/*.mjs' 'python/agent_sanitizer/data/invisible-charset.json')
-  # `gen-unicode.mjs` exiting 0 while the ignore rules matched nothing would
+  # The generators exiting 0 while the ignore rules matched nothing would
   # install a package whose entry point throws on its first import.
   if [ "${copied}" -eq 0 ]; then
-    echo "install-sanitizer: gen-unicode.mjs produced no git-ignored file to stage" >&2
+    echo "install-sanitizer: the generators produced no git-ignored file to stage" >&2
     exit 1
   fi
   # Fails loudly on an unreadable manifest or a missing `scripts` block: a

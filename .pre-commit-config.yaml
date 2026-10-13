@@ -64,18 +64,9 @@ repos:
   - repo: https://github.com/AlexanderMattTurner/ci-truth-serum
     rev: 01aa20655323f8ce5a5b8554556dd9dbeeedc232 # ci-truth-serum main, past #169
     hooks:
-      # plugin/dist/ is the committed, generated esbuild bundle (~29k lines,
-      # inlining third-party npm deps) — see the reproducibility note atop
-      # tests/test_repo_slug.py's own GENERATED_PREFIXES. Content lints have
-      # nothing to fix there: a hand-edit is overwritten on the next build,
-      # and a finding inside a bundled dependency belongs to that dependency,
-      # not this repo.
       - id: check-tier1
-        exclude: ^plugin/dist/
       - id: check-tier2
-        exclude: ^plugin/dist/
       - id: check-extras
-        exclude: ^plugin/dist/
 
   - repo: local
     hooks:

@@ -8,6 +8,29 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.65.0] - 2026-10-13
+
+### Added
+- HTML template content scanning and reporting of inert `<template>` elements in warned.tags.
+- Declarative shadow root support with content layout in the host element.
+
+### Changed
+- CSS syntax data is now generated at install and pack time instead of being committed to the repository.
+
+### Fixed
+- Removed dead no-content guard in `isInertTemplate` and pinned inline SVG-template reporting.
+- Declarative shadow roots are now properly reported in warned.tags with correct content layout.
+- Generated file writes are now atomic to prevent parallel imports from reading truncated files.
+- Directory fsync skipped for generated writes to support Windows prepare operations.
+
+## [2.64.2] - 2026-10-13
+
+### Changed
+- The `autolink-literal` module is now generated at install time rather than vendored in the repository.
+
+### Fixed
+- HTML documents containing SVG or MathML with `<template>` elements are no longer withheld from processing.
+
 ## [2.64.1] - 2026-10-13
 
 ### Fixed

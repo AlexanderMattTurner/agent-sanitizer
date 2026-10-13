@@ -29288,11 +29288,7 @@ function tokenizeEmailAutolink(effects, ok3, nok) {
   }
   function emailDomain(code4) {
     if (code4 === 46) {
-      return effects.check(
-        emailDomainDotTrail,
-        emailDomainAfter,
-        emailDomainDot
-      )(code4);
+      return effects.check(emailDomainDotTrail, emailDomainAfter, emailDomainDot)(code4);
     }
     if (code4 === 45 || code4 === 95 || asciiAlphanumeric(code4)) {
       data = true;
@@ -29324,11 +29320,7 @@ function tokenizeWwwAutolink(effects, ok3, nok) {
     }
     effects.enter("literalAutolink");
     effects.enter("literalAutolinkWww");
-    return effects.check(
-      wwwPrefix,
-      effects.attempt(domain, effects.attempt(path, wwwAfter), nok),
-      nok
-    )(code4);
+    return effects.check(wwwPrefix, effects.attempt(domain, effects.attempt(path, wwwAfter), nok), nok)(code4);
   }
   function wwwAfter(code4) {
     effects.exit("literalAutolinkWww");
@@ -29378,11 +29370,7 @@ function tokenizeProtocolAutolink(effects, ok3, nok) {
     return nok(code4);
   }
   function afterProtocol(code4) {
-    return code4 === null || asciiControl(code4) || markdownLineEndingOrSpace(code4) || unicodeWhitespace(code4) || unicodePunctuation(code4) ? nok(code4) : effects.attempt(
-      domain,
-      effects.attempt(path, protocolAfter),
-      nok
-    )(code4);
+    return code4 === null || asciiControl(code4) || markdownLineEndingOrSpace(code4) || unicodeWhitespace(code4) || unicodePunctuation(code4) ? nok(code4) : effects.attempt(domain, effects.attempt(path, protocolAfter), nok)(code4);
   }
   function protocolAfter(code4) {
     effects.exit("literalAutolinkHttp");
@@ -39633,6 +39621,7 @@ function parseHtmlFragment(html4) {
 function fromParse5Bounded(tree, file, chunkDepth = CONVERT_DEPTH) {
   const cuts = [];
   const stack = [{ node: tree, depth: 0 }];
+  let masked = false;
   while (stack.length > 0) {
     const { node: node2, depth } = (
       /** @type {{ node: any, depth: number }} */
@@ -39641,6 +39630,10 @@ function fromParse5Bounded(tree, file, chunkDepth = CONVERT_DEPTH) {
     if (depth > MAX_HTML_DEPTH)
       throw new RangeError(`HTML nested deeper than ${MAX_HTML_DEPTH} levels`);
     if (node2.content) stack.push({ node: node2.content, depth: depth + 1 });
+    else if (node2.tagName !== void 0 && CONVERTS_AS_TEMPLATE.test(node2.tagName)) {
+      node2.tagName = TEMPLATE_MASK + node2.tagName;
+      masked = true;
+    }
     const siblings = node2.childNodes ?? [];
     const childDepth = depth + 1;
     for (let index2 = 0; index2 < siblings.length; index2++) {
@@ -39662,8 +39655,10 @@ function fromParse5Bounded(tree, file, chunkDepth = CONVERT_DEPTH) {
   }
   const root2 = fromParse5(tree, { file });
   const pending = [root2];
-  while (grafts.size > 0 && pending.length > 0) {
+  while ((grafts.size > 0 || masked) && pending.length > 0) {
     const node2 = pending.pop();
+    if (masked && node2.tagName?.startsWith(TEMPLATE_MASK))
+      node2.tagName = node2.tagName.slice(TEMPLATE_MASK.length);
     if (node2.content) pending.push(node2.content);
     const children = node2.children ?? [];
     for (let i = 0; i < children.length; i++) {
@@ -39685,7 +39680,7 @@ function parse5Location(position3) {
     endOffset: end.offset
   };
 }
-var CONVERT_DEPTH, MAX_HTML_DEPTH;
+var CONVERT_DEPTH, MAX_HTML_DEPTH, CONVERTS_AS_TEMPLATE, TEMPLATE_MASK;
 var init_html_tree_adapter = __esm({
   "src/html-tree-adapter.mjs"() {
     "use strict";
@@ -39694,6 +39689,8 @@ var init_html_tree_adapter = __esm({
     init_vfile();
     CONVERT_DEPTH = 128;
     MAX_HTML_DEPTH = 4096;
+    CONVERTS_AS_TEMPLATE = /^template(?:[#.]|$)/i;
+    TEMPLATE_MASK = " ";
   }
 });
 
@@ -50927,6 +50924,13 @@ function isHiddenStyle(styleStr) {
   const declarations = parseDeclarations(styleStr);
   return declarations.length > 0 && styleHides(resolveCascade(declarations), false).size > 0;
 }
+function isInertTemplate(node2) {
+  const mode = String(node2.properties.shadowRootMode ?? "").toLowerCase();
+  return mode !== "open" && mode !== "closed";
+}
+function isReportedElement(node2) {
+  return node2.tagName === "template" ? node2.content !== void 0 : REPORTED_TAGS.has(node2.tagName);
+}
 function isSelfClosedForeign(tagName, value) {
   return FOREIGN_ELEMENTS.has(tagName) && /\/\s*>\s*$/.test(value);
 }
@@ -50941,6 +50945,17 @@ function elementCascade(node2) {
   }
   return cascade;
 }
+function layoutContainer(parent) {
+  let container = parent;
+  for (; ; ) {
+    const template = contentOwners.get(container);
+    if (template && !isInertTemplate(template))
+      container = parents.get(template);
+    else if (elementCascade(container).textOf("display") === "contents")
+      container = parents.get(container);
+    else return container;
+  }
+}
 function isInlineBox(node2, parent) {
   if (!INLINE_ELEMENTS.has(node2.tagName)) return false;
   const { textOf } = elementCascade(node2);
@@ -50948,10 +50963,7 @@ function isInlineBox(node2, parent) {
   if (!INLINE_DISPLAYS.has(display) && !display.includes("var(")) return false;
   if (BLOCKIFYING_VALUES.has(textOf("position")) || BLOCKIFYING_VALUES.has(textOf("float")))
     return false;
-  let container = parent;
-  while (elementCascade(container).textOf("display") === "contents")
-    container = parents.get(container);
-  return !elementCascade(container).textOf("display").split(" ").some((token) => ITEM_BLOCKIFYING_DISPLAYS.has(token));
+  return !elementCascade(layoutContainer(parent)).textOf("display").split(" ").some((token) => ITEM_BLOCKIFYING_DISPLAYS.has(token));
 }
 function elementHides(node2, parent) {
   if (node2.type !== "element") return /* @__PURE__ */ new Set();
@@ -51126,6 +51138,12 @@ function walk2(tree, test, visitor, treeParent = void 0) {
     const result = test === null || node2.type === test ? visitor(node2, index2, parent) : void 0;
     if (result === EXIT) return;
     if (result === SKIP) continue;
+    if (node2.type === "element" && node2.content !== void 0) {
+      contentOwners.set(node2.content, node2);
+      nodes.push(node2.content);
+      indices.push(void 0);
+      parents2.push(node2);
+    }
     const children = node2.children;
     if (children === void 0) continue;
     for (let i = children.length - 1; i >= 0; i--) {
@@ -51219,7 +51237,7 @@ function scanFragmentTree(html4, tree) {
   const ranges = [];
   const warned = newWarned();
   const countElement = (node2) => {
-    if (REPORTED_TAGS.has(node2.tagName)) countTag(warned, node2.tagName);
+    if (isReportedElement(node2)) countTag(warned, node2.tagName);
     if (hasDataSrc(node2)) warned.dataSrc += 1;
   };
   const pending = [[tree, void 0]];
@@ -51369,7 +51387,7 @@ function scanInlineChildren(node2, text6, ranges, warned) {
         const el = parseHtmlTag(value);
         if (el) {
           if (RAW_TEXT_ELEMENTS.has(el.tagName)) rawText = el.tagName;
-          if (REPORTED_TAGS.has(el.tagName)) countTag(warned, el.tagName);
+          if (isReportedElement(el)) countTag(warned, el.tagName);
           if (hasDataSrc(el)) warned.dataSrc += 1;
         }
       }
@@ -51785,10 +51803,21 @@ function documentUrls(text6, parseMd, parseHtml) {
     });
   });
   const comments = [];
-  walk2(parseHtml(text6), null, (node2) => {
-    if (node2.type === "comment") comments.push(node2.value);
-    else if (node2.type === "element") urls.push(...elementUrls(node2));
-  });
+  const inert = /* @__PURE__ */ new Set();
+  walk2(
+    parseHtml(text6),
+    null,
+    (node2, _index, parent) => {
+      if (inert.has(parent) || parent?.content === node2 && isInertTemplate(parent))
+        inert.add(node2);
+      if (node2.type === "comment") comments.push(node2.value);
+      else if (node2.type === "element")
+        for (const url of elementUrls(node2))
+          urls.push(
+            inert.has(node2) ? { ...url, autoFetched: false, context: "resource" } : url
+          );
+    }
+  );
   return { urls, comments };
 }
 function collectUrls(text6) {
@@ -51862,7 +51891,7 @@ function detectConfusableHosts(text6) {
     }
   );
 }
-var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, LEXER_TOKEN_LIMIT, VALIDATION_BUDGET, cssLexer, RESETTING_SHORTHANDS, NO_CASCADE, INHERITED_COLOR_KEYWORDS, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, INHERITING_KEYWORDS, INLINE_ELEMENTS, INLINE_DISPLAYS, BLOCKIFYING_VALUES, ITEM_BLOCKIFYING_DISPLAYS, REPLACED_ELEMENTS, TEXT_ONLY_HIDES, elementCascades, parents, PARENT_RELATIVE_FONT_UNITS, PARENT_RELATIVE_FONT_KEYWORDS, MATH_FUNCTIONS, parseFragment2, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, MARKUP_OPENER_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, MAX_SPLICE_ROUNDS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, ACTIVE_DATA_TYPES, DATA_URI_LENGTH_THRESHOLD, SCRIPT_SCHEMES, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, BENIGN_SHORT_PARAM_RE, BENIGN_SHORT_VALUE_MAX_LEN, BENIGN_SHORT_TOTAL_MAX_LEN, PUBLIC_KEY_ID_PARAM_RE, BLOB_VALUE_MIN_LEN, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, HEX_ONLY_RE, HEX_BLOB_MIN_LEN, DIGEST_HEX_LENGTHS, BLOB_VALUE_B64URL_RE, PATH_BLOB_RE, DIGEST_MAX_LEN, BLOB_SEPARATOR_RE, BLOB_RUN_SPLIT_RE, FLOAT_RE, SRCSET_URL_RE, SRCSET_DESCRIPTORS_RE, STRING_URL_FUNCTIONS, GRAMMAR_READERS, OFF_ORIGIN_REASON, COMMENT_INTERIOR_OPENER_RE;
+var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, LEXER_TOKEN_LIMIT, VALIDATION_BUDGET, cssLexer, RESETTING_SHORTHANDS, NO_CASCADE, INHERITED_COLOR_KEYWORDS, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, INHERITING_KEYWORDS, INLINE_ELEMENTS, INLINE_DISPLAYS, BLOCKIFYING_VALUES, ITEM_BLOCKIFYING_DISPLAYS, REPLACED_ELEMENTS, TEXT_ONLY_HIDES, elementCascades, parents, contentOwners, PARENT_RELATIVE_FONT_UNITS, PARENT_RELATIVE_FONT_KEYWORDS, MATH_FUNCTIONS, parseFragment2, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, MARKUP_OPENER_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, MAX_SPLICE_ROUNDS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, ACTIVE_DATA_TYPES, DATA_URI_LENGTH_THRESHOLD, SCRIPT_SCHEMES, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, BENIGN_SHORT_PARAM_RE, BENIGN_SHORT_VALUE_MAX_LEN, BENIGN_SHORT_TOTAL_MAX_LEN, PUBLIC_KEY_ID_PARAM_RE, BLOB_VALUE_MIN_LEN, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, HEX_ONLY_RE, HEX_BLOB_MIN_LEN, DIGEST_HEX_LENGTHS, BLOB_VALUE_B64URL_RE, PATH_BLOB_RE, DIGEST_MAX_LEN, BLOB_SEPARATOR_RE, BLOB_RUN_SPLIT_RE, FLOAT_RE, SRCSET_URL_RE, SRCSET_DESCRIPTORS_RE, STRING_URL_FUNCTIONS, GRAMMAR_READERS, OFF_ORIGIN_REASON, COMMENT_INTERIOR_OPENER_RE;
 var init_html4 = __esm({
   "src/html.mjs"() {
     "use strict";
@@ -52129,7 +52158,8 @@ var init_html4 = __esm({
       "embed",
       "iframe",
       "svg",
-      "math"
+      "math",
+      "template"
     ]);
     VOID_ELEMENTS2 = /* @__PURE__ */ new Set([
       "area",
@@ -52182,6 +52212,7 @@ var init_html4 = __esm({
     TEXT_ONLY_HIDES = ["font-size", "color", "text-indent"];
     elementCascades = /* @__PURE__ */ new WeakMap();
     parents = /* @__PURE__ */ new WeakMap();
+    contentOwners = /* @__PURE__ */ new WeakMap();
     PARENT_RELATIVE_FONT_UNITS = /* @__PURE__ */ new Set(["em", "ex", "ch", "cap", "ic"]);
     PARENT_RELATIVE_FONT_KEYWORDS = /* @__PURE__ */ new Set(["smaller", "larger"]);
     MATH_FUNCTIONS = /* @__PURE__ */ new Set(["calc", "min", "max", "clamp"]);

@@ -1,18 +1,16 @@
 # shellcheck shell=bash
 # GENERATED from engines.node in package.json by scripts/gen-node-floor-lib.mjs
-# — do not edit by hand. Regenerate with:
+# — do not edit by hand. Rebuild with:
 #
-#   pnpm gen:node-floor-lib
+#   pnpm build:plugin
 #
 # The plugin launcher runs inside an INSTALLED plugin, where package.json is not
 # on disk, so it cannot read the floor at runtime. Rather than re-type the
 # number there (where it would drift the day engines.node moves),
 # scripts/safe-launch.sh sources this. plugin/test/node-floor-parity.test.mjs
-# asserts these bytes are what the generator still produces AND that the shell
-# comparison agrees with the declared range.
+# asserts the shell comparison agrees with the declared range.
 #
-# Sourced, never executed — hence no shebang and no +x bit (the repo's
-# shebang/executable pre-commit hook pairs the two).
+# Sourced, never executed — hence no shebang and no +x bit.
 AGENT_SANITIZER_NODE_MAJOR_FLOOR=22
 
 # The major version `$1` (a node binary) reports, or nothing when it cannot be

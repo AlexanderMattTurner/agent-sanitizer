@@ -1,21 +1,20 @@
 /**
- * Compile plugin/requirements.in into plugin/requirements.txt: the fully
- * resolved, hash-pinned dependency tree of the redaction engine.
+ * Compile the redactor's direct requirements (the `secrets` extra, written to
+ * the git-ignored plugin/requirements.in) into the committed
+ * plugin/requirements.txt: the fully resolved, hash-pinned dependency tree of
+ * the redaction engine.
  *
- * WHY A LOCK. The zipapp build used to install the bare
- * `agent-sanitizer[secrets]==X.Y.Z` spec, so pip re-resolved the TRANSITIVE
- * tree at build time. Only the engine was pinned; certifi, charset-normalizer,
- * idna, pyyaml, requests and urllib3 floated. Every release of any of them
- * changed the committed daemon.pyz's bytes with no diff anywhere in this repo —
- * the byte-compare in the live-engine job went red on a PR that touched nothing
- * related, and the only fix was a one-line regeneration that bought a few days.
- * With every version and artifact hash pinned here, the rebuild is reproducible
+ * WHY A LOCK. Installing the bare `agent-sanitizer[secrets]` spec lets pip
+ * resolve the TRANSITIVE tree at build time, so a release of any of certifi,
+ * charset-normalizer, idna, pyyaml, requests or urllib3 would change the
+ * shipped daemon.pyz's bytes with no diff anywhere in this repo. With every
+ * version and artifact hash pinned here, the zipapp build is reproducible
  * until someone deliberately re-locks.
  *
  * NETWORK: this resolves against PyPI, so it is NOT part of the offline
- * reproducibility rebuild. Run it when the engine's own dependencies change
- * (requirements.in moved) or when you deliberately want newer transitives; both
- * are reviewable as a diff of the lock.
+ * `pnpm build:plugin`. Run it when the engine's own dependencies change
+ * (plugin/test/lock-redactor-deps.test.mjs goes red) or when you deliberately
+ * want newer transitives; both are reviewable as a diff of the lock.
  *
  * Determinism: `--universal` resolves one tree valid on every platform, so the
  * lock does not depend on the machine that compiled it; `--python-version`
@@ -29,6 +28,7 @@ import {
   REQUIREMENTS_IN_PATH,
   REQUIREMENTS_LOCK_PATH,
   lockedEngineVersion,
+  redactorRequirements,
 } from "./build-plugin.mjs";
 
 /**
@@ -74,6 +74,7 @@ export function stampLockInput(lockText, requirementsInText) {
   return lockText.replace(header, (h) => `${h}${line}`);
 }
 
+/** Re-resolve the `secrets` extra into the committed, hash-pinned lock. */
 export function lockRedactorDeps() {
   if (spawnSync("uv", ["--version"]).status !== 0)
     throw new Error(
@@ -82,6 +83,9 @@ export function lockRedactorDeps() {
         "set must match what the build installs with.",
     );
 
+  // uv compiles from a file, and the lock's `# via -r` provenance names it.
+  const requirementsIn = redactorRequirements();
+  writeFileSync(REQUIREMENTS_IN_PATH, requirementsIn);
   const res = spawnSync(
     "uv",
     [
@@ -117,26 +121,26 @@ export function lockRedactorDeps() {
       REQUIREMENTS_IN_PATH,
       "plugin/requirements.in",
     ),
-    readFileSync(REQUIREMENTS_IN_PATH, "utf-8"),
+    requirementsIn,
   );
   writeFileSync(REQUIREMENTS_LOCK_PATH, text);
 
   // The engine ships from this tree, so a lock naming a PUBLISHED one would put
   // a second, older copy in the zipapp beside it. A resolver that pulled it in
-  // (a stale requirements.in, a hand-edited --output-file) must fail loudly.
+  // (a `secrets` extra naming the engine) must fail loudly.
   const locked = lockedEngineVersion(text);
   if (locked !== null)
     throw new Error(
       `${REQUIREMENTS_LOCK_PATH} pins agent-sanitizer==${locked}, but the ` +
-        "zipapp installs the engine from python/ in this tree. Regenerate " +
-        "requirements.in with `node plugin/scripts/build-plugin.mjs` first.",
+        "zipapp installs the engine from python/ in this tree. Drop it from " +
+        "the `secrets` extra in python/pyproject.toml.",
     );
   process.stderr.write(`wrote ${REQUIREMENTS_LOCK_PATH}\n`);
 }
 
 /**
  * True when re-locking is MANDATORY: the lock still pins the engine (the build
- * refuses it), or it was not compiled from the requirements.in beside it (a
+ * refuses it), or it was not compiled from the current `secrets` extra (a
  * raised floor or new dependency the shipped pins would never honor). The
  * recorded digest answers that offline. Everything else is deliberately frozen.
  * @param {string} [lockText]
@@ -145,21 +149,11 @@ export function lockRedactorDeps() {
  */
 export function lockIsStale(
   lockText = readFileSync(REQUIREMENTS_LOCK_PATH, "utf-8"),
-  requirementsInText = readFileSync(REQUIREMENTS_IN_PATH, "utf-8"),
+  requirementsInText = redactorRequirements(),
 ) {
   if (lockedEngineVersion(lockText) !== null) return true;
   const recorded = INPUT_DIGEST_LINE.exec(lockText)?.groups?.digest;
   return recorded !== requirementsInDigest(requirementsInText);
 }
 
-if (process.argv[1] === import.meta.filename) {
-  // `--if-stale` is what CI runs. An unconditional re-lock there would re-resolve
-  // the transitive tree on every artifact-regenerating PR, reintroducing exactly
-  // the floating-dependency drift this lock exists to stop. Refreshing
-  // transitives stays a deliberate, reviewable act: run this with no flag.
-  if (process.argv.includes("--if-stale") && !lockIsStale())
-    process.stderr.write(
-      `${REQUIREMENTS_LOCK_PATH} was compiled from the current requirements.in and names no published engine, skipping (--if-stale)\n`,
-    );
-  else lockRedactorDeps();
-}
+if (process.argv[1] === import.meta.filename) lockRedactorDeps();

@@ -1,17 +1,13 @@
 /**
  * `plugin/scripts/lib/fail-open.sh` is GENERATED from `FAIL_CLOSED_VALUES` in
- * `claude-hooks/lib/hook-io.mjs`, so the shell shims and the JS cannot disagree
- * about which spellings of `AGENT_SANITIZER_FAIL_OPEN` mean "fail closed".
+ * `claude-hooks/lib/hook-io.mjs` (by `pnpm build:plugin`, and by the release
+ * bake that ships it), so the shell shims and the JS cannot disagree about
+ * which spellings of `AGENT_SANITIZER_FAIL_OPEN` mean "fail closed".
  *
- * Two halves, and neither alone is enough:
- *
- *   - ROUND TRIP. The committed bytes are what the generator still produces —
- *     an edit to the closed set that never reached the committed file, or a
- *     hand-edit of the file, fails here rather than at a user's next incident.
- *   - BEHAVIOUR. The generated function, actually sourced and run by bash, and
- *     `failOpenEnabled()`, actually run by node, agree on every posture value.
- *     A generator that emitted syntactically valid nonsense would pass the
- *     round trip alone.
+ * What is left to prove is BEHAVIOUR: the generated function, actually sourced
+ * and run by bash, and `failOpenEnabled()`, actually run by node, agree on
+ * every posture value. A generator that emitted syntactically valid nonsense
+ * would otherwise ship.
  *
  * The remaining hand-written implementations (the repo's own
  * `.claude/hooks/safe-launch.sh` and the `.claude/settings.json` bootstrap,
@@ -21,9 +17,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   FAIL_CLOSED_VALUES,
@@ -31,9 +27,6 @@ import {
   failOpenEnabled,
 } from "../../claude-hooks/lib/hook-io.mjs";
 import { failOpenShellLib } from "../../scripts/gen-fail-open-lib.mjs";
-
-const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
-const LIB_PATH = join(ROOT, "plugin", "scripts", "lib", "fail-open.sh");
 
 // The knob values both implementations must agree on. `null` means unset.
 // Split here rather than derived from FAIL_CLOSED_VALUES on both sides: a
@@ -50,15 +43,11 @@ test("the split under test is populated and disjoint (non-vacuity)", () => {
   assert.ok(OPEN_VALUES.length >= 2);
 });
 
-test("the committed shell lib is exactly what the generator produces", () => {
-  assert.equal(
-    readFileSync(LIB_PATH, "utf8"),
-    failOpenShellLib(),
-    `${LIB_PATH} is stale or hand-edited — regenerate it (the command is in its header)`,
-  );
-});
-
-test("the generated shell function decides exactly as failOpenEnabled()", () => {
+test("the generated shell function decides exactly as failOpenEnabled()", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "agent-sanitizer-fail-open-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const lib = join(dir, "fail-open.sh");
+  writeFileSync(lib, failOpenShellLib());
   for (const value of [...CLOSED_VALUES, ...OPEN_VALUES]) {
     const env = { PATH: process.env.PATH };
     if (value !== null) env[FAIL_OPEN_ENV] = value;
@@ -68,7 +57,7 @@ test("the generated shell function decides exactly as failOpenEnabled()", () => 
         "-c",
         `. "$1"; if agent_sanitizer_fail_open; then echo open; else echo closed; fi`,
         "bash",
-        LIB_PATH,
+        lib,
       ],
       { encoding: "utf8", env },
     );
@@ -84,15 +73,4 @@ test("the generated shell function decides exactly as failOpenEnabled()", () => 
       `bash and JS disagree on ${JSON.stringify(value)}`,
     );
   }
-});
-
-test("a mutated closed set is caught by the round trip (the guard can fail)", () => {
-  // The round-trip assertion is only worth its line if a divergence trips it.
-  // Mutated in memory, never on disk: a killed test run must not leave the
-  // committed posture lib rewritten.
-  const mutated = readFileSync(LIB_PATH, "utf8").replace(
-    "0 | false)",
-    "0 | false | no)",
-  );
-  assert.notEqual(mutated, failOpenShellLib());
 });

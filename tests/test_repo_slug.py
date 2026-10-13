@@ -48,10 +48,6 @@ pytestmark = pytest.mark.drift_guard(
     "checked against package.json's repository.url instead"
 )
 
-# The committed plugin bundle inlines megabytes of third-party sources whose
-# comments cite unrelated repos; it is generated from the linted sources.
-GENERATED_PREFIXES = ("plugin/dist/",)
-
 GITHUB_REPO_URL = re.compile(
     r"github\.com/(?P<slug>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?(?![\w.-])"
 )
@@ -66,18 +62,10 @@ EXTERNAL_REPOS = {
     "crazytieguy/alignment-hive": (
         "a third-party agent-safety index the README cites as recommending this plugin"
     ),
-    "github/cmark-gfm": (
-        "GitHub's own GFM implementation, cited by line number in the vendored "
-        "autolink extension's comments (src/vendor/) as the behaviour it matches"
-    ),
     "gitleaks/gitleaks": "pinned pre-commit hook source",
     "pre-commit/pre-commit-hooks": "pinned pre-commit hook source",
     "scop/pre-commit-shfmt": "pinned pre-commit hook source",
     "shellcheck-py/shellcheck-py": "pinned pre-commit hook source",
-    "wooorm/markdown-rs": (
-        "the Rust port of micromark, cited the same way in the vendored "
-        "autolink extension's comments"
-    ),
     "Yelp/detect-secrets": "the secret-detection engine the redaction layer runs",
 }
 
@@ -123,7 +111,7 @@ def _tracked_files() -> list[str]:
         text=True,
         check=True,
     ).stdout
-    return [p for p in out.split("\0") if p and not p.startswith(GENERATED_PREFIXES)]
+    return [p for p in out.split("\0") if p]
 
 
 def _read(relative: str) -> str:
@@ -179,6 +167,9 @@ def test_every_manifest_url_names_the_source_of_truth() -> None:
         "plugin.json homepage": plugin["homepage"],
         "plugin.json repository": plugin["repository"],
     }
+    # The git-subdir source Claude Code fetches each installed plugin from.
+    for entry in marketplace["plugins"]:
+        urls[f"marketplace.json {entry['name']} source.url"] = entry["source"]["url"]
     for field in ("Homepage", "Repository", "Issues"):
         match = re.search(rf'^{field}\s*=\s*"(?P<url>[^"]+)"', pyproject, re.M)
         assert match, f"python/pyproject.toml [project.urls] lost {field}"

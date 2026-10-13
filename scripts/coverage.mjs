@@ -92,7 +92,7 @@ export const nodeTestCommand = (extra) => [
  * The hook layer's floor is a RATCHET, not a target: it sits a little under the
  * measured value and should only ever move up. The headroom is deliberate.
  * Several of these hooks are also driven the way Claude Code drives them — as
- * subprocesses executing the committed `plugin/dist` BUNDLE — and those lines
+ * subprocesses executing the built `plugin/dist` BUNDLE — and those lines
  * are attributed to the bundle, not back to the source here, so the measured
  * ratio moves when a file merely grows. A floor pinned to the exact measurement
  * would go red for that alone, which is how floors get lowered. Raise it
@@ -127,7 +127,7 @@ export const SCOPES = [
  *
  * 6 points, not the ~1 an exactly-pinned floor would allow, because the headroom
  * noted above is real: the hooks that Claude Code drives as subprocesses run the
- * committed `plugin/dist` BUNDLE, and those lines are attributed to the bundle
+ * built `plugin/dist` BUNDLE, and those lines are attributed to the bundle
  * rather than back to the source here, so the ratio moves when a file merely
  * grows. 6 absorbs that drift while still being far smaller than the 18-point
  * gap that accumulated unnoticed — and the failure it raises is "raise the

@@ -1,15 +1,14 @@
 /**
- * When `lock-redactor-deps.mjs --if-stale` (the step CI's plugin-dist-autofix
- * runs) must re-lock. Offline: the lock records the digest of the
- * requirements.in it was compiled from, so staleness is a comparison, never a
- * resolution.
+ * When the committed redactor lock must be re-compiled
+ * (`node plugin/scripts/lock-redactor-deps.mjs`). Offline: the lock records the
+ * digest of the requirements.in it was compiled from, so staleness is a
+ * comparison, never a resolution.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
-  REQUIREMENTS_IN_PATH,
   REQUIREMENTS_LOCK_PATH,
   redactorRequirements,
 } from "../scripts/build-plugin.mjs";
@@ -20,14 +19,15 @@ import {
 } from "../scripts/lock-redactor-deps.mjs";
 
 const LOCK = readFileSync(REQUIREMENTS_LOCK_PATH, "utf-8");
-const REQUIREMENTS_IN = readFileSync(REQUIREMENTS_IN_PATH, "utf-8");
+const REQUIREMENTS_IN = redactorRequirements();
 
 /** A lock exactly as uv writes it, before the input digest is stamped in. */
 const UNSTAMPED = LOCK.replace(/^# requirements\.in sha256: .*\n/m, "");
 
-test("the committed lock was compiled from the committed requirements.in", () => {
-  // The one state --if-stale may skip. Red here means a dependency change in
-  // the `secrets` extra never reached the pins the plugin ships.
+test("the committed lock was compiled from the current secrets extra", () => {
+  // Red here means a dependency change in the `secrets` extra never reached
+  // the pins the plugin ships: re-lock with
+  // `node plugin/scripts/lock-redactor-deps.mjs` and commit requirements.txt.
   assert.equal(lockIsStale(LOCK, REQUIREMENTS_IN), false);
 });
 

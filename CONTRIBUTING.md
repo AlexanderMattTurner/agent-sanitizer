@@ -14,7 +14,8 @@ pnpm install   # installs deps, generates the Unicode tables, configures git hoo
 
 The Unicode tables are **generated, never committed**: `src/cf-charset.mjs`,
 `src/joining-type.mjs`, `src/standardized-variants.mjs`,
-`src/unicode-properties.mjs` and
+`src/unicode-properties.mjs`, `src/css-syntax-data.mjs` (CSS grammars from
+css-tree's mdn-data) and
 `python/agent_sanitizer/data/invisible-charset.json` are git-ignored build
 output of `scripts/gen-unicode.mjs`, which `pnpm install` runs through
 `prepare` and `npm pack`/`publish` through `prepack`. A clean checkout cannot
@@ -23,6 +24,13 @@ run the tests until that has happened; after editing a `scripts/gen-*.mjs`, or
 to a new Unicode, bump the pinned `@unicode/unicode-*` package and install; there
 is no regenerated file to commit. Anything that builds the Python wheel
 (`uv build`) must generate first, because hatchling runs no Node.
+
+`src/vendor/gfm-autolink-literal.mjs` is generated the same way, by
+`scripts/gen-gfm-autolink.mjs` (`pnpm gen:gfm-autolink`): the pinned
+`micromark-extension-gfm-autolink-literal` devDependency with
+`scripts/patches/*.patch` applied. The patch is the only tracked part. Bumping
+that dependency fails the generator on its SHA-256 pin until the patch is
+re-derived against the new version.
 
 ## Workflow
 

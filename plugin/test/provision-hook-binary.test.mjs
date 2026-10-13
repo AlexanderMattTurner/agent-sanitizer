@@ -281,8 +281,8 @@ test("the fast path repairs an install dir anything could write", (t) => {
 
 test("a manifest that does not describe this install's bundle provisions nothing", (t) => {
   // The manifest's `# bundle=` pins the bundle the release binaries were
-  // compiled FROM. When the committed bundle has moved since the last manifest
-  // regen, the binary that verifies against this manifest is NOT this
+  // compiled FROM. When the bundle has been rebuilt since the manifest was
+  // written, the binary that verifies against this manifest is NOT this
   // checkout's sanitizer — and the launcher prefers the binary over the
   // bundle, so provisioning would guard the session with code the install does
   // not contain.
@@ -397,7 +397,7 @@ for (const [label, breakIt] of UNPROVISIONABLE) {
     // This host installs nothing, so it has nothing to certify: every refusal
     // below the node check is about an artifact that is on disk or about to
     // be. Refusing here instead errors on every session start of the ordinary
-    // checkout whose committed bundle has moved since the last
+    // checkout whose bundle has been rebuilt since the last
     // `pnpm gen:hook-binaries` — this repo's own dev loop.
     const staged = stageProvisionable(t);
     const pathOpts = breakIt(staged);

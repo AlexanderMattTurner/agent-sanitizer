@@ -25,9 +25,9 @@
  * cannot reach (it runs its no-node arm on shell builtins alone).
  *
  * THE single source of truth for the closed set. The shell shims cannot import
- * it, so `plugin/scripts/lib/fail-open.sh` is GENERATED from it by
- * `scripts/gen-fail-open-lib.mjs` and committed; the round trip is asserted in
- * plugin/test/fail-open-parity.test.mjs. Everything else that spells the set
+ * it, so `plugin/scripts/lib/fail-open.sh` is GENERATED from it at build time
+ * by `scripts/gen-fail-open-lib.mjs`; plugin/test/fail-open-parity.test.mjs
+ * asserts the generated lib decides as failOpenEnabled(). Everything else that spells the set
  * out by hand is an implementation that must appear in the parity table in
  * tests/test_safe_launch.py.
  */

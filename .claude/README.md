@@ -27,8 +27,8 @@ so this README deliberately does not restate the directory listings.
 with `autoUpdate: true`) and enables `agent-sanitizer@agent-sanitizer`
 (`enabledPlugins`). Trusting the project folder prompts the install; after that
 Claude Code refreshes the marketplace clone on startup and picks up whatever
-`version` the latest release stamped
-into `plugin/.claude-plugin/plugin.json`, so sessions here track the SHIPPED
+`version` the latest release baked
+into `plugin/.claude-plugin/plugin.json` on the `plugin-dist` branch, so sessions here track the SHIPPED
 hooks rather than the working tree. That is deliberate: it is the same artifact
 users install, so a broken release is felt here first.
 
