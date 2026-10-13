@@ -211,15 +211,14 @@ in how certain the evidence is:
   a label keeping an unmapped glyph after skeletoning (`россия` → `poccия`) is a
   real word in its own script, not a disguise.
 - **NOTE, same-script** — the skeleton is pure ASCII, but only through letters
-  of a real Latin orthography: every non-ASCII code point is Script=Latin, sits
-  in Latin-1 Supplement, Latin Extended-A/B (U+00C0–U+024F) or Latin Extended
-  Additional (U+1E00–U+1EFF), and does not NFKC-fold to ASCII. Turkish `altın`
-  and Azerbaijani `sumqayıt` read as `altin`/`sumqayit` because the dotless `ı`
-  skeletons to `i`, yet they are words, not disguises. The tier is per glyph, not
-  per word, so `gıthub` (dotless `ı`) lands here too: that recall cost is the
-  price of not flagging Turkish, and the NOTE still reaches the model (see
-  below). A cross-script glyph (Cyrillic `а`), an IPA or small-capital letter
-  (`ɡ`, `ᴀ`) and a fullwidth form (`ａ`) stay pretenders and keep the WARNING.
+  of a real Latin orthography: Latin-1 Supplement, Latin Extended-A/B
+  (U+00C0–U+024F) or Latin Extended Additional (U+1E00–U+1EFF), none NFKC-folding
+  to ASCII. Turkish `altın` reads as `altin` because the dotless `ı` skeletons to
+  `i`, yet it is a word, not a disguise. The tier is per glyph, so `gıthub` lands
+  here too: that recall cost is the price of not flagging Turkish, and the NOTE
+  still reaches the model (see below). A cross-script glyph (Cyrillic `а`), an
+  IPA or small-capital letter (`ɡ`, `ᴀ`) and a fullwidth form (`ａ`) stay
+  pretenders and keep the WARNING.
 - **NOTE, unmapped glyph** — the label carries a confusable in a token that
   mixes Latin with another script but keeps an unmapped glyph, so it reads as no
   ASCII name. That is the "unmapped glyph spliced in to suppress the strong
@@ -227,12 +226,11 @@ in how certain the evidence is:
   letter produces, so the evidence is thin and the finding stays quiet.
 
 **A NOTE is quieter, never dropped.** In the output hook every note reaches the
-model's `additional_context`: on its own when nothing rose above a note, and
-after the WARNING text when a warning co-occurs anywhere in the same tool output.
-The single exception is the inert-ANSI note (`INERT_ANSI_NOTE`), which is
-dropped beside a warning because "these were colour codes" adds nothing for a
-reader who has a warning to act on. So a confusable host's "do not fetch them"
-survives an unrelated zero-width strip or HTML splice on the same page.
+model's `additional_context`: alone when nothing rose above a note, after the
+WARNING text when a warning co-occurs. The one exception is the inert-ANSI note
+(`INERT_ANSI_NOTE`), dropped beside a warning because "these were colour codes"
+adds nothing for a reader with a warning to act on. So a confusable host's "do
+not fetch them" survives an unrelated zero-width strip on the same page.
 
 Scored against `test/data/confusable-hosts.json`, which is the single source for
 both halves: **zero findings** across 66 real internationalized labels spanning
@@ -821,10 +819,9 @@ The Layer-1 downgrade is gated on the caller asserting first-party ingress
 few the bytes, because that is the channel where a hidden character was _put_
 there. The `sgrNote` flag on a `./output` result means "nothing here rose above a
 note", so a caller can show the quiet line instead of the banner; one warning
-anywhere in the walk clears it. Clearing it changes what leads, not what is said:
+anywhere in the walk clears it. That changes what leads, not what is said:
 `composeContext`'s `notes` option appends every note after the WARNING text
-except the inert-ANSI one, which is how the output hook keeps a co-occurring
-note in front of the model.
+except the inert-ANSI one.
 
 ## Provisioned hook binary (supply chain)
 

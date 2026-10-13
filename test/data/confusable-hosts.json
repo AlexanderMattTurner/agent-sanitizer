@@ -65,44 +65,20 @@
     { "label": "हिन्दी", "script": "Devanagari" },
     { "label": "ไทย", "script": "Thai" },
     { "label": "กรุงเทพ", "script": "Thai" },
-    {
-      "label": "kılıç",
-      "script": "Latin",
-      "note": "Turkish dotless i beside a cedilla"
-    },
-    {
-      "label": "ışık",
-      "script": "Latin",
-      "note": "Turkish dotless i beside s-cedilla"
-    },
-    { "label": "iğdır", "script": "Latin", "note": "Turkish place name" },
-    { "label": "şırnak", "script": "Latin", "note": "Turkish place name" },
-    { "label": "çanakkale", "script": "Latin", "note": "Turkish cedilla" },
-    { "label": "gəncə", "script": "Latin", "note": "Azerbaijani schwa" },
-    { "label": "azərbaycan", "script": "Latin", "note": "Azerbaijani schwa" },
-    {
-      "label": "mingəçevir",
-      "script": "Latin",
-      "note": "Azerbaijani schwa and cedilla"
-    },
-    {
-      "label": "việt",
-      "script": "Latin",
-      "note": "Vietnamese stacked diacritics"
-    },
-    {
-      "label": "nguyễn",
-      "script": "Latin",
-      "note": "Vietnamese stacked diacritics"
-    },
-    { "label": "đà", "script": "Latin", "note": "Vietnamese d-bar" },
-    { "label": "phở", "script": "Latin", "note": "Vietnamese horn" },
-    {
-      "label": "tiếng",
-      "script": "Latin",
-      "note": "Vietnamese stacked diacritics"
-    },
-    { "label": "đức", "script": "Latin", "note": "Vietnamese d-bar" },
+    { "label": "kılıç", "script": "Latin" },
+    { "label": "ışık", "script": "Latin" },
+    { "label": "iğdır", "script": "Latin" },
+    { "label": "şırnak", "script": "Latin" },
+    { "label": "çanakkale", "script": "Latin" },
+    { "label": "gəncə", "script": "Latin" },
+    { "label": "azərbaycan", "script": "Latin" },
+    { "label": "mingəçevir", "script": "Latin" },
+    { "label": "việt", "script": "Latin" },
+    { "label": "nguyễn", "script": "Latin" },
+    { "label": "đà", "script": "Latin" },
+    { "label": "phở", "script": "Latin" },
+    { "label": "tiếng", "script": "Latin" },
+    { "label": "đức", "script": "Latin" },
     {
       "label": "istanbul",
       "script": "ASCII",
@@ -196,69 +172,15 @@
   ],
 
   "sameScript": [
-    {
-      "label": "altın",
-      "reads": "altin",
-      "severity": "note",
-      "script": "Latin",
-      "note": "Turkish 'gold'"
-    },
-    {
-      "label": "kadın",
-      "reads": "kadin",
-      "severity": "note",
-      "script": "Latin",
-      "note": "Turkish 'woman'"
-    },
-    {
-      "label": "yazılım",
-      "reads": "yazilim",
-      "severity": "note",
-      "script": "Latin",
-      "note": "Turkish 'software'"
-    },
-    {
-      "label": "kırmızı",
-      "reads": "kirmizi",
-      "severity": "note",
-      "script": "Latin",
-      "note": "Turkish 'red'"
-    },
-    {
-      "label": "diyarbakır",
-      "reads": "diyarbakir",
-      "severity": "note",
-      "script": "Latin",
-      "note": "Turkish city"
-    },
-    {
-      "label": "ılık",
-      "reads": "ilik",
-      "severity": "note",
-      "script": "Latin",
-      "note": "Turkish 'lukewarm'"
-    },
-    {
-      "label": "bakı",
-      "reads": "baki",
-      "severity": "note",
-      "script": "Latin",
-      "note": "Azerbaijani capital"
-    },
-    {
-      "label": "sumqayıt",
-      "reads": "sumqayit",
-      "severity": "note",
-      "script": "Latin",
-      "note": "Azerbaijani city"
-    },
-    {
-      "label": "gıthub",
-      "reads": "github",
-      "severity": "note",
-      "script": "Latin",
-      "note": "the same native letter in an English brand gets the same quiet tier: the cost of not reading a Turkish word as a disguise"
-    }
+    { "label": "altın", "reads": "altin" },
+    { "label": "kadın", "reads": "kadin" },
+    { "label": "yazılım", "reads": "yazilim" },
+    { "label": "kırmızı", "reads": "kirmizi" },
+    { "label": "diyarbakır", "reads": "diyarbakir" },
+    { "label": "ılık", "reads": "ilik" },
+    { "label": "bakı", "reads": "baki" },
+    { "label": "sumqayıt", "reads": "sumqayit" },
+    { "label": "gıthub", "reads": "github" }
   ],
 
   "misses": [

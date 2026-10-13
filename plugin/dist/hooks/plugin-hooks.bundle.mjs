@@ -3642,7 +3642,7 @@ function inSpans(spans, cp) {
   }
   return false;
 }
-var EXTENDED_PICTOGRAPHIC, EMOJI_MODIFIER, EMOJI_TEXT_DEFAULT, UNIFIED_IDEOGRAPH, SCRIPT_BRAILLE, SCRIPT_HANGUL, SCRIPT_LATIN, GENERAL_CATEGORY_MARK;
+var EXTENDED_PICTOGRAPHIC, EMOJI_MODIFIER, EMOJI_TEXT_DEFAULT, UNIFIED_IDEOGRAPH, SCRIPT_BRAILLE, SCRIPT_HANGUL, GENERAL_CATEGORY_MARK;
 var init_unicode_properties = __esm({
   "src/unicode-properties.mjs"() {
     "use strict";
@@ -3964,44 +3964,6 @@ var init_unicode_properties = __esm({
       [65482, 65487],
       [65490, 65495],
       [65498, 65500]
-    ];
-    SCRIPT_LATIN = [
-      [65, 90],
-      [97, 122],
-      [170, 170],
-      [186, 186],
-      [192, 214],
-      [216, 246],
-      [248, 696],
-      [736, 740],
-      [7424, 7461],
-      [7468, 7516],
-      [7522, 7525],
-      [7531, 7543],
-      [7545, 7614],
-      [7680, 7935],
-      [8305, 8305],
-      [8319, 8319],
-      [8336, 8348],
-      [8490, 8491],
-      [8498, 8498],
-      [8526, 8526],
-      [8544, 8584],
-      [11360, 11391],
-      [42786, 42887],
-      [42891, 42972],
-      [42993, 43007],
-      [43824, 43866],
-      [43868, 43876],
-      [43878, 43881],
-      [64256, 64262],
-      [65313, 65338],
-      [65345, 65370],
-      [67456, 67461],
-      [67463, 67504],
-      [67506, 67514],
-      [122624, 122654],
-      [122661, 122666]
     ];
     GENERAL_CATEGORY_MARK = [
       [768, 879],
@@ -46556,8 +46518,8 @@ function isAsciiPretender(glyph) {
       ch.codePointAt(0)
     );
     if (!hasNonAscii(ch) || inSpans(GENERAL_CATEGORY_MARK, cp)) continue;
-    const orthographic = inSpans(SCRIPT_LATIN, cp) && ORTHOGRAPHIC_LATIN.test(ch) && hasNonAscii(ch.normalize("NFKC"));
-    if (!orthographic) return true;
+    if (!ORTHOGRAPHIC_LATIN.test(ch) || !hasNonAscii(ch.normalize("NFKC")))
+      return true;
   }
   return false;
 }
@@ -46751,7 +46713,7 @@ var init_confusables = __esm({
         reason: "MCP tool inputs follow a server-declared schema this package cannot see, so there is no field it can name as a path or command. A blanket fold over every string in the input would rewrite opaque IDs and protocol fields the server parses. A deployment that wants a specific server's path field folded adds it to `fields` by its full tool name."
       })
     ]);
-    ORTHOGRAPHIC_LATIN = /^[\u00C0-\u024F\u1E00-\u1EFF]$/u;
+    ORTHOGRAPHIC_LATIN = /^[\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u024F\u1E00-\u1EFF]$/u;
     MAX_REPORTED_FOLDS = 8;
   }
 });
@@ -48252,7 +48214,6 @@ __export(output_exports, {
   COLLISION_WITHHELD_MESSAGE: () => COLLISION_WITHHELD_MESSAGE,
   FILTER_WARNING: () => FILTER_WARNING,
   MAX_DEPTH: () => MAX_DEPTH,
-  MUTATION_RERUNS: () => MUTATION_RERUNS,
   REDACTION_DOCTRINE: () => REDACTION_DOCTRINE,
   collisionWarning: () => collisionWarning,
   composeContext: () => composeContext,
@@ -48283,12 +48244,10 @@ function errMessage2(err) {
   const cause = err.cause instanceof Error ? `: ${err.cause.message}` : "";
   return err.message + cause;
 }
-async function mutate(state, change, options) {
-  state.text = normalizeLoneSurrogates(change.text);
+function mutate(state, text6, report) {
+  state.text = normalizeLoneSurrogates(text6);
   state.modified = true;
-  state.findings.push(change.report);
-  for (const step of MUTATION_RERUNS[change.source])
-    await RERUNNERS[step](state, options);
+  state.findings.push(report);
 }
 async function runRedact(state, options) {
   const { redact } = options;
@@ -48303,16 +48262,12 @@ async function runRedact(state, options) {
     );
   }
   if (!secrets) return;
-  await mutate(
+  mutate(
     state,
-    {
-      source: "redact",
-      text: secrets.text,
-      report: warning(
-        `API keys/secrets redacted: ${secrets.found.join(", ")}${secrets.note ?? ""}${REDACTION_DOCTRINE}`
-      )
-    },
-    options
+    secrets.text,
+    warning(
+      `API keys/secrets redacted: ${secrets.found.join(", ")}${secrets.note ?? ""}${REDACTION_DOCTRINE}`
+    )
   );
 }
 function withheldWarning(label) {
@@ -48375,9 +48330,6 @@ async function loadHtmlLayer(deadline) {
   refuseIfSpent(deadline);
   return layer;
 }
-function pushOnce(list3, item, same) {
-  if (!list3.some((entry) => same(entry, item))) list3.push(item);
-}
 function applyLayer3(state, htmlLayer, text6, { flagDigestValues, deadline }) {
   refuseIfSpent(deadline);
   const exfil = htmlLayer.detectExfil(text6, { flagDigestValues });
@@ -48404,12 +48356,11 @@ function applyLayer3(state, htmlLayer, text6, { flagDigestValues, deadline }) {
       )
     ]);
   for (const [code4, report] of reports) {
-    pushOnce(state.found, code4, (a, b) => a === b);
-    pushOnce(
-      state.findings,
-      report,
-      (a, b) => a.severity === b.severity && a.message === b.message
-    );
+    if (!state.found.includes(code4)) state.found.push(code4);
+    if (!state.findings.some(
+      (f) => f.severity === report.severity && f.message === report.message
+    ))
+      state.findings.push(report);
   }
 }
 async function applyMarkdownPipeline(state, options) {
@@ -48432,16 +48383,12 @@ async function applyMarkdownPipeline(state, options) {
         if (layer2.removed.comments > 0)
           state.found.push(CATEGORY.HTML_COMMENTS);
         if (layer2.removed.hidden > 0) state.found.push(CATEGORY.HIDDEN_HTML);
-        await mutate(
+        mutate(
           state,
-          {
-            source: "html-splice",
-            text: layer2.text,
-            report: warning(
-              layer2.unparseable ? HTML_UNPARSEABLE_WARNING : describeHtmlSanitized(layer2.removed)
-            )
-          },
-          options
+          layer2.text,
+          warning(
+            layer2.unparseable ? HTML_UNPARSEABLE_WARNING : describeHtmlSanitized(layer2.removed)
+          )
         );
       }
       const preserved = describeWarned(layer2.warned);
@@ -48485,17 +48432,13 @@ async function sanitizeText(text6, options = {}) {
       const filterWarning = res.warning == null ? void 0 : mapFilterWarning(res.warning);
       const removed = res.removeSpans && res.removeSpans.length > 0 ? deleteVerbatimSpans(state.text, res.removeSpans) : { text: state.text, removed: 0 };
       if (removed.removed > 0) {
-        await mutate(
+        mutate(
           state,
-          {
-            source: "span-delete",
-            text: removed.text,
-            report: warning(
-              FILTER_WARNING_LABELS[FILTER_WARNING.SPANS_REMOVED]
-            )
-          },
-          options
+          removed.text,
+          warning(FILTER_WARNING_LABELS[FILTER_WARNING.SPANS_REMOVED])
         );
+        await rescanUrls(state, options);
+        await runRedact(state, options);
       }
       const subsumed = removed.removed > 0 && (res.warning === FILTER_WARNING.SPANS_REMOVED || res.warning === FILTER_WARNING.FILTER_FLAGGED);
       if (filterWarning !== void 0 && !subsumed)
@@ -48532,7 +48475,7 @@ async function sanitizeText(text6, options = {}) {
     // rather than tracked: "nothing here rose above a note". The inert-ANSI
     // strip is simply the most common way to end up note-only, not the only
     // one this field now covers. Sound because every byte change carries its
-    // own finding (see mutation).
+    // own finding (see {@link mutate}).
     sgrNote: notes.length > 0 && warnings.length === 0,
     ...reveal !== void 0 && { reveal },
     // Presence-gated like `reveal`: the field exists only when Layer 2 spliced
@@ -48771,7 +48714,7 @@ function suppressAt(value, message, depth, seen, memo) {
     seen.delete(value);
   }
 }
-var FILTER_WARNING, FILTER_WARNING_LABELS, MUTATION_RERUNS, RERUNNERS, REDACTION_DOCTRINE, MAX_DEPTH, DEPTH_PLACEHOLDER, CYCLE_PLACEHOLDER, COLLISION_WITHHELD_MESSAGE, isString, isRecord, isNullableString, isNullableArray, isNullableRecord, isArray, CONTENT_BLOCK_SCHEMA_ENTRIES, CONTENT_BLOCK_SCHEMAS;
+var FILTER_WARNING, FILTER_WARNING_LABELS, REDACTION_DOCTRINE, MAX_DEPTH, DEPTH_PLACEHOLDER, CYCLE_PLACEHOLDER, COLLISION_WITHHELD_MESSAGE, isString, isRecord, isNullableString, isNullableArray, isNullableRecord, isArray, CONTENT_BLOCK_SCHEMA_ENTRIES, CONTENT_BLOCK_SCHEMAS;
 var init_output = __esm({
   "src/output.mjs"() {
     "use strict";
@@ -48795,18 +48738,6 @@ var init_output = __esm({
       [FILTER_WARNING.SPANS_REMOVED]: "Layer-5 injection filter removed one or more verbatim spans it flagged as prompt injection",
       [FILTER_WARNING.FILTER_FLAGGED]: "Layer-5 injection filter flagged this tool output as a possible prompt injection (content not modified)",
       [FILTER_WARNING.FILTER_ERROR]: "Layer-5 injection filter reported an internal error while scanning this tool output"
-    });
-    MUTATION_RERUNS = Object.freeze({
-      "html-splice": Object.freeze([]),
-      redact: Object.freeze([]),
-      "span-delete": Object.freeze(
-        /** @type {const} */
-        ["url-scan", "redact"]
-      )
-    });
-    RERUNNERS = Object.freeze({
-      "url-scan": rescanUrls,
-      redact: runRedact
     });
     REDACTION_DOCTRINE = " (placeholders rehydrate only via Edit/Write on the owning file; other write paths persist the placeholder text and lose the secret)";
     MAX_DEPTH = 200;

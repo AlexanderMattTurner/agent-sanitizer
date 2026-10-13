@@ -1,15 +1,9 @@
 /**
- * Both entry points that run Layers 1–3 must describe the same finding with the
- * same words, and each case must produce the finding it was written for.
- *
- * `sanitize()` (./src/index.mjs) delegates to `sanitizeText()` (./src/output.mjs)
- * and both read their prose from ./src/warnings.mjs, so the comparison between
- * them is what fails if either re-inlines a string. That comparison alone
- * passes on two empty lists, though — so every case also declares the exact
+ * `sanitize()` and `sanitizeText()` must describe the same finding with the
+ * same words, in the same tier (warning vs note, ./src/severity.mjs). Comparing
+ * the two alone passes on two empty lists, so every case also declares the exact
  * warnings and notes it must yield, built from the warnings.mjs builders where
- * one exists. Both TIERS are pinned: the severity split (./src/severity.mjs)
- * sends some of these sentences to `notes`, and calling a finding a warning in
- * one place and a note in the other is the same drift in a new coordinate.
+ * one exists.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";

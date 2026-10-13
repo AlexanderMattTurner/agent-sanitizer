@@ -6,7 +6,7 @@
  *
  * The carve-out reads its neighbours' Unicode properties (pictographs, skin
  * tones, text-default emoji, ideographs, Braille, Hangul) and the confusables gate
- * reads Latin and combining marks, and each set grows
+ * reads combining marks, and each set grows
  * with Unicode: a live `\p{…}` once made Node 22.22 strip the Extension J
  * sequences Node 22.23 preserved. test/unicode-properties.test.mjs regenerates
  * this module and fails on drift.
@@ -43,7 +43,6 @@ export const UNICODE_PROPERTIES = Object.freeze({
   UNIFIED_IDEOGRAPH: await ucdSpans("Binary_Property/Unified_Ideograph"),
   SCRIPT_BRAILLE: await ucdSpans("Script/Braille"),
   SCRIPT_HANGUL: await ucdSpans("Script/Hangul"),
-  SCRIPT_LATIN: await ucdSpans("Script/Latin"),
   GENERAL_CATEGORY_MARK: await ucdSpans("General_Category/Mark"),
 });
 

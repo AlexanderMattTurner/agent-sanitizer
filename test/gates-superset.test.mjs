@@ -1,12 +1,11 @@
 /**
  * The Layer-2/3 pre-gates in src/gates.mjs must be SUPERSETS of the parsers
- * behind them: a gate narrower than its parser turns the layer off for exactly
- * the inputs it misses (`<!-- 1 < 2 -->`, a bare `www.` autolink, a ref-def in
- * a blockquote). Checked against the layers' own parsers (remark + the repo's
- * GFM build, parse5 via its tree adapter) over literals harvested from the
- * HTML/output suites and the golden corpus, each also re-nested in the block
- * containers CommonMark allows a definition in. The secret pre-gate is held to
- * the redactor engine's newline-collapsed view.
+ * behind them (a narrower gate turns the layer off for the inputs it misses:
+ * `<!-- 1 < 2 -->`, a bare `www.` autolink, a ref-def in a blockquote), checked
+ * against remark + the repo's GFM build and parse5 over literals harvested from
+ * the HTML/output suites and the golden corpus, also re-nested in the block
+ * containers a definition may sit in. The secret pre-gate is held to the
+ * redactor engine's newline-collapsed view.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -191,7 +190,7 @@ describe("isHtmlShaped — the MCP Layer-2 policy", () => {
       assert.equal(isHtmlShaped(text), true, JSON.stringify(text));
   });
 
-  it("leaves structured data that merely contains a `<` alone (negative corpus)", () => {
+  it("leaves structured data that merely contains a `<` alone, and never exceeds the gate", () => {
     const data = [
       '{"cmp": "a<b", "n": 3}',
       "x <= y and y < z",
@@ -201,50 +200,39 @@ describe("isHtmlShaped — the MCP Layer-2 policy", () => {
       "plain prose, nothing here",
       '[{"id": 1}, {"id": 2}]',
     ];
+    assert.deepEqual(data.filter(isHtmlShaped), []);
+    // Non-vacuity: the gate opens on two of these, so the policy is narrower.
+    assert.ok(data.filter((text) => HTML_TAG_PRESENT.test(text)).length >= 2);
+    // policy ⊆ gate
     assert.deepEqual(
-      data.filter((text) => isHtmlShaped(text)),
+      CORPUS.filter(
+        (text) => isHtmlShaped(text) && !HTML_TAG_PRESENT.test(text),
+      ),
       [],
     );
-    // Non-vacuity: the gate opens on two of these, so the policy is genuinely
-    // narrower than it rather than an alias.
-    assert.ok(data.filter((text) => HTML_TAG_PRESENT.test(text)).length >= 2);
-  });
-
-  it("is never true where the gate is false (policy ⊆ gate)", () => {
-    const leaks = CORPUS.filter(
-      (text) => isHtmlShaped(text) && !HTML_TAG_PRESENT.test(text),
-    );
-    assert.deepEqual(leaks, []);
   });
 });
 
 describe("matchesSecretHint covers the engine's newline-collapsed view", () => {
-  // The redactor engine also scans the text with every "\n" removed
-  // (`_redact_cross_line`), so a credential hard-wrapped across lines is
-  // redacted there — and the pre-gate must open for it too.
-  it("opens for a credential that only the collapsed view reveals", () => {
+  // The engine also scans the text with every "\n" removed (`_redact_cross_line`),
+  // so the pre-gate must open for a credential hard-wrapped across lines too.
+  it("opens only for the collapsed view, and stays shut on multi-line prose", () => {
     for (const text of [
       "AKIAIOSF\nODNN7EXAMPLE",
       "value: gh\np_abcdefghijklmnop",
       "sk-a\nnt-api03-xyz",
     ]) {
-      const label = JSON.stringify(text);
       // Non-vacuity: the as-written text alone does not trip either hint.
-      assert.equal(SECRET_HINT.test(text), false, label);
-      assert.equal(SECRET_HINT_EXT.test(text), false, label);
-      assert.equal(matchesSecretHint(text), true, label);
+      assert.equal(SECRET_HINT.test(text) || SECRET_HINT_EXT.test(text), false);
+      assert.equal(matchesSecretHint(text), true, JSON.stringify(text));
     }
-  });
-
-  it("stays shut on multi-line prose with no credential (negative corpus)", () => {
-    const prose = [
-      "line one\nline two\nline three",
-      "AK\nIA is not a key",
-      "## Heading\n\n- item\n- item",
-      "foo\nbar\nbaz",
-    ];
     assert.deepEqual(
-      prose.filter((text) => matchesSecretHint(text)),
+      [
+        "line one\nline two\nline three",
+        "AK\nIA is not a key",
+        "## Heading\n\n- item\n- item",
+        "foo\nbar\nbaz",
+      ].filter(matchesSecretHint),
       [],
     );
   });

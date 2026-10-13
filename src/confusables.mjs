@@ -60,11 +60,7 @@
  */
 import { createRequire } from "node:module";
 
-import {
-  GENERAL_CATEGORY_MARK,
-  SCRIPT_LATIN,
-  inSpans,
-} from "./unicode-properties.mjs";
+import { GENERAL_CATEGORY_MARK, inSpans } from "./unicode-properties.mjs";
 
 /**
  * Default path/command fields to fold per tool. Agent-agnostic: the keys are
@@ -171,12 +167,12 @@ export function hasNonAscii(value) {
   return false;
 }
 
-// The Unicode blocks that hold the letters of living Latin-script orthographies:
-// Latin-1 Supplement, Latin Extended-A/B (U+00C0–U+024F) and Latin Extended
-// Additional (U+1E00–U+1EFF, Vietnamese). IPA, phonetic small capitals and the
-// fullwidth forms are Latin-script too, but no orthography spells a word with
-// them, so they stay look-alikes.
-const ORTHOGRAPHIC_LATIN = /^[\u00C0-\u024F\u1E00-\u1EFF]$/u;
+// The letters of living Latin-script orthographies: Latin-1 Supplement (minus
+// × and ÷, which are symbols), Latin Extended-A/B and Latin Extended Additional
+// (Vietnamese). IPA, phonetic small capitals and fullwidth forms are Latin-script
+// too, but no orthography spells a word with them, so they stay look-alikes.
+const ORTHOGRAPHIC_LATIN =
+  /^[\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u024F\u1E00-\u1EFF]$/u;
 
 /**
  * True when `glyph` holds a non-ASCII code point that is neither a combining
@@ -193,11 +189,8 @@ export function isAsciiPretender(glyph) {
   for (const ch of glyph) {
     const cp = /** @type {number} */ (ch.codePointAt(0));
     if (!hasNonAscii(ch) || inSpans(GENERAL_CATEGORY_MARK, cp)) continue;
-    const orthographic =
-      inSpans(SCRIPT_LATIN, cp) &&
-      ORTHOGRAPHIC_LATIN.test(ch) &&
-      hasNonAscii(ch.normalize("NFKC"));
-    if (!orthographic) return true;
+    if (!ORTHOGRAPHIC_LATIN.test(ch) || !hasNonAscii(ch.normalize("NFKC")))
+      return true;
   }
   return false;
 }

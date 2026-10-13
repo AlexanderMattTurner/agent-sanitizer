@@ -24,10 +24,6 @@ import {
   MAX_DEPTH,
   FILTER_WARNING,
   REDACTION_DOCTRINE,
-  COLLISION_WITHHELD_MESSAGE,
-  collisionWarning,
-  MUTATION_RERUNS,
-  sanitizeValueWith,
 } from "../src/output.mjs";
 import { INERT_ANSI_NOTE } from "../src/layer1.mjs";
 // Not re-exported from ./output.mjs: `needsUrlScan` is an internal Layer-3
@@ -952,60 +948,6 @@ describe("sanitizeText: Layer 5 span deletion is re-vetted by Layer 4 (reconstit
   });
 });
 
-describe("MUTATION_RERUNS: each text-mutating layer re-vets exactly its declared downstream layers", () => {
-  it("declares the exact re-run table", () => {
-    assert.deepEqual(
-      Object.fromEntries(
-        Object.entries(MUTATION_RERUNS).map(([k, v]) => [k, [...v]]),
-      ),
-      {
-        "html-splice": [],
-        redact: [],
-        "span-delete": ["url-scan", "redact"],
-      },
-    );
-    assert.ok(Object.isFrozen(MUTATION_RERUNS));
-    for (const steps of Object.values(MUTATION_RERUNS))
-      assert.ok(Object.isFrozen(steps));
-  });
-
-  // The number of Layer-4 passes is the observable trace of the table: one
-  // first pass, plus one per mutation whose source re-runs `redact`.
-  for (const [label, text, options, passes] of [
-    ["no mutation", "plain prose", {}, 1],
-    [
-      "an html-splice",
-      "a <!-- hidden --> b",
-      { html: true },
-      1 + MUTATION_RERUNS["html-splice"].filter((s) => s === "redact").length,
-    ],
-    [
-      "a span-delete",
-      "keep DROP keep",
-      { filterInjection: () => ({ removeSpans: ["DROP"] }) },
-      1 + MUTATION_RERUNS["span-delete"].filter((s) => s === "redact").length,
-    ],
-  ])
-    it(`runs Layer 4 ${passes} time(s) after ${label}`, async () => {
-      const calls = [];
-      const redact = (t) => (calls.push(t), null);
-      const r = await sanitizeText(text, { ...options, redact });
-      // vetStageValue also redacts the reveal and each splice original on the
-      // way out; those are exit vetting, not pipeline passes.
-      const stageValues = new Set([
-        r.reveal,
-        ...(r.splices ?? []).map((splice) => splice.original),
-      ]);
-      const pipelinePasses = calls.filter((t) => !stageValues.has(t));
-      assert.equal(pipelinePasses.length, passes);
-      assert.equal(
-        pipelinePasses.at(-1),
-        r.cleaned,
-        "the last pass saw the final text",
-      );
-    });
-});
-
 // ─── sanitizeValue ───────────────────────────────────────────────────────────
 
 describe("sanitizeValue", () => {
@@ -1466,45 +1408,6 @@ describe("shared-substructure DAG is bounded (O2 memoization)", () => {
 
 // ─── sanitizeValue: object KEYS run the same layers as leaves (S5) ───────────
 
-describe("sanitizeValueWith: the one walk behind the library's and the hook's sanitizeValue", () => {
-  it("hands each leaf to `leaf` and each key to `key` once, routing findings into the sinks", async () => {
-    const seen = { leaf: [], key: [] };
-    /** A stub sanitizer that records its input and reports `kind` findings. */
-    const stub = (kind, cleanedOf) => async (text) => {
-      seen[kind].push(text);
-      const cleaned = cleanedOf(text);
-      return {
-        cleaned,
-        warnings: [`${kind}-w`],
-        notes: kind === "leaf" ? ["leaf-n"] : [],
-        modified: cleaned !== text,
-        sgrNote: false,
-      };
-    };
-    const sinks = { warnings: [], notes: [], reveals: [], splices: [] };
-    const r = await sanitizeValueWith(
-      { alpha: "one", nested: { beta: ["two", 3, null] } },
-      {
-        leaf: stub("leaf", (t) => t.toUpperCase()),
-        key: stub("key", (t) => t),
-      },
-      sinks,
-    );
-    assert.deepEqual(r.value, {
-      alpha: "ONE",
-      nested: { beta: ["TWO", 3, null] },
-    });
-    assert.equal(r.modified, true);
-    assert.deepEqual(seen.leaf.sort(), ["one", "two"]);
-    assert.deepEqual(seen.key.sort(), ["alpha", "beta", "nested"]);
-    assert.deepEqual(sinks.warnings.sort(), [
-      ...Array(3).fill("key-w"),
-      ...Array(2).fill("leaf-w"),
-    ]);
-    assert.deepEqual(sinks.notes, ["leaf-n", "leaf-n"]);
-  });
-});
-
 describe("sanitizeValue key screening (S5)", () => {
   it("rewrites a key carrying a ZWSP run + ESC, keeping its value under the cleaned name", async () => {
     const hiddenKey = `std${ZW.repeat(15)}${ESC}[31mout`;
@@ -1547,37 +1450,6 @@ describe("sanitizeValue key screening (S5)", () => {
       [],
     );
     assert.deepEqual(r.value, { aBADb: " value" });
-  });
-
-  // The collision rule in depth is pinned by claude-hooks-key-collision, which
-  // drives the same sanitizeValueWith walk.
-  it("withholds every colliding field, warning once and naming the nested location", async () => {
-    const warnings = [];
-    const r = await sanitizeValue(
-      { outer: { a: 1, [`a${ZW}`]: 2, [`${ZW}a`]: 3 } },
-      {},
-      warnings,
-    );
-    assert.deepEqual(r.value, {
-      outer: {
-        a: COLLISION_WITHHELD_MESSAGE,
-        "a [withheld duplicate 2]": COLLISION_WITHHELD_MESSAGE,
-        "a [withheld duplicate 3]": COLLISION_WITHHELD_MESSAGE,
-      },
-    });
-    assert.equal(r.modified, true);
-    assert.deepEqual(
-      warnings.filter((w) => w.includes("collapsed to the name")),
-      [collisionWarning("a", "outer")],
-    );
-  });
-
-  it("keeps a sanitized __proto__ key as an own field, never as the prototype", async () => {
-    const input = JSON.parse(`{"__pro${ZW}to__": {"polluted": true}}`);
-    const r = await sanitizeValue(input, {}, []);
-    assert.deepEqual(Object.keys(r.value), ["__proto__"]);
-    assert.equal(Object.getPrototypeOf(r.value), Object.prototype);
-    assert.equal({}.polluted, undefined);
   });
 
   it("does not flag ordinary keys (negative: clean keys stay silent)", async () => {

@@ -8,29 +8,27 @@
  * every root import, defeating the lazy-load design. This module imports
  * nothing, so re-exporting it is free.
  *
- * INVARIANT: every gate is a SUPERSET of its parser — a narrower gate silently
- * turns its layer off for the inputs it misses, while a needless fire only
- * costs a parse. Checked by test/gates-superset.test.mjs.
+ * INVARIANT: every gate is a SUPERSET of its parser (a narrower one silently
+ * turns its layer off; a needless fire only costs a parse), checked by
+ * test/gates-superset.test.mjs.
  */
 
 // ─── Cheap pre-gates ─────────────────────────────────────────────────────────
 
 /**
  * Matches every point where the HTML tokenizer leaves the data state: `<` then
- * an ASCII letter, `/`, `!` or `?`; any other `<` is text. Deliberately no
- * closing `>`: a comment holding `1 < 2`, or one left unterminated, still
- * hides everything after it. Gate for Layer 2 (HTML sanitization) and the
- * HTML img/a exfil path in Layer 3.
+ * an ASCII letter, `/`, `!` or `?`. No closing `>` on purpose: a comment holding
+ * `1 < 2`, or left unterminated, still hides everything after it. Gate for
+ * Layer 2 and the HTML img/a exfil path in Layer 3.
  */
 export const HTML_TAG_PRESENT = /<[a-zA-Z/!?]/;
 
 /**
  * Matches markdown link/image syntax (`](`, `![`) and reference link
- * definitions (`[label]: url` at a line start, including one nested in a
- * blockquote or list item — `> [x]: url`, `- [x]: url`, `1. [x]: url`). The
- * label arm admits backslash escapes and line endings, as CommonMark labels
- * do, but not an unescaped `[`, which no label can hold — that is also what
- * keeps the scan linear. Gate for Layer 3 (markdown exfiltration detection).
+ * definitions (`[label]: url` at a line start, also nested in a blockquote or
+ * list item). The label admits backslash escapes and line endings, as
+ * CommonMark labels do, but no unescaped `[`, which also keeps the scan linear.
+ * Gate for Layer 3 (markdown exfiltration detection).
  */
 export const MD_LINK_HINT =
   /\]\(|!\[|^[ \t]*(?:(?:>|[-+*]|\d{1,9}[.)])[ \t]*)*\[(?:[^\\[\]]|\\[\s\S])+\]:/m;
@@ -50,12 +48,10 @@ export function needsMarkdownPipeline(text) {
 }
 
 /**
- * Matches the start of every URL a GFM autolink literal yields — `http://`,
- * `https://` and the scheme-less `www.` form — anywhere in the text. Gate for
- * the Layer-3 URL detectors, which read those URLs and so find a look-alike
- * host or an exfil-shaped query in bare prose — no tag and no link syntax
- * required. (The third literal form, a bare e-mail address, becomes a
- * `mailto:` URL with no host and no query, which neither detector can flag.)
+ * Matches the start of every URL a GFM autolink literal yields (`http://`,
+ * `https://`, scheme-less `www.`). Gate for the Layer-3 URL detectors, which
+ * find a look-alike host or exfil-shaped query in bare prose. (A bare e-mail
+ * becomes a host-less `mailto:` URL that neither detector can flag.)
  */
 export const URL_PRESENT = /https?:\/\/|www\./i;
 
@@ -77,11 +73,10 @@ const MARKUP_DECLARATION_OPEN = /<[!?]/;
 
 /**
  * POLICY, not a gate: true when `text` reads as HTML rather than data that
- * merely holds a `<` — a comment/bogus-comment open, or a tag open with a `>`
- * after it. The output hook uses it to decide whether an MCP result earns the
- * Layer-2 splice, so `a<b` stays verbatim; kept apart from
- * {@link HTML_TAG_PRESENT} so widening the gate never widens that policy.
- * Linear: one search plus one `includes`, not a `<…[^>]*>` regex.
+ * merely holds a `<` (a comment open, or a tag open with a `>` after it). The
+ * output hook uses it to decide whether an MCP result earns the Layer-2 splice,
+ * so `a<b` stays verbatim; kept apart from {@link HTML_TAG_PRESENT} so widening
+ * the gate never widens the policy. Linear, unlike a `<…[^>]*>` regex.
  * @param {string} text
  * @returns {boolean}
  */
@@ -133,10 +128,9 @@ function hintMatchesView(text) {
 
 /**
  * True when either pre-gate alternation shape-matches `text`, or the same text
- * with every `\n` removed. Split into two literals (see SECRET_HINT) and OR'd
- * so neither grows into a polynomial-backtracking shape.
- * The newline-free view keeps this a superset of the redactor: the engine's
- * `_redact_cross_line` scans exactly that view for a key wrapped across lines.
+ * with every `\n` removed (the view the engine's `_redact_cross_line` scans, so
+ * this stays a superset of the redactor). Two literals OR'd so neither grows
+ * into a polynomial-backtracking shape (see SECRET_HINT).
  * @param {string} text
  * @returns {boolean}
  */

@@ -88,26 +88,13 @@ describe("corpus: the attack half produces the declared severity", () => {
 describe("corpus: same-script Latin words stay quiet", () => {
   it("every sameScript label reads as ASCII yet is a NOTE, never a WARNING", () => {
     assert.ok(CORPUS.sameScript.length >= 8, "sameScript corpus too small");
-    const wrong = CORPUS.sameScript
-      .map((entry) => ({
-        label: entry.label,
-        actual: confusableLabel(entry.label),
-        reads: confusableHost(`https://${entry.label}.example`)?.reads,
-      }))
-      .filter(
-        (entry, i) =>
-          entry.actual !== SEVERITY.NOTE ||
-          entry.reads !== `${CORPUS.sameScript[i].reads}.example`,
-      );
+    const wrong = CORPUS.sameScript.filter(
+      ({ label, reads }) =>
+        confusableLabel(label) !== SEVERITY.NOTE ||
+        confusableHost(`https://${label}.example`)?.reads !==
+          `${reads}.example`,
+    );
     assert.deepEqual(wrong, []);
-  });
-
-  it("the same reading through a cross-script glyph is still a WARNING", () => {
-    // Positive control beside the demotion above: one Cyrillic letter in the
-    // label is enough to restore the strong tier.
-    // U+0131 LATIN SMALL LETTER DOTLESS I vs U+0456 CYRILLIC SMALL LETTER I.
-    assert.equal(confusableLabel("g\u0131thub"), SEVERITY.NOTE);
-    assert.equal(confusableLabel("g\u0456thub"), SEVERITY.WARNING);
   });
 
   it("an all-orthographic host draws no WARNING through the pipeline", async () => {

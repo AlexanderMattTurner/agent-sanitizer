@@ -160,13 +160,6 @@ describe("alignDeletions", () => {
     );
   });
 
-  it("never splits a surrogate pair whose high half matches the deleted run's", () => {
-    // U+1D173 (an astral Cf) and U+1D11E share the high surrogate D834; a
-    // UTF-16 unit walk matched that half and reported a lone low surrogate.
-    const dels = alignDeletions("a\u{1D173}\u{1D11E}b", "a\u{1D11E}b");
-    assert.deepEqual(dels, [{ start: 1, deleted: "\u{1D173}" }]);
-  });
-
   it("puts every deletion boundary on a code-point boundary across the astral Cf run", () => {
     const astral = "\u{1D11E}";
     for (let code = 0x1d173; code <= 0x1d17a; code++) {

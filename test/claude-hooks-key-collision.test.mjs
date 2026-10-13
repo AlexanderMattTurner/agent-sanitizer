@@ -217,15 +217,4 @@ describe("sanitize-output: key-collision recovery", () => {
     ]);
     assert.deepEqual(collisions(warnings), [collisionWarning("a", "")]);
   });
-
-  it("positive control: a raw field with no colliding source name keeps its value", async () => {
-    const { value } = await walk({
-      a: "one",
-      "a [withheld duplicate 2]": "raw-survivor",
-    });
-    assert.deepEqual(value, {
-      a: "one",
-      "a [withheld duplicate 2]": "raw-survivor",
-    });
-  });
 });

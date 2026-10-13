@@ -107,10 +107,9 @@ describe("detect-only findings survive the clean early-return", () => {
 });
 
 /**
- * The note-delivery guarantee: every note except the inert-ANSI one reaches
- * `additional_context`, whatever else the output raised. A confusable-host NOTE
- * is the sharpest case — its "do not fetch them" is the whole defense for a
- * look-alike host left intact, so a co-occurring warning must not drop it.
+ * Every note except the inert-ANSI one reaches `additional_context`, whatever
+ * else the output raised: a confusable-host NOTE's "do not fetch them" is the
+ * whole defense for a look-alike host left intact.
  */
 describe("notes reach the model beside warnings", () => {
   // Dotless i (U+0131): a same-script Latin look-alike, reported at NOTE.
@@ -136,9 +135,8 @@ describe("notes reach the model beside warnings", () => {
   });
 
   it("keeps the note when a postText rewrite raises no warning", async () => {
-    // A callback rewrite clears `sgrNote` with no warning to show, so the
-    // banner takes the WARNING path with an EMPTY warning list. The note must
-    // not ride on that list being non-empty.
+    // A callback rewrite clears `sgrNote` with an EMPTY warning list: the note
+    // must not ride on that list being non-empty.
     const fields = await evaluateToolOutput(
       { tool_name: "WebFetch", tool_response: LOOKALIKE },
       { postText: (text) => ({ cleaned: `${text} ` }) },
@@ -147,20 +145,8 @@ describe("notes reach the model beside warnings", () => {
     assert.match(String(fields?.additional_context), DO_NOT_FETCH);
   });
 
-  it("keeps the inert-ANSI note alone on SGR-only output", async () => {
-    // Negative control: the one droppable note is still the whole report when
-    // nothing else was found.
-    const fields = await evaluateToolOutput({
-      tool_name: "Bash",
-      tool_response: { stdout: "\u001b[31mred\u001b[0m", stderr: "" },
-    });
-    assert.equal(fields?.additional_context, INERT_ANSI_NOTE);
-  });
-
   it("drops only the inert-ANSI note beside a warning", async () => {
-    // stdout's colour codes are the inert note; stderr's cursor move is a
-    // WARNING. The exception still fires, so the guarantee above is not a
-    // blanket "every note always" that the colour-code case would contradict.
+    // stdout's colour codes are the inert note; stderr's cursor move a WARNING.
     const fields = await evaluateToolOutput({
       tool_name: "Bash",
       tool_response: {

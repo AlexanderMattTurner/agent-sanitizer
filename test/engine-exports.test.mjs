@@ -180,7 +180,6 @@ const PUBLISHED_EXPORTS = {
     "COLLISION_WITHHELD_MESSAGE",
     "FILTER_WARNING",
     "MAX_DEPTH",
-    "MUTATION_RERUNS",
     "REDACTION_DOCTRINE",
     "collisionWarning",
     "composeContext",
