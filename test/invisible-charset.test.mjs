@@ -31,7 +31,6 @@ import { CF_CODEPOINTS } from "../src/cf-charset.mjs";
 import {
   parseStandardizedVariants,
   loadStandardizedVariantsUcd,
-  PINNED_SHA256,
   render as renderStandardizedVariants,
 } from "../scripts/gen-standardized-variants.mjs";
 import {
@@ -125,10 +124,8 @@ describe("standardized-variants SSOT", () => {
     );
   });
 
-  // A dead pin for an older Unicode is unreviewed surface, and the header
-  // proves the pinned bytes are the release the package names.
-  it("pins only the package's Unicode version, and that release's file", () => {
-    assert.deepEqual(Object.keys(PINNED_SHA256), [UCD_PACKAGE_VERSION]);
+  // The header proves the pinned bytes are the release the package names.
+  it("pins the package's Unicode release of the file", () => {
     assert.equal(
       text.slice(0, text.indexOf("\n")),
       `# StandardizedVariants-${UCD_PACKAGE_VERSION}.txt`,

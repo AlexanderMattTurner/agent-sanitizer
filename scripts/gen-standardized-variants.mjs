@@ -75,13 +75,13 @@ export function parseStandardizedVariants(text) {
 }
 
 /**
- * SHA-256 of StandardizedVariants.txt per Unicode version. Bumping the
- * `@unicode/unicode-*` package needs a new entry: fetch the URL below for the
- * new version, read the file's header, and pin `sha256sum` of it here.
+ * SHA-256 of StandardizedVariants.txt for UNICODE_VERSION. Bumping the
+ * `@unicode/unicode-*` package fails the pin check until this is replaced:
+ * fetch the URL below for the new version, read the file's header, and pin
+ * `sha256sum` of it here.
  */
-export const PINNED_SHA256 = Object.freeze({
-  "17.0.0": "f55100b2fb11d3d75a37b8c1ab752192dbd1c4b12328c5ec6b38e3807c0ca597",
-});
+const PINNED_SHA256 =
+  "f55100b2fb11d3d75a37b8c1ab752192dbd1c4b12328c5ec6b38e3807c0ca597";
 
 const SOURCE_URL = `https://www.unicode.org/Public/${UNICODE_VERSION}/ucd/StandardizedVariants.txt`;
 
@@ -92,16 +92,6 @@ const CACHE_PATH = fileURLToPath(
     import.meta.url,
   ),
 );
-
-/** @param {string} version @returns {string} */
-function pinFor(version) {
-  const pin = PINNED_SHA256[version];
-  if (!pin)
-    throw new Error(
-      `no SHA-256 pin for StandardizedVariants.txt ${version} — add one to PINNED_SHA256 in scripts/gen-standardized-variants.mjs`,
-    );
-  return pin;
-}
 
 /** @param {string | Buffer} bytes @returns {string} */
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -114,8 +104,10 @@ const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
  * @returns {string} CACHE_PATH
  */
 export function fetchStandardizedVariants() {
-  const want = pinFor(UNICODE_VERSION);
-  if (existsSync(CACHE_PATH) && sha256(readFileSync(CACHE_PATH)) === want)
+  if (
+    existsSync(CACHE_PATH) &&
+    sha256(readFileSync(CACHE_PATH)) === PINNED_SHA256
+  )
     return CACHE_PATH;
   mkdirSync(dirname(CACHE_PATH), { recursive: true });
   const stage = mkdtempSync(join(dirname(CACHE_PATH), "fetch-"));
@@ -146,9 +138,9 @@ export function fetchStandardizedVariants() {
       { stdio: ["ignore", "inherit", "inherit"] },
     );
     const got = sha256(readFileSync(staged));
-    if (got !== want)
+    if (got !== PINNED_SHA256)
       throw new Error(
-        `${SOURCE_URL} has SHA-256 ${got}, not the pinned ${want} — refusing it`,
+        `${SOURCE_URL} has SHA-256 ${got}, not the pinned ${PINNED_SHA256} — refusing it`,
       );
     renameSync(staged, CACHE_PATH);
   } finally {
@@ -162,10 +154,9 @@ export function fetchStandardizedVariants() {
  * @param {string} [text] the file's contents; a test passes its own */
 export function loadStandardizedVariantsUcd(text = readCached()) {
   const got = sha256(text);
-  const want = pinFor(UNICODE_VERSION);
-  if (got !== want)
+  if (got !== PINNED_SHA256)
     throw new Error(
-      `StandardizedVariants.txt has SHA-256 ${got}, not the pinned ${want} for Unicode ${UNICODE_VERSION}`,
+      `StandardizedVariants.txt has SHA-256 ${got}, not the pinned ${PINNED_SHA256} for Unicode ${UNICODE_VERSION}`,
     );
   return { text, version: UNICODE_VERSION };
 }
