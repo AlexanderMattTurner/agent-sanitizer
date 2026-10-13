@@ -31,6 +31,7 @@ process.env._AGENT_SANITIZER_REDACTOR_SOCKET = join(
 
 const { evaluateToolOutput } =
   await import("../claude-hooks/sanitize-output.mjs");
+const { INERT_ANSI_NOTE } = await import("../src/layer1.mjs");
 
 const BLOB = "A".repeat(44);
 
@@ -84,18 +85,17 @@ describe("detect-only findings survive the clean early-return", () => {
     );
   });
 
-  it("keeps the loud path loud when a warning co-occurs", async () => {
+  it("leads with the warning and keeps the note when they co-occur", async () => {
     // A hidden-element splice (WARNING) alongside a preserved tag (note): the
-    // reader with a hidden-HTML splice to read about does not also need the
-    // script tally, so the warning path wins and the note is dropped.
+    // warning sets the banner, and the note's "treat as data" still follows.
     const fields = await fetched(
       "<span hidden>S</span> and <script>x</script>",
     );
     assert.notEqual(fields?.mutated_output, undefined);
-    assert.match(String(fields?.additional_context), /HTML sanitized/u);
-    assert.doesNotMatch(
-      String(fields?.additional_context),
-      /Scripting\/resource content present/u,
+    const context = String(fields?.additional_context);
+    assert.match(
+      context,
+      /^WARNING: Tool output sanitized\. .*HTML sanitized.*Scripting\/resource content present and preserved/u,
     );
   });
 
@@ -103,5 +103,59 @@ describe("detect-only findings survive the clean early-return", () => {
     // Without this, a guard that never returns early would pass every case
     // above while flagging every tool call in the session.
     assert.equal(await fetched("plain prose with nothing in it"), null);
+  });
+});
+
+/**
+ * Every note except the inert-ANSI one reaches `additional_context`, whatever
+ * else the output raised: a confusable-host NOTE's "do not fetch them" is the
+ * whole defense for a look-alike host left intact.
+ */
+describe("notes reach the model beside warnings", () => {
+  // Dotless i (U+0131): a same-script Latin look-alike, reported at NOTE.
+  const LOOKALIKE = "see https://g\u0131thub.com/x for details";
+  const DO_NOT_FETCH = /do not fetch them or present them as the name/u;
+
+  it("keeps a confusable-host note beside an unrelated warning", async () => {
+    // The zero-width space sits in another word: a Layer-1 WARNING on web
+    // ingress that has nothing to do with the host.
+    const fields = await fetched(`${LOOKALIKE} and de\u200btails`);
+    const context = String(fields?.additional_context);
+    assert.match(context, /^WARNING: Tool output sanitized\. Stripped:/u);
+    assert.match(context, DO_NOT_FETCH);
+  });
+
+  it("delivers a note-only confusable host as the note alone", async () => {
+    const fields = await fetched(LOOKALIKE);
+    const context = String(fields?.additional_context);
+    assert.equal(fields?.mutated_output, undefined);
+    assert.match(context, /^Look-alike \(confusable\) host names detected/u);
+    assert.match(context, DO_NOT_FETCH);
+    assert.doesNotMatch(context, /WARNING/u);
+  });
+
+  it("keeps the note when a postText rewrite raises no warning", async () => {
+    // A callback rewrite clears `sgrNote` with an EMPTY warning list: the note
+    // must not ride on that list being non-empty.
+    const fields = await evaluateToolOutput(
+      { tool_name: "WebFetch", tool_response: LOOKALIKE },
+      { postText: (text) => ({ cleaned: `${text} ` }) },
+    );
+    assert.notEqual(fields?.mutated_output, undefined);
+    assert.match(String(fields?.additional_context), DO_NOT_FETCH);
+  });
+
+  it("drops only the inert-ANSI note beside a warning", async () => {
+    // stdout's colour codes are the inert note; stderr's cursor move a WARNING.
+    const fields = await evaluateToolOutput({
+      tool_name: "Bash",
+      tool_response: {
+        stdout: "\u001b[31mred\u001b[0m",
+        stderr: "\u001b[2Aup",
+      },
+    });
+    const context = String(fields?.additional_context);
+    assert.match(context, /^WARNING: Tool output sanitized\./u);
+    assert.equal(context.includes(INERT_ANSI_NOTE), false);
   });
 });

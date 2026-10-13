@@ -11,9 +11,11 @@
  * non-ASCII glyphs — see isTokenBoundary). A token folds only when both hold:
  *
  *   1. Folding makes it pure ASCII — every non-ASCII code point in it is
- *      flagged. The bypass requires the folded token to come out byte-equal to
- *      an ASCII deny-rule target, so a token left holding an unmapped glyph
- *      could never match one anyway; skipping it costs no enforcement.
+ *      flagged AND an ASCII pretender (see isAsciiPretender: a letter of a real
+ *      Latin orthography, `İ` or `í`, is a word's own letter, not a disguise).
+ *      The bypass requires the folded token to come out byte-equal to an ASCII
+ *      deny-rule target, so a token left holding an unmapped glyph could never
+ *      match one anyway; skipping it costs no enforcement.
  *   2. It is more than a lone non-ASCII glyph standing between two boundaries.
  *      A one-code-point token is a one-letter foreign word — Russian "с", "о",
  *      "у", "а" are among the most frequent words in the language — as readily
@@ -57,6 +59,8 @@
  * (possibly a 2-unit astral char), `latinEquivalent` its ASCII canon.
  */
 import { createRequire } from "node:module";
+
+import { GENERAL_CATEGORY_MARK, inSpans } from "./unicode-properties.mjs";
 
 /**
  * Default path/command fields to fold per tool. Agent-agnostic: the keys are
@@ -159,6 +163,34 @@ function resolveScan() {
 export function hasNonAscii(value) {
   for (let i = 0; i < value.length; i++) {
     if (value.charCodeAt(i) > 0x7f) return true;
+  }
+  return false;
+}
+
+// The letters of living Latin-script orthographies: Latin-1 Supplement (minus
+// × and ÷, which are symbols), Latin Extended-A/B and Latin Extended Additional
+// (Vietnamese). IPA, phonetic small capitals and fullwidth forms are Latin-script
+// too, but no orthography spells a word with them, so they stay look-alikes.
+const ORTHOGRAPHIC_LATIN =
+  /^[\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u024F\u1E00-\u1EFF]$/u;
+
+/**
+ * True when `glyph` holds a non-ASCII code point that is neither a combining
+ * mark nor a letter of a real Latin-script orthography. THE predicate both the
+ * host rule's WARNING tier and the input fold gate on, so they cannot disagree.
+ * Turkish `ı`, Spanish `í`, Polish `ł` are a word's own letters (`altın.com`,
+ * `día.txt`), and flagging them is the worse failure; a cross-script glyph
+ * (Cyrillic `а`), an IPA/small-capital one (`ɡ`, `ᴀ`) or anything NFKC folds
+ * to ASCII (`ａ`, `ﬁ`) stays a pretender.
+ * @param {string} glyph one or more code points
+ * @returns {boolean}
+ */
+export function isAsciiPretender(glyph) {
+  for (const ch of glyph) {
+    const cp = /** @type {number} */ (ch.codePointAt(0));
+    if (!hasNonAscii(ch) || inSpans(GENERAL_CATEGORY_MARK, cp)) continue;
+    if (!ORTHOGRAPHIC_LATIN.test(ch) || !hasNonAscii(ch.normalize("NFKC")))
+      return true;
   }
   return false;
 }
@@ -308,12 +340,18 @@ function isTokenBoundary(ch) {
 export function selectFoldableFindings(text, findings) {
   for (const finding of findings)
     assertFinding(finding, bytesAt(text, finding));
+  // A same-script orthographic letter (`İ` in `İstanbul`, `í` in `día`) is not
+  // a disguise, so it counts as an unmapped glyph below: its token is a word,
+  // and none of it folds.
+  const pretenders = findings.filter((finding) =>
+    isAsciiPretender(finding.char),
+  );
 
   // Every UTF-16 offset a finding covers, not just its start: a scanner is free
   // to report a multi-code-point match, and treating only the first offset as
   // flagged would read the rest as unmapped and reject an otherwise ASCII token.
   const flagged = new Set();
-  for (const finding of findings)
+  for (const finding of pretenders)
     for (let i = 0; i < finding.char.length; i++)
       flagged.add(finding.index + i);
 
@@ -357,7 +395,7 @@ export function selectFoldableFindings(text, findings) {
   // units, which is what `foldableAt` is indexed by: an astral glyph occupies
   // two of them, so a code-point walk would leave the tail of a `char` that
   // carries one unchecked.
-  return findings.filter((finding) => {
+  return pretenders.filter((finding) => {
     for (let i = 0; i < finding.char.length; i++)
       if (foldableAt[finding.index + i] !== 1) return false;
     return true;

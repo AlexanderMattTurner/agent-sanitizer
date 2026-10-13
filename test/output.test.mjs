@@ -30,6 +30,8 @@ import { INERT_ANSI_NOTE } from "../src/layer1.mjs";
 // pre-gate, so the published surface stays what engine-exports.test.mjs pins.
 import { needsUrlScan } from "../src/gates.mjs";
 import { layer2Placeholder } from "../src/html.mjs";
+import { CATEGORY } from "../src/invisible.mjs";
+import { UNSCANNABLE_WARNING } from "../src/warnings.mjs";
 import { cp } from "./test-helpers.mjs";
 
 const hid = (original) => layer2Placeholder("hidden", original);
@@ -78,6 +80,8 @@ describe("needsUrlScan", () => {
     assert.equal(needsUrlScan("plain prose, nothing here"), false));
   it("stays false for a scheme-less host mention (precision)", () =>
     assert.equal(needsUrlScan("ask paypal.com about it"), false));
+  it("is true for a GFM www. autolink, which remark turns into a link node", () =>
+    assert.equal(needsUrlScan("visit www.example.com today"), true));
 });
 
 // ─── describeRemoved ─────────────────────────────────────────────────────────
@@ -299,6 +303,9 @@ describe("sanitizeText: sgrNote is honest across Layers 2/4/5", () => {
     assert.equal(r.cleaned, "a  b");
     assert.equal(r.modified, true);
     assert.equal(r.sgrNote, false);
+    assert.deepEqual(r.warnings, [
+      FILTER_WARNING_MESSAGE[FILTER_WARNING.SPANS_REMOVED],
+    ]);
   });
 
   it("re-redact after a Layer-5 deletion normalizes a lone surrogate left at the join", async () => {
@@ -355,6 +362,23 @@ describe("sanitizeText: Layer 2/3 markdown pipeline gating", () => {
     });
     assert.equal(r.cleaned, "plain prose, no markup");
     assert.equal(r.modified, false);
+    assert.deepEqual(r.warnings, []);
+  });
+
+  it("reports a document too deep to scan as `unscannable`, never as a URL finding", async () => {
+    const input = `${"<div>".repeat(5000)}https://x.example/?d=1`;
+    const r = await sanitizeText(input, { exfilScan: true });
+    assert.equal(r.cleaned, input);
+    assert.deepEqual(r.found, [CATEGORY.UNSCANNABLE]);
+    assert.deepEqual(r.warnings, [UNSCANNABLE_WARNING]);
+  });
+
+  it("does not report `unscannable` for ordinary nesting (negative)", async () => {
+    const r = await sanitizeText(
+      `${"<div>".repeat(50)}see https://example.com/docs`,
+      { exfilScan: true },
+    );
+    assert.deepEqual(r.found, []);
     assert.deepEqual(r.warnings, []);
   });
 
@@ -671,6 +695,44 @@ describe("sanitizeText: Layer 5 filterInjection", () => {
     assert.equal(r.modified, true);
   });
 
+  // A deletion always reports itself (never silent); FILTER_FLAGGED folds into
+  // that report (bytes did change), FILTER_ERROR stays beside it.
+  for (const [code, extra] of [
+    [undefined, []],
+    [FILTER_WARNING.FILTER_FLAGGED, []],
+    [FILTER_WARNING.FILTER_ERROR, [FILTER_WARNING.FILTER_ERROR]],
+  ])
+    it(`reports a deletion whose filter returned warning code ${code}`, async () => {
+      const r = await sanitizeText("docs BAD rules", {
+        filterInjection: () => ({ removeSpans: ["BAD"], warning: code }),
+      });
+      assert.equal(r.cleaned, "docs  rules");
+      assert.deepEqual(
+        r.warnings,
+        [FILTER_WARNING.SPANS_REMOVED, ...extra].map(
+          (c) => FILTER_WARNING_MESSAGE[c],
+        ),
+      );
+    });
+
+  // No URL exists before the deletion; deleting "XX" forms https://аpple.com,
+  // so Layer 3 must vet the text Layer 5 hands on — when exfilScan enables it.
+  for (const exfilScan of [true, false])
+    it(`re-runs Layer 3 after a deletion joins a look-alike host iff exfilScan (${exfilScan})`, async () => {
+      const r = await sanitizeText("go to httXXps://аpple.com/login now", {
+        exfilScan,
+        filterInjection: () => ({ removeSpans: ["XX"] }),
+      });
+      assert.equal(r.cleaned, "go to https://аpple.com/login now");
+      assert.deepEqual(r.found, exfilScan ? ["confusable-host"] : []);
+      assert.equal(
+        r.warnings[0],
+        FILTER_WARNING_MESSAGE[FILTER_WARNING.SPANS_REMOVED],
+      );
+      assert.equal(r.warnings.length, exfilScan ? 2 : 1);
+      if (exfilScan) assert.match(r.warnings[1], /reads as "apple\.com"/u);
+    });
+
   it("makes no change when the requested spans don't match", async () => {
     const filterInjection = () => ({ removeSpans: ["NOT PRESENT"] });
     const r = await sanitizeText("clean docs", { filterInjection });
@@ -820,7 +882,10 @@ describe("sanitizeText: Layer 5 span deletion is re-vetted by Layer 4 (reconstit
     assert.equal(calls, 2); // pre-Layer-5 pass + post-deletion re-scan
     assert.equal(r.cleaned, "a  b"); // span deleted, nothing else changed
     assert.equal(r.modified, true); // the deletion itself still counts
-    assert.deepEqual(r.warnings, []); // neither redact pass found anything
+    // Neither redact pass found anything; the deletion alone is reported.
+    assert.deepEqual(r.warnings, [
+      FILTER_WARNING_MESSAGE[FILTER_WARNING.SPANS_REMOVED],
+    ]);
   });
 
   it("does not re-run redact when Layer 5 finds nothing to delete (no span present)", async () => {
@@ -877,6 +942,7 @@ describe("sanitizeText: Layer 5 span deletion is re-vetted by Layer 4 (reconstit
     assert.equal(calls.length, 2); // pre- and post-deletion passes
     assert.equal(r.cleaned, "sk-live-[REDACTED]");
     assert.deepEqual(r.warnings, [
+      FILTER_WARNING_MESSAGE[FILTER_WARNING.SPANS_REMOVED],
       `API keys/secrets redacted: api-key${REDACTION_DOCTRINE}`,
     ]);
   });
@@ -983,6 +1049,20 @@ describe("sanitizeValue", () => {
     );
     assert.equal(r.sgrNote, true);
     assert.equal(r.modified, true);
+  });
+
+  it("drops sgrNote when ANOTHER leaf warned (a note-only leaf must not headline a warned value)", async () => {
+    const warnings = [];
+    const redact = (text) =>
+      text === "SECRET" ? { text: "[REDACTED]", found: ["api-key"] } : null;
+    const r = await sanitizeValue(
+      [`${ESC}[31mred${ESC}[0m`, "SECRET"],
+      { sgrCarveOut: true, redact },
+      warnings,
+    );
+    assert.deepEqual(r.value, ["red", "[REDACTED]"]);
+    assert.equal(warnings.length, 1);
+    assert.equal(r.sgrNote, false);
   });
 
   it("leaves an all-clean array unmodified with sgrNote false", async () => {
@@ -1326,38 +1406,50 @@ describe("shared-substructure DAG is bounded (O2 memoization)", () => {
   );
 });
 
-// ─── sanitizeValue: hidden chars in object KEYS (S5) ─────────────────────────
+// ─── sanitizeValue: object KEYS run the same layers as leaves (S5) ───────────
 
 describe("sanitizeValue key screening (S5)", () => {
-  it("flags a key carrying a ZWSP run + ESC but leaves `modified` false when the VALUE is clean (key-only finding, no bytes changed)", async () => {
+  it("rewrites a key carrying a ZWSP run + ESC, keeping its value under the cleaned name", async () => {
     const hiddenKey = `std${ZW.repeat(15)}${ESC}[31mout`;
     const warnings = [];
     const r = await sanitizeValue({ [hiddenKey]: "clean value" }, {}, warnings);
-    // Key is NOT rewritten (precision: rewriting could collide / break schema).
-    assert.deepEqual(Object.keys(r.value), [hiddenKey]);
-    assert.equal(r.value[hiddenKey], "clean value");
-    // `modified` means output BYTES changed (composeContext's contract); a
-    // key-only finding changes nothing byte-wise, so it must stay false even
-    // though the finding is still flagged via warnings.
-    assert.equal(r.modified, false);
+    assert.deepEqual(r.value, { stdout: "clean value" });
+    // The key's bytes changed, so the output did.
+    assert.equal(r.modified, true);
     assert.ok(
-      warnings.some((w) => w.includes("object key") && w.includes("hidden")),
-      "a key warning naming hidden chars is recorded",
+      warnings.some((w) => w.startsWith("Stripped:")),
+      "the key's Layer-1 strip is reported like a leaf's",
     );
   });
 
-  it("sets `modified` true when BOTH a key finding and a real value change occur together", async () => {
-    const hiddenKey = `std${ZW.repeat(15)}${ESC}[31mout`;
+  it("redacts a secret carried in a key (Layer 4 covers keys)", async () => {
+    const redact = (text) =>
+      text.includes("sk-live-AAAABBBB")
+        ? {
+            text: text.replaceAll("sk-live-AAAABBBB", "sk-live-[REDACTED]"),
+            found: ["api-key"],
+          }
+        : null;
     const warnings = [];
     const r = await sanitizeValue(
-      { [hiddenKey]: `mal${ZW}ware` },
-      {},
+      { "token=sk-live-AAAABBBB": "x", ok: "y" },
+      { redact },
       warnings,
     );
-    assert.deepEqual(Object.keys(r.value), [hiddenKey]);
-    assert.equal(r.value[hiddenKey], "malware"); // value WAS sanitized
-    assert.equal(r.modified, true); // real byte change on the value
-    assert.ok(warnings.some((w) => w.includes("object key")));
+    assert.deepEqual(r.value, { "token=sk-live-[REDACTED]": "x", ok: "y" });
+    assert.equal(r.modified, true);
+    assert.deepEqual(warnings, [
+      `API keys/secrets redacted: api-key${REDACTION_DOCTRINE}`,
+    ]);
+  });
+
+  it("does not run Layer 5 on a key (a span deletion there could merge fields)", async () => {
+    const r = await sanitizeValue(
+      { aBADb: "BAD value" },
+      { filterInjection: () => ({ removeSpans: ["BAD"] }) },
+      [],
+    );
+    assert.deepEqual(r.value, { aBADb: " value" });
   });
 
   it("does not flag ordinary keys (negative: clean keys stay silent)", async () => {
@@ -1368,6 +1460,20 @@ describe("sanitizeValue key screening (S5)", () => {
       warnings,
     );
     assert.deepEqual(r.value, { stdout: "ok", code: 0, nested: { a: "b" } });
+    assert.equal(r.modified, false);
+    assert.deepEqual(warnings, []);
+  });
+
+  it("leaves non-ASCII keys of real languages untouched (negative corpus)", async () => {
+    const keys = ["名前", "имя", "Größe", "kadın", "día", "اسم", "नाम", "café"];
+    const input = Object.fromEntries(keys.map((key) => [key, "v"]));
+    const warnings = [];
+    const r = await sanitizeValue(
+      input,
+      { html: true, exfilScan: true },
+      warnings,
+    );
+    assert.deepEqual(r.value, input);
     assert.equal(r.modified, false);
     assert.deepEqual(warnings, []);
   });
@@ -1400,6 +1506,25 @@ describe("composeContext", () => {
     assert.equal(
       composeContext(true, ["w"]),
       "WARNING: Tool output sanitized. w.",
+    ));
+  it("appends deduped notes after the warnings and alert", () =>
+    assert.equal(
+      composeContext(false, ["w"], {
+        injectionAlert: " ALERT",
+        notes: ["n1", "n1", "n2"],
+      }),
+      "WARNING: Tool output flagged (content not modified). w. ALERT n1 n2",
+    ));
+  it("drops only the inert-ANSI note beside a warning", () =>
+    assert.equal(
+      composeContext(true, ["w"], { notes: [INERT_ANSI_NOTE, "n"] }),
+      "WARNING: Tool output sanitized. w. n",
+    ));
+  it("keeps the inert-ANSI note when no warning would replace it", () =>
+    assert.ok(
+      composeContext(true, [], { notes: [INERT_ANSI_NOTE] }).endsWith(
+        ` ${INERT_ANSI_NOTE}`,
+      ),
     ));
 });
 
