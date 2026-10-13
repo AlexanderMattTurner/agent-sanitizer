@@ -220,6 +220,8 @@ export function overlapAwareCount(haystack, needle) {
  * The character runs Layer 1 deleted, located by greedy subsequence alignment
  * (stripping only deletes, so `cleaned` is always a subsequence of `content`).
  * Throws if the subsequence property does not hold — the caller fails closed.
+ * Aligned per CODE POINT (Layer 1 deletes whole ones): a code-unit walk matches
+ * U+1D173's high surrogate against U+1D11E's and splits both. Offsets stay UTF-16.
  * @param {string} content disk bytes
  * @param {string} cleaned Layer-1 view of the same bytes
  * @returns {{start: number, deleted: string}[]}
@@ -228,15 +230,15 @@ export function alignDeletions(content, cleaned) {
   const deletions = [];
   let run = "";
   let ci = 0;
-  for (let di = 0; di < content.length; di++) {
-    if (ci < cleaned.length && content[di] === cleaned[ci]) {
+  for (const ch of content) {
+    if (ci < cleaned.length && cleaned.startsWith(ch, ci)) {
       if (run) {
         deletions.push({ start: ci, deleted: run });
         run = "";
       }
-      ci++;
+      ci += ch.length;
     } else {
-      run += content[di];
+      run += ch;
     }
   }
   if (ci !== cleaned.length)

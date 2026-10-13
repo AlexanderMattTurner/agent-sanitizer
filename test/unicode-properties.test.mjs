@@ -73,6 +73,7 @@ const PINNED = [
   ["\\p{Unified_Ideograph}", codePointsOf(derived.UNIFIED_IDEOGRAPH)],
   ["\\p{Script=Braille}", codePointsOf(derived.SCRIPT_BRAILLE)],
   ["\\p{Script=Hangul}", codePointsOf(derived.SCRIPT_HANGUL)],
+  ["\\p{M}", codePointsOf(derived.GENERAL_CATEGORY_MARK)],
   ["\\p{Cf}", [...CF_CODEPOINTS]],
   [
     "\\p{Variation_Selector}",

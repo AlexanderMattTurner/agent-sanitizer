@@ -199,4 +199,22 @@ describe("sanitize-output: key-collision recovery", () => {
     assert.equal(modified, false);
     assert.deepEqual(warnings, []);
   });
+
+  it("never lets a generated duplicate name overwrite a later raw field", async () => {
+    // `a` and `a<ZW>` collapse to `a`; the first free generated name is
+    // `a [withheld duplicate 2]`, which a LATER raw field already carries. The
+    // generated name must step past it so that unrelated value survives.
+    const { value, warnings } = await walk({
+      a: "one",
+      [`a${ZW}`]: "two",
+      "a [withheld duplicate 2]": "raw-survivor",
+    });
+    // Exact entries, in order: neither colliding value survives anywhere.
+    assert.deepEqual(Object.entries(value), [
+      ["a", COLLISION_WITHHELD_MESSAGE],
+      ["a [withheld duplicate 3]", COLLISION_WITHHELD_MESSAGE],
+      ["a [withheld duplicate 2]", "raw-survivor"],
+    ]);
+    assert.deepEqual(collisions(warnings), [collisionWarning("a", "")]);
+  });
 });
