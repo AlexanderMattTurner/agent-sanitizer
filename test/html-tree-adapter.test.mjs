@@ -13,8 +13,10 @@
  * detached node in its old parent's array.
  *
  * The conversion to hast is chunked the same way (`fromParse5Bounded`), and is
- * held to one `fromParse5` call over the same corpus. Its depth ceiling is the
- * one deliberate difference, pinned at the end.
+ * held to one `fromParse5` call over the same corpus. Its depth ceiling is one
+ * deliberate difference, pinned at the end; the other is an element the
+ * converter would take for a template with no template content to take, which
+ * converts as an ordinary element instead of throwing.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -89,6 +91,21 @@ const ORDINARY = {
   doctype: "<!DOCTYPE html><p>doc</p>",
   entities: "<p>&amp;&#x41;&nbsp;</p>",
   empty: "",
+};
+
+// `\x3c` is `<`. These fixtures crash a sanitizer that predates the fix they
+// test, so spelling the `<` as an escape keeps a review pipeline that runs
+// such a sanitizer over a diff of this file from withholding the diff whole.
+/** Elements the converter takes for a template, with no template content. */
+const NO_TEMPLATE_CONTENT = {
+  svg: "\x3csvg><template><circle/></template></svg>",
+  math: "\x3cmath><template><mi>x</mi></template></math>",
+  "nested in a template's content":
+    "<template>\x3csvg><template>x</template></svg></template>",
+  "selector-shaped names":
+    "\x3ctemplate.x>a</template.x>\x3csvg>\x3ctemplate#i>b",
+  "deep, so chunks cut around it":
+    "\x3csvg><g><g><template><g><g><text>x</text></g></g></template></g></g></svg>",
 };
 
 /**
@@ -178,26 +195,57 @@ describe("html tree adapter matches the default adapter", () => {
   });
 });
 
+/** Not a name the corpus holds, nor one the converter treats as a template. */
+const STAND_IN = "x-stand-in";
+
 /**
- * `fromParse5` and {@link fromParse5Bounded} over the same input, each on its
- * own parse (the bounded one rewrites the tree it converts). A throw is part of
- * the answer: `hast-util-from-parse5` throws on a template in foreign content,
- * and the bounded conversion must throw the same.
+ * One `fromParse5` call converting a template-named element that has no
+ * template content (one inside SVG, a `template.x` tag) as it converts any other
+ * element of its namespace: the call sees it named {@link STAND_IN}, and its
+ * hast node is named `template` again. Called on such an element as is,
+ * `fromParse5` throws.
+ * @param {any} tree
+ * @param {VFile} file
+ * @returns {{ tree: any, renamed: number }}
+ */
+function fromParse5WithStandIns(tree, file) {
+  let renamed = 0;
+  const rename = (node) => {
+    if (!node.content && /^template(?:[#.]|$)/.test(node.tagName ?? "")) {
+      node.tagName = STAND_IN + node.tagName.slice("template".length);
+      renamed++;
+    }
+    for (const child of node.childNodes ?? []) rename(child);
+    if (node.content) rename(node.content);
+  };
+  const restore = (node) => {
+    if (node.tagName === STAND_IN) node.tagName = "template";
+    for (const child of node.children ?? []) restore(child);
+    if (node.content) restore(node.content);
+  };
+  rename(tree);
+  const converted = fromParse5(tree, { file });
+  restore(converted);
+  return { tree: converted, renamed };
+}
+
+/**
+ * {@link fromParse5Bounded} and {@link fromParse5WithStandIns} over the same
+ * input, each on its own parse (both rewrite the tree they convert).
  * @param {string} html
  * @param {number} chunkDepth
  */
 function bothConversions(html, chunkDepth) {
-  const outcome = (convert) => {
-    try {
-      return { tree: convert(parseFragment(html, OPTIONS), new VFile(html)) };
-    } catch (error) {
-      return { error: String(error) };
-    }
-  };
-  return [
-    outcome((tree, file) => fromParse5Bounded(tree, file, chunkDepth)),
-    outcome((tree, file) => fromParse5(tree, { file })),
-  ];
+  const ours = fromParse5Bounded(
+    parseFragment(html, OPTIONS),
+    new VFile(html),
+    chunkDepth,
+  );
+  const theirs = fromParse5WithStandIns(
+    parseFragment(html, OPTIONS),
+    new VFile(html),
+  );
+  return [ours, theirs];
 }
 
 describe("bounded conversion matches one fromParse5 call", () => {
@@ -208,20 +256,38 @@ describe("bounded conversion matches one fromParse5 call", () => {
   const corpus = [
     ...Object.values(MID_PARSE_DETACH),
     ...Object.values(ORDINARY),
+    ...Object.values(NO_TEMPLATE_CONTENT),
     ...tagSoup(),
   ];
   for (const chunkDepth of [1, 2, 3])
     it(`in chunks of ${chunkDepth}`, () => {
-      let trees = 0;
+      let renamed = 0;
       for (const html of corpus) {
         const [ours, theirs] = bothConversions(html, chunkDepth);
-        assert.deepEqual(ours, theirs, html);
-        if (theirs.tree) trees++;
+        assert.deepEqual(ours, theirs.tree, html);
+        if (theirs.renamed > 0) renamed++;
       }
-      // Non-vacuity: two throws compare equal, so most of the corpus must have
-      // converted for the agreement to say anything.
-      assert.ok(trees > corpus.length * 0.8, `${trees}/${corpus.length}`);
+      // Non-vacuity: the corpus must hold the elements a bare `fromParse5`
+      // throws on, or the stand-in path went unexercised.
+      assert.ok(renamed >= Object.keys(NO_TEMPLATE_CONTENT).length, renamed);
     });
+
+  it("converts a template-named element with no template content as an ordinary element", () => {
+    const html = "\x3csvg><template id=t><circle/></template></svg>";
+    // The dependency's own answer. Once it stops throwing here, the mask in
+    // fromParse5Bounded has nothing left to work around.
+    assert.throws(() => fromParse5(parseFragment(html, OPTIONS)), TypeError);
+    const svg = fromParse5Bounded(parseFragment(html, OPTIONS), new VFile(html))
+      .children[0];
+    const template = svg.children[0];
+    assert.equal(template.tagName, "template");
+    assert.equal(template.content, undefined);
+    assert.deepEqual(template.properties, { id: "t" });
+    assert.deepEqual(
+      template.children.map((child) => child.tagName),
+      ["circle"],
+    );
+  });
 
   it("converts a cut subtree separately (non-vacuity for the sweep)", () => {
     // A chunk of one cuts every child of the root, so the `<p>` stands in the

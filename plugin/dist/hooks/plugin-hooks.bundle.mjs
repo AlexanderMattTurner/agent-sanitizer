@@ -39621,6 +39621,7 @@ function parseHtmlFragment(html4) {
 function fromParse5Bounded(tree, file, chunkDepth = CONVERT_DEPTH) {
   const cuts = [];
   const stack = [{ node: tree, depth: 0 }];
+  let masked = false;
   while (stack.length > 0) {
     const { node: node2, depth } = (
       /** @type {{ node: any, depth: number }} */
@@ -39629,6 +39630,10 @@ function fromParse5Bounded(tree, file, chunkDepth = CONVERT_DEPTH) {
     if (depth > MAX_HTML_DEPTH)
       throw new RangeError(`HTML nested deeper than ${MAX_HTML_DEPTH} levels`);
     if (node2.content) stack.push({ node: node2.content, depth: depth + 1 });
+    else if (node2.tagName !== void 0 && CONVERTS_AS_TEMPLATE.test(node2.tagName)) {
+      node2.tagName = TEMPLATE_MASK + node2.tagName;
+      masked = true;
+    }
     const siblings = node2.childNodes ?? [];
     const childDepth = depth + 1;
     for (let index2 = 0; index2 < siblings.length; index2++) {
@@ -39650,8 +39655,10 @@ function fromParse5Bounded(tree, file, chunkDepth = CONVERT_DEPTH) {
   }
   const root2 = fromParse5(tree, { file });
   const pending = [root2];
-  while (grafts.size > 0 && pending.length > 0) {
+  while ((grafts.size > 0 || masked) && pending.length > 0) {
     const node2 = pending.pop();
+    if (masked && node2.tagName?.startsWith(TEMPLATE_MASK))
+      node2.tagName = node2.tagName.slice(TEMPLATE_MASK.length);
     if (node2.content) pending.push(node2.content);
     const children = node2.children ?? [];
     for (let i = 0; i < children.length; i++) {
@@ -39673,7 +39680,7 @@ function parse5Location(position3) {
     endOffset: end.offset
   };
 }
-var CONVERT_DEPTH, MAX_HTML_DEPTH;
+var CONVERT_DEPTH, MAX_HTML_DEPTH, CONVERTS_AS_TEMPLATE, TEMPLATE_MASK;
 var init_html_tree_adapter = __esm({
   "src/html-tree-adapter.mjs"() {
     "use strict";
@@ -39682,6 +39689,8 @@ var init_html_tree_adapter = __esm({
     init_vfile();
     CONVERT_DEPTH = 128;
     MAX_HTML_DEPTH = 4096;
+    CONVERTS_AS_TEMPLATE = /^template(?:[#.]|$)/i;
+    TEMPLATE_MASK = " ";
   }
 });
 

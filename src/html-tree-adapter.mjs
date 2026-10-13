@@ -169,6 +169,30 @@ export const CONVERT_DEPTH = 128;
 export const MAX_HTML_DEPTH = 4096;
 
 /**
+ * Which elements `hast-util-from-parse5` converts as a template: hastscript reads
+ * the tag name as a selector (`template.x` is a `template` with class `x`), so
+ * the name up to its first `#` or `.`, lowercased.
+ *
+ * WHY IT MATTERS — the converter then recurses into the parse5 node's `content`,
+ * which only an HTML-namespace `<template>` has. A `template` inside SVG or
+ * MathML, or an HTML `template.x` tag, has none, the converter throws,
+ * and the whole document would be withheld over a benign element.
+ */
+const CONVERTS_AS_TEMPLATE = /^template(?:[#.]|$)/i;
+
+/**
+ * Prefixed to such an element's name for the conversion, and stripped after.
+ *
+ * A space, because no parsed element's name can hold one (the tokenizer ends a
+ * tag name at whitespace), so a masked name collides with nothing, and the
+ * converter neither drops it (its selector parse splits on `#` and `.` only) nor
+ * changes it (lowercasing, the SVG case map). The element then converts the way
+ * any element without template content does: its children as `children`, where
+ * every scan of the hast tree reads them, which is also where the DOM has them.
+ */
+const TEMPLATE_MASK = " ";
+
+/**
  * `fromParse5(tree, { file })`, recursing at most `chunkDepth` levels at a time.
  *
  * Every node a multiple of `chunkDepth` levels down is converted on its own,
@@ -177,7 +201,10 @@ export const MAX_HTML_DEPTH = 4096;
  * child its parent's conversion reads (an unclosed element ends where its last
  * child does). One walk then swaps each placeholder for its subtree. The result
  * is the tree a single `fromParse5` call returns, which
- * `html-tree-adapter.test` holds it to.
+ * `html-tree-adapter.test` holds it to — except that an element the converter
+ * would take for a template with no content to take (see
+ * {@link CONVERTS_AS_TEMPLATE}) converts as an ordinary element instead of
+ * throwing.
  *
  * Mutates `tree`: {@link parseHtmlFragment} owns the parse and drops it after.
  * @param {any} tree
@@ -189,6 +216,7 @@ export function fromParse5Bounded(tree, file, chunkDepth = CONVERT_DEPTH) {
   /** @type {Array<{ siblings: any[], index: number }>} */
   const cuts = [];
   const stack = [{ node: tree, depth: 0 }];
+  let masked = false;
   while (stack.length > 0) {
     const { node, depth } = /** @type {{ node: any, depth: number }} */ (
       stack.pop()
@@ -197,6 +225,13 @@ export function fromParse5Bounded(tree, file, chunkDepth = CONVERT_DEPTH) {
       throw new RangeError(`HTML nested deeper than ${MAX_HTML_DEPTH} levels`);
     // A template's content is a root its template's conversion recurses into.
     if (node.content) stack.push({ node: node.content, depth: depth + 1 });
+    else if (
+      node.tagName !== undefined &&
+      CONVERTS_AS_TEMPLATE.test(node.tagName)
+    ) {
+      node.tagName = TEMPLATE_MASK + node.tagName;
+      masked = true;
+    }
     const siblings = node.childNodes ?? [];
     const childDepth = depth + 1;
     for (let index = 0; index < siblings.length; index++) {
@@ -222,8 +257,10 @@ export function fromParse5Bounded(tree, file, chunkDepth = CONVERT_DEPTH) {
   const root = fromParse5(tree, { file });
   /** @type {any[]} */
   const pending = [root];
-  while (grafts.size > 0 && pending.length > 0) {
+  while ((grafts.size > 0 || masked) && pending.length > 0) {
     const node = pending.pop();
+    if (masked && node.tagName?.startsWith(TEMPLATE_MASK))
+      node.tagName = node.tagName.slice(TEMPLATE_MASK.length);
     if (node.content) pending.push(node.content);
     const children = node.children ?? [];
     for (let i = 0; i < children.length; i++) {
