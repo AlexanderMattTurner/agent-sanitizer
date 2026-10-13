@@ -8,6 +8,32 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.63.0] - 2026-10-13
+
+### Fixed
+- Secret redaction now correctly handles PEM certificates at any escape depth and stops at the first non-key line; `RedactorConfig` rejects sentinel characters in its charset to prevent false positives.
+- Benign URLs glued to secret pairs are no longer incorrectly redacted.
+- Secret detection now rejects credential field names with suffixes like `_TYPE`, `_NAME`, `_PATH`, and `_FILE` and properly redacts tokens following benign sibling fields.
+- SessionStart scan latency has been optimized to remain within budget.
+
+### Changed
+- Test harnesses for timing-sensitive operations now use mocked clocks instead of real timers to avoid flakiness.
+
+## [2.62.2] - 2026-10-13
+
+### Changed
+- Redactor provisioning now rebuilds the virtual environment separately from the live one to avoid breaking live provision locks.
+- Hook binary provisioning prefers the node-installed hook binary over a stale one and refuses writable redactor venv and marker directories.
+- Redactor dependencies are re-locked whenever `requirements.in` changes, not only on engine pin updates.
+- SessionStart scan latency has been brought back under budget.
+
+### Fixed
+- Bundle guard now catches `createRequire()()`, `import()`, and esbuild's `__require` calls.
+- Test timing case bounds now use measured wall-clock instead of fixed 120ms delays.
+- Test bundle residue comparison now uses set semantics instead of emission order.
+- Fixed CPU copy-volume gate to use in-place shift instead of per-span string rebuilds.
+- Closed launcher and redactor-provisioning review findings.
+
 ## [2.62.1] - 2026-10-12
 
 ### Fixed

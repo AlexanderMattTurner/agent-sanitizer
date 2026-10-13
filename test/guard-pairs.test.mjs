@@ -204,8 +204,6 @@ const RESIDUE_PENDING = {
 const CI_ONLY = {
   "plugin/scripts/build-redactor-pyz.mjs":
     "installs from PyPI, so no offline commit-time suite can run it; node-tests and plugin-dist-autofix rebuild the zipapp in CI",
-  "plugin/scripts/lock-redactor-deps.mjs":
-    "re-locks plugin/requirements.txt over the network; plugin-dist-autofix runs it and plugin-bundle.test checks the lock it writes",
   "scripts/bundle-python-cli.mjs":
     "a release-time build run by auto-version and publish-python; its output is git-ignored",
   "src/vendor/gfm-autolink-literal.d.ts":

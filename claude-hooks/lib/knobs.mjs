@@ -220,6 +220,7 @@ export const KNOBS = Object.freeze({
   _AGENT_SANITIZER_TRACE_FILE: on("internal", text()),
   _AGENT_SANITIZER_REDACTOR_SOCKET: on("internal", text()),
   _AGENT_SANITIZER_REDACTOR_DAEMON: on("internal", text()),
+  _AGENT_SANITIZER_REDACTOR_PYZ: on("internal", text()),
   _AGENT_SANITIZER_REDACTOR_WAIT_MS: on("internal", milliseconds(8000)),
   _AGENT_SANITIZER_REDACTOR_REQUEST_MS: on("internal", milliseconds(20000)),
   _AGENT_SANITIZER_SANITIZE_BUDGET_MS: on("internal", milliseconds(120000)),

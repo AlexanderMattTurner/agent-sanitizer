@@ -352,6 +352,22 @@ def test_a_non_secret_suffix_is_declined_unless_the_caller_opts_out() -> None:
     )("DEPLOY_API_KEY_ID")
 
 
+@pytest.mark.parametrize("scope", ["trailing", "any-segment"])
+def test_a_non_secret_suffix_longer_than_every_noun_is_still_declined(
+    scope: str,
+) -> None:
+    """The decline walks as far as the longest NON-SECRET suffix, not the longest
+    noun: with only one-word nouns, a walk bounded by the nouns never reaches the
+    two-word `PUBLIC_KEY` run and redacts a public key as the noun `KEY`."""
+    spec = {
+        "nouns": [{"parts": ["key"], "uses": ["env-name", "field-value"]}],
+        "nonSecretSuffixes": [["public", "key"]],
+    }
+    holds = credential_name_matcher(spec=spec, scope=scope)
+    assert not holds("SSH_PUBLIC_KEY")
+    assert holds("SSH_PRIVATE_KEY")
+
+
 def test_an_unknown_scope_is_refused_rather_than_defaulted() -> None:
     with pytest.raises(ValueError, match="unknown scope"):
         credential_name_matcher(spec=_MATCHER_SPEC, scope="suffix")
