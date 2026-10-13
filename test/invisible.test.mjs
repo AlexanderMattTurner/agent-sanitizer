@@ -43,13 +43,7 @@ import { loadUcd } from "../scripts/gen-joining-type.mjs";
 import { codePointsOf } from "../scripts/lib/ucd.mjs";
 
 import { applyLayer1, stripAnsiFully } from "../src/layer1.mjs";
-import {
-  assertLinear,
-  describeGrowth,
-  geometricSizes,
-  growth,
-  timed,
-} from "./helpers/cpu-timing.mjs";
+import { assertUnderBudget } from "./helpers/budget.mjs";
 import {
   fcRunOptions,
   cp,
@@ -2161,29 +2155,26 @@ describe("applyLayer1: OSC strings and C1 sequences", () => {
   // The deliberate bounded-intro / negated-body design keeps the ANSI grammar
   // linear; an adversarial never-completing string must not blow up.
   //
-  // Classified by the shared growth estimator rather than a wall-clock bound
-  // or a ratio of two timings. A ratio of two single samples (big / small <
-  // 40) flaked #37: its ~20k-char denominator was small enough for one load
-  // spike to swing it. The estimator takes the fastest of several interleaved
-  // CPU samples per size, batches the small sizes to the large one's length,
-  // and fits an exponent over four sizes, so one bad sample moves the verdict
-  // by a fraction of its error. Measured at 0.97 on a loaded machine.
-  timed(
-    "OSC/CSI stripping stays linear on adversarial never-terminating input",
-    async (t) => {
-      const curve = await growth(
-        (n, attempt) =>
-          `${ESC}]` +
-          ";".repeat(n - attempt) +
-          `${ESC}[` +
-          ";#".repeat(n - attempt),
-        (input) => applyLayer1(input),
-        geometricSizes(25_000, 200_000),
-      );
-      t.diagnostic(describeGrowth(curve));
-      assertLinear("applyLayer1 on a never-terminating OSC/CSI run", curve);
-    },
-  );
+  // An absolute budget, not a ratio of two timings: a ratio of two single
+  // samples (big / small < 40) flaked #37, its ~20k-char denominator small
+  // enough for one load spike to swing it. The regexes themselves are proven
+  // linear statically (eslint.config.mjs, test/regex-recheck.test.mjs); this
+  // times the scan loop that drives them across a run that never terminates:
+  // ~80 ms here, ~260 ms under c8.
+  it("OSC/CSI stripping stays linear on adversarial never-terminating input", async (t) => {
+    const n = 1_000_000;
+    await assertUnderBudget(
+      t,
+      `applyLayer1 on a never-terminating OSC/CSI run of ${3 * n} units`,
+      3000,
+      (attempt) =>
+        `${ESC}]` +
+        ";".repeat(n - attempt) +
+        `${ESC}[` +
+        ";#".repeat(n - attempt),
+      (input) => applyLayer1(input),
+    );
+  });
 });
 
 // ─── stripAnsiFully: CSI final-byte grammar + OSC interior-ESC abort ─────────

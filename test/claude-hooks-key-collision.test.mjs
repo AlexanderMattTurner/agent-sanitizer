@@ -15,13 +15,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import {
-  assertLinear,
-  describeGrowth,
-  geometricSizes,
-  growth,
-  timed,
-} from "./helpers/cpu-timing.mjs";
+import { assertUnderBudget } from "./helpers/budget.mjs";
 import {
   sanitizeValue,
   collisionWarning,
@@ -52,7 +46,7 @@ const WJ = String.fromCharCode(0x2060);
  * @param {number} n
  */
 function collidingFields(n) {
-  const width = 12;
+  const width = 16;
   assert.ok(n < 2 ** width, `${n} fields do not fit ${width} bits`);
   /** @type {Record<string, string>} */
   const fields = { k: "0" };
@@ -145,18 +139,18 @@ describe("sanitize-output: key-collision recovery", () => {
     assert.equal(collisions(warnings).length, 1);
   });
 
-  timed("does not rescan from the first slot on each collision", async (t) => {
+  it("does not rescan from the first slot on each collision", async (t) => {
     // Non-vacuity for the memo: N fields collapsing to one name is an
     // attacker-composable input, and an O(N^2) probe is a stall onto the
-    // raw-output fail-open. Restarting the probe at 2 on every collision read
-    // exponent 1.85 here, the memoized probe 1.05.
-    const curve = await growth(
-      (n, attempt) => collidingFields(n - attempt),
+    // raw-output fail-open. The memoized walk costs ~0.6s here (~0.8s under
+    // c8); restarting the probe at 2 on every collision ran past 40s.
+    await assertUnderBudget(
+      t,
+      "the collision walk over 16000 colliding fields",
+      8000,
+      (attempt) => collidingFields(16000 - attempt),
       (fields) => walk(fields),
-      geometricSizes(200, 1600),
     );
-    t.diagnostic(describeGrowth(curve));
-    assertLinear("the collision walk", curve);
   });
 
   it("handles three raw keys collapsing to one name, warning once", async () => {

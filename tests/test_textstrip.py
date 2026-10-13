@@ -26,12 +26,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from tests._growth import (
-    assert_linear,
-    assert_superlinear,
-    cpu_growth,
-    geometric_sizes,
-)
+from tests._budget import assert_under_budget
 from tests._helpers import REPO_ROOT, ensure_python_pkg_on_path
 
 ensure_python_pkg_on_path()
@@ -250,15 +245,6 @@ def test_pattern_compiles_under_plain_re_with_no_flags() -> None:
     assert ANSI_RE.pattern == pattern
 
 
-def _curve(compiled: re.Pattern, text: Callable[[int], str], n: int):
-    """How ``compiled``'s cost grows from ``text(n)`` to ``text(8 * n)``, as the
-    shared estimator fits it (``tests/_growth.py``)."""
-    return cpu_growth(
-        lambda size, k: lambda subject=text(size + k): compiled.sub("", subject),
-        geometric_sizes(n, 8 * n),
-    )
-
-
 @pytest.mark.parametrize(
     "text",
     [
@@ -274,19 +260,15 @@ def test_pattern_is_linear_on_unterminated_runs(text: Callable[[int], str]) -> N
     """The generated pattern runs on untrusted input inside a consumer with no
     timeout. Each arm's quantified class is disjoint from what follows it, so a
     run with no final byte fails in one pass. ``regexploit`` does not flag two
-    adjacent overlapping stars, so the guard is the cost itself: a growth
-    exponent fitted on one machine, not a wall-clock threshold on an unknown
-    runner."""
-    assert_linear("ANSI_RE on an unterminated run", _curve(ANSI_RE, text, 20_000))
-
-
-def test_growth_bound_catches_a_quadratic_pattern() -> None:
-    """Non-vacuity: two adjacent stars over one class, the shape the arms avoid,
-    classify as super-linear on an unterminated run."""
-    quadratic = re.compile("\x1b\\[[ -?]*[ -?]*[@-~]")
-    assert_superlinear(
-        "two adjacent stars over one class",
-        _curve(quadratic, lambda n: "\x1b[" + " " * n, 300),
+    adjacent overlapping stars, so the guard is the cost itself: one run over a
+    million units against an absolute CPU ceiling, which a quadratic arm (two
+    adjacent stars over one class) overshoots by orders of magnitude."""
+    n = 1_000_000
+    assert_under_budget(
+        f"ANSI_RE on an unterminated run of {n} units",
+        lambda k: lambda subject=text(n + k): ANSI_RE.sub("", subject),
+        # The dearest shape measured ~0.14s.
+        2.0,
     )
 
 

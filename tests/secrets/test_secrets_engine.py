@@ -24,7 +24,7 @@ from agent_sanitizer.secrets import (
 )
 from redactor_helpers import SAMPLES, cfg, reconstruct, run_map, run_plain
 
-from tests._growth import assert_linear, cpu_growth, geometric_sizes
+from tests._budget import assert_under_budget
 
 
 def val_cand(value: str, line: str | None = None) -> E.Candidate:
@@ -159,26 +159,16 @@ def test_field_value_re_linear_on_underscore_run():
     # (measured 7.9s at n=38, doubling every 2 chars). The non-overlapping
     # `(?:[_-][A-Za-z0-9]+)*` — disjoint separator and body classes — parses the
     # run exactly one way, so search stays linear. Run against the REAL compiled
-    # pattern, not an approximation.
-    #
-    # The fit cannot be taken where the OLD pattern would finish. Below ~20
-    # underscores the string is too short for any match and the engine rejects
-    # it in ~90ns, and up to ~128 the fixed pattern's own curve still bends
-    # (it reads exponent 4.6 over 16-32 and 2.4 over 16-128 on a loaded
-    # machine) — while the old pattern costs ~1s at 32 and hours at 64. So the
-    # fit runs where the fixed pattern is in its linear regime (128-1024 reads
-    # ~1.0), and an exponential regression would hang this test rather than
-    # classify. The class itself is gated statically, without running it, by
-    # `test_redos_static_guard.py`, which analyses FIELD_VALUE_RE with the rest
-    # of the engine's patterns.
-    assert_linear(
-        "FIELD_VALUE_RE on an underscore run",
-        cpu_growth(
-            lambda n, k: (
-                lambda text=_underscore_run(n + k): E.FIELD_VALUE_RE.search(text)
-            ),
-            geometric_sizes(128, 1024),
-        ),
+    # pattern, not an approximation; the class itself is gated statically,
+    # without running it, by `test_redos_static_guard.py`, which analyses
+    # FIELD_VALUE_RE with the rest of the engine's patterns. The old pattern
+    # would not finish this run in any amount of time.
+    n = 1_000_000
+    assert_under_budget(
+        f"FIELD_VALUE_RE on a {n}-underscore run",
+        lambda k: lambda text=_underscore_run(n + k): E.FIELD_VALUE_RE.search(text),
+        # Measured at ~0.12s.
+        2.0,
     )
 
 
