@@ -72,3 +72,14 @@ stryker.dryrun.json
 
 # `pnpm pack` output: a build artifact regenerated on demand, never a source.
 *.tgz
+
+# Generated at install, pack and build time by scripts/gen-unicode.mjs (`pnpm
+# install` runs it through `prepare`, `npm pack` through `prepack`) from the
+# UCD package pnpm-lock.yaml pins. Build output is never tracked: the reviewable
+# surface is the generators plus the lockfile. The wheel's hatch `artifacts`
+# force-includes the JSON, so generate before every `uv build`.
+src/cf-charset.mjs
+src/joining-type.mjs
+src/standardized-variants.mjs
+src/unicode-properties.mjs
+python/agent_sanitizer/data/invisible-charset.json

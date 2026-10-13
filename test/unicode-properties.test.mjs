@@ -2,18 +2,15 @@
  * The pinned Unicode properties (src/unicode-properties.mjs, generated from the
  * pinned UCD package by scripts/gen-unicode-properties.mjs).
  *
- * Two contracts: the committed module is byte-for-byte a fresh generation, and,
+ * Two contracts: the generator renders exactly the tables derived from the
+ * package (the module itself is git-ignored and generated at install time), and,
  * on a Node whose own Unicode is the pinned version, every live `\p{…}` names
  * exactly its pinned table — so a package of the wrong Unicode (ucd-full@17.0.0
  * ships Unicode 16) fails here. Only this witness reads the live escape.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-
-import { unsandbox } from "./helpers/repo-root.mjs";
 import {
-  MODULE_PATH,
   UNICODE_PROPERTIES as derived,
   renderUnicodeProperties,
 } from "../scripts/gen-unicode-properties.mjs";
@@ -22,37 +19,38 @@ import {
   codePointsOf,
   ucdSpans,
 } from "../scripts/lib/ucd.mjs";
-import * as committed from "../src/unicode-properties.mjs";
+import * as generated from "../src/unicode-properties.mjs";
 import { CF_CODEPOINTS } from "../src/cf-charset.mjs";
 
 describe("src/unicode-properties.mjs is the pinned UCD", () => {
-  it("is byte-identical to a fresh generation", () => {
-    assert.equal(
-      readFileSync(unsandbox(MODULE_PATH), "utf8"),
-      renderUnicodeProperties(),
-      "src/unicode-properties.mjs is stale — run `node scripts/gen-unicode-properties.mjs`",
+  it("renders a module exporting exactly the derived tables", async () => {
+    const rendered = await import(
+      `data:text/javascript,${encodeURIComponent(renderUnicodeProperties())}`
     );
+    for (const [name, spans] of Object.entries(derived))
+      assert.deepEqual(rendered[name], spans, name);
+    assert.equal(rendered.UNICODE_VERSION, PINNED_VERSION);
   });
 
   it("pins the Unicode version of the UCD package", () => {
-    assert.equal(committed.UNICODE_VERSION, PINNED_VERSION);
+    assert.equal(generated.UNICODE_VERSION, PINNED_VERSION);
   });
 
   for (const [name, spans] of Object.entries(derived))
     it(`${name} equals its package-derived spans`, () => {
-      assert.deepEqual(committed[name], spans);
+      assert.deepEqual(generated[name], spans);
       assert.ok(spans.length > 0, `${name} is empty (vacuous)`);
     });
 
   it("inSpans answers membership at every span boundary", () => {
-    const spans = committed.UNIFIED_IDEOGRAPH;
+    const spans = generated.UNIFIED_IDEOGRAPH;
     for (const [start, end] of spans) {
-      assert.equal(committed.inSpans(spans, start), true);
-      assert.equal(committed.inSpans(spans, end), true);
-      assert.equal(committed.inSpans(spans, start - 1), false);
-      assert.equal(committed.inSpans(spans, end + 1), false);
+      assert.equal(generated.inSpans(spans, start), true);
+      assert.equal(generated.inSpans(spans, end), true);
+      assert.equal(generated.inSpans(spans, start - 1), false);
+      assert.equal(generated.inSpans(spans, end + 1), false);
     }
-    assert.equal(committed.inSpans(spans, -1), false);
+    assert.equal(generated.inSpans(spans, -1), false);
   });
 });
 

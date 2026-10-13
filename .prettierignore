@@ -52,6 +52,10 @@ python/agent_sanitizer/data/invisible-charset.json
 # bytes. The generator emits one code point per line and owns the format.
 src/cf-charset.mjs
 
+# Generated: scripts/gen-css-syntax.mjs writes one CSS grammar per line; prettier
+# would wrap every long one onto two. The generator owns the format.
+src/css-syntax-data.mjs
+
 # Generated range tables (scripts/gen-unicode-properties.mjs). Prettier collapses
 # a one-span table onto one line and keeps a longer one a row per line, so
 # its output would differ from the generator's by table length; the generator

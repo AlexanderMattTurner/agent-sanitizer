@@ -378,9 +378,9 @@ describe("guard: off-origin form action and meta-refresh are flagged by context"
   });
 });
 
-// ─── html.mjs: multiUrlAttr takes the first token of each srcset candidate ────
-// `candidate.trim().split(/\s+/)[0]` — the descriptor (`2x`) is dropped and the
-// URL kept; an exfil URL in a srcset must still be flagged.
+// ─── html.mjs: srcsetUrls keeps the URL of each srcset candidate ─────────────
+// The descriptor (`2x`) is parsed apart from the URL, and an exfil URL in a
+// srcset must still be flagged.
 
 describe("guard: srcset URL (first token, descriptor dropped) is scanned", () => {
   it("flags an exfil URL given with a density descriptor in srcset", () => {

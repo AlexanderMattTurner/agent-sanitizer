@@ -5,9 +5,9 @@
  * A live `\p{…}` answers from the running Node's ICU, so the same release once
  * stripped a different `Cf` set on two patch releases of one Node line. Every
  * property whose membership can move is read from this package instead and
- * compiled into committed modules that drift tests regenerate and compare;
- * test/unicode-property-pin.test.mjs fails on a live property escape. To move
- * to a new Unicode, bump the package and `pnpm install` (see gen-unicode.mjs).
+ * compiled into git-ignored modules generated at install, pack and build time
+ * (see gen-unicode.mjs); test/unicode-property-pin.test.mjs fails on a live
+ * property escape. To move to a new Unicode, bump the package and `pnpm install`.
  */
 const PACKAGE = "@unicode/unicode-17.0.0";
 

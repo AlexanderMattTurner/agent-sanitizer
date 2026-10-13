@@ -114,6 +114,21 @@ const digitChannel = (n) => {
   return `color: rgb(${huge},${huge},${huge}); background: rgb(255,255,255)`;
 };
 
+// A hide followed by a run of INVALID declarations, each a lexer match the
+// cascade could be made to buy.
+/** @param {number} n @returns {string} */
+const repeatedInvalidDeclarations = (n) =>
+  `display:none;${grow("color:bogus-value;", n)}`;
+
+// Nested zero-font-size regions, each inside the visible part of the last: a
+// splice that re-judged a region's subtree per level would pay depth per node.
+/** @param {number} n @returns {string} */
+const nestedInheritedRegions = (n) => {
+  const open = '<div style="font-size:0">s<b style="font-size:9px">v';
+  const levels = Math.max(1, Math.floor(n / open.length));
+  return `${open.repeat(levels)}${"</b></div>".repeat(levels)}`;
+};
+
 /**
  * Text of paired Cyrillic look-alikes, and findings that all OVERLAP a fold
  * already applied: the second glyph of each pair folds first, and the finding on
@@ -211,6 +226,27 @@ const CASES = {
     // length cap added to the declaration parser would leave a short marker
     // green while the timing quietly moved to an early bail.
     marker: () => isHiddenStyle(digitChannel(LARGE)),
+  },
+  "isHiddenStyle/repeated-invalid-declarations": {
+    input: (size, attempt) => repeatedInvalidDeclarations(size - attempt),
+    run: (style) => isHiddenStyle(style),
+    // Hidden only when the cascade read the leading `display:none` past the
+    // whole run: a parse that bailed early would answer false.
+    marker: () => isHiddenStyle(repeatedInvalidDeclarations(LARGE)),
+  },
+  "sanitizeHtml/nested-inherited-regions": {
+    input: (size, attempt) => nestedInheritedRegions(size - attempt),
+    run: (text) => sanitizeHtml(text),
+    // One hidden `s` per level spliced, every `v` kept: only a scan that split
+    // each region at its overriding child gets both.
+    marker: () => {
+      const result = sanitizeHtml(nestedInheritedRegions(LARGE));
+      return (
+        result !== null &&
+        !result.text.includes(">s<") &&
+        result.text.includes(">v<")
+      );
+    },
   },
   "foldConfusables/overlapping-findings": {
     input: (size, attempt) => overlappingFolds(size - attempt),
