@@ -29,7 +29,7 @@
  * module that one writes). `pnpm install` runs both in order
  * (scripts/gen-unicode.mjs); the JSON is git-ignored, never committed.
  */
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -88,6 +88,9 @@ export const OUTPUT_PATH = join(
 );
 
 function main() {
+  // The JSON is the directory's only file and is git-ignored, so a fresh clone
+  // has no python/agent_sanitizer/data/ to write into.
+  mkdirSync(dirname(OUTPUT_PATH), { recursive: true });
   writeFileSync(OUTPUT_PATH, JSON.stringify(charsetDoc(), null, 2) + "\n");
   console.log(
     `wrote ${OUTPUT_PATH} (${extraCodepoints().length} extra + ${cfCodepoints().length} Cf code points)`,
