@@ -23,6 +23,7 @@
     "check": "tsc --noEmit && tsc -p tsconfig.hooks.json --noEmit",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.hooks.json --noEmit",
     "build:types": "tsc -p tsconfig.build.json && tsc -p tsconfig.build-hooks.json",
+    "build": "pnpm build:plugin && node plugin/scripts/build-redactor-pyz.mjs --if-missing",
     "build:plugin": "node plugin/scripts/build-plugin.mjs",
     "build:redactor": "node plugin/scripts/build-redactor-pyz.mjs",
     "prepack": "pnpm gen:unicode && pnpm build:types",

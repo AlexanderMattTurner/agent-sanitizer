@@ -343,7 +343,13 @@ export function buildRedactorPyz() {
   }
 }
 
-if (
+// `--if-missing` is the pre-push `pnpm build`: it makes a fresh checkout
+// testable without paying the PyPI build on every push. It never rebuilds a
+// stale pair, so node-tests and the release bake call the plain build.
+const BUILT = [PYZ_PATH, WHEEL_PATH].every((path) => existsSync(path));
+if (BUILT && process.argv.includes("--if-missing")) {
+  process.stderr.write("redactor already built, skipping (--if-missing)\n");
+} else if (
   import.meta.url === new URL(`file://${process.argv[1]}`).href ||
   process.argv[1]?.endsWith("build-redactor-pyz.mjs")
 ) {
