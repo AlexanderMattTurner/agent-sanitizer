@@ -30,12 +30,12 @@ import {
   readFileSync,
   renameSync,
   rmSync,
-  writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { UNICODE_VERSION, ucdSpans } from "./lib/ucd.mjs";
+import { writeGenerated } from "./lib/write-generated.mjs";
 
 // Variation_Selector from the pinned package, not the runtime's
 // `\p{Variation_Selector}` (see ./lib/ucd.mjs).
@@ -232,6 +232,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const out = fileURLToPath(
     new URL("../src/standardized-variants.mjs", import.meta.url),
   );
-  writeFileSync(out, render({ pairs, version }));
+  writeGenerated(out, render({ pairs, version }));
   console.log(`wrote ${out}: ${pairs.length} standardized variation sequences`);
 }

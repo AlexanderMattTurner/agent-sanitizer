@@ -8,11 +8,13 @@
  * scripts/gen-unicode.mjs runs this at `pnpm install` and pack time. Re-run
  * (`pnpm gen:unicode`) when test/css-syntax-data.test.mjs reports drift.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import cssSyntaxData from "css-tree/definition-syntax-data";
 import { parse, walk } from "css-tree/definition-syntax";
+
+import { writeGenerated } from "./lib/write-generated.mjs";
 
 /** @typedef {{ types: Record<string, string>, properties: Record<string, string> }} CssSyntax */
 
@@ -78,7 +80,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     new URL("../src/css-syntax-data.mjs", import.meta.url),
   );
   const syntax = deriveCssSyntax();
-  writeFileSync(out, renderCssSyntax(syntax));
+  writeGenerated(out, renderCssSyntax(syntax));
   console.log(
     `wrote ${out}: ${Object.keys(syntax.properties).length} properties, ` +
       `${Object.keys(syntax.types).length} types`,

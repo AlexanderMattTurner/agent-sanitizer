@@ -20,7 +20,6 @@
  *
  * Run: `pnpm gen:joining-type`.
  */
-import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -29,6 +28,7 @@ import {
   codePointsOf,
   ucdSpans,
 } from "./lib/ucd.mjs";
+import { writeGenerated } from "./lib/write-generated.mjs";
 
 /** The Joining_Type values the table carries, by tag; U is the default. The
  * package lists only ArabicShaping.txt's explicit entries (see loadUcd). */
@@ -297,7 +297,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const out = fileURLToPath(
     new URL("../src/joining-type.mjs", import.meta.url),
   );
-  writeFileSync(
+  writeGenerated(
     out,
     render({ joining, virama, brahmic, version: ucd.version }),
   );
