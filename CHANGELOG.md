@@ -8,6 +8,21 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.64.1] - 2026-10-13
+
+### Fixed
+
+- HTML layer detection now produces consistent results regardless of nesting depth, withholding analysis beyond 4096 levels.
+- Inherited style hides are now preserved through `calc()`, `revert`, `-webkit-text-fill-color`, and `display:contents`.
+- URL extraction from `url()` functions with CSS-escaped names now works correctly.
+- Layer 3 URLs are now read through a unified attribute table and URL parser for consistency.
+- Inline style cascading is now resolved correctly, including handling of invalid declarations and `!important` flags.
+- Hide detection in element context (inline boxes and inherited overrides) now works as intended.
+
+### Changed
+
+- HTML URL table rows are now stated by their defaults, and `srcset` handling uses two regexes for improved clarity.
+
 ## [2.64.0] - 2026-10-13
 
 ### Changed
