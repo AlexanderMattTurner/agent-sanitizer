@@ -1,9 +1,7 @@
 /**
- * Where the redactor client looks for its daemon: the socket path it dials and
- * the zipapp it spawns. Both are resolved from the environment the hook runs
- * in, so these cases drive the real module under controlled environments and
- * assert the path it settles on (the socket) or the process it actually starts
- * (the zipapp).
+ * Where the redactor client looks for its daemon socket. DEFAULT_SOCKET_PATH is
+ * fixed at module load, so the wiring cases run a fresh process; the root-trust
+ * cases call resolveSocketPath directly over one shared fixture of roots.
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -16,7 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 
 import { resolveSocketPath } from "../claude-hooks/lib/redactor-client.mjs";
 
@@ -25,34 +23,49 @@ const CLIENT = new URL(
   import.meta.url,
 ).href;
 const UID = /** @type {() => number} */ (process.getuid)();
-const SOCKET_ENV = [
-  "_AGENT_SANITIZER_REDACTOR_SOCKET",
-  "XDG_RUNTIME_DIR",
-  "CLAUDE_PLUGIN_DATA",
-];
+const SUFFIX = join("agent-sanitizer-redactor", "redactor.sock");
+/** @param {number} uid */
+const fallback = (uid) =>
+  join(tmpdir(), `agent-sanitizer-redactor-${uid}`, "redactor.sock");
 
-/** @param {import("node:test").TestContext} t */
-function scratch(t) {
-  const dir = mkdtempSync(join(tmpdir(), "redactor-paths-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  return dir;
-}
+const dir = mkdtempSync(join(tmpdir(), "redactor-paths-"));
+after(() => rmSync(dir, { recursive: true, force: true }));
+/** A directory with exactly `mode`, bypassing the umask. */
+const root = (/** @type {string} */ name, /** @type {number} */ mode) => {
+  const path = join(dir, name);
+  mkdirSync(path);
+  chmodSync(path, mode);
+  return path;
+};
+const priv = root("priv", 0o700);
+const open = root("open", 0o777);
+const data = root("data", 0o755);
+const link = join(dir, "link");
+symlinkSync(priv, link);
+// The daemon binds "." + 16 hex digits before renaming onto redactor.sock, four
+// bytes longer, so that longer name is what must fit sun_path (103 bytes).
+/** A private root whose published socket path is exactly `bytes` long. */
+const sized = (/** @type {number} */ bytes) =>
+  root("r".repeat(bytes - Buffer.byteLength(join(dir, SUFFIX)) - 1), 0o700);
+const fits = sized(99);
+const tooLong = sized(100);
+assert.equal(Buffer.byteLength(join(fits, SUFFIX)), 99, "fixture drifted");
 
-/**
- * DEFAULT_SOCKET_PATH as a fresh process resolves it under `env` (it is fixed
- * at module load, so each environment needs its own process).
- * @param {Record<string, string>} env
- */
-function resolvedSocket(env) {
+/** DEFAULT_SOCKET_PATH in a fresh process under `env`. */
+function resolvedSocket(/** @type {Record<string, string>} */ env) {
   const base = { ...process.env };
-  for (const name of SOCKET_ENV) delete base[name];
+  for (const name of [
+    "_AGENT_SANITIZER_REDACTOR_SOCKET",
+    "XDG_RUNTIME_DIR",
+    "CLAUDE_PLUGIN_DATA",
+  ])
+    delete base[name];
   const res = spawnSync(
     process.execPath,
     [
       "--input-type=module",
       "-e",
-      `const m = await import(${JSON.stringify(CLIENT)});
-process.stdout.write(m.DEFAULT_SOCKET_PATH);`,
+      `process.stdout.write((await import(${JSON.stringify(CLIENT)})).DEFAULT_SOCKET_PATH);`,
     ],
     { encoding: "utf8", env: { ...base, ...env } },
   );
@@ -60,114 +73,60 @@ process.stdout.write(m.DEFAULT_SOCKET_PATH);`,
   return res.stdout;
 }
 
-/**
- * A directory with exactly `mode`, bypassing the umask.
- * @param {string} path
- * @param {number} mode
- */
-function dirWithMode(path, mode) {
-  mkdirSync(path);
-  chmodSync(path, mode);
-  return path;
-}
-
 describe("the default redactor socket lives in a per-user directory", () => {
-  it("uses an explicit socket override verbatim", () => {
+  it("uses an explicit override verbatim, else a uid-named temp-dir socket", () => {
     assert.equal(
       resolvedSocket({ _AGENT_SANITIZER_REDACTOR_SOCKET: "/x/y.sock" }),
       "/x/y.sock",
     );
+    assert.equal(resolvedSocket({}), fallback(UID));
   });
 
-  it("prefers a private XDG_RUNTIME_DIR", (t) => {
-    const dir = scratch(t);
-    const runtime = dirWithMode(join(dir, "run"), 0o700);
-    const data = dirWithMode(join(dir, "data"), 0o755);
-    assert.equal(
-      resolvedSocket({ XDG_RUNTIME_DIR: runtime, CLAUDE_PLUGIN_DATA: data }),
-      join(runtime, "agent-sanitizer-redactor", "redactor.sock"),
-    );
-  });
-
-  it("skips a group/other-writable XDG_RUNTIME_DIR for CLAUDE_PLUGIN_DATA", (t) => {
-    const dir = scratch(t);
-    const runtime = dirWithMode(join(dir, "run"), 0o777);
-    const data = dirWithMode(join(dir, "data"), 0o755);
-    assert.equal(
-      resolvedSocket({ XDG_RUNTIME_DIR: runtime, CLAUDE_PLUGIN_DATA: data }),
-      join(data, "agent-sanitizer-redactor", "redactor.sock"),
-    );
-  });
-
-  it("skips a missing root and one whose socket path overflows sun_path", (t) => {
-    const dir = scratch(t);
-    const deep = join(dir, "d".repeat(80));
-    dirWithMode(deep, 0o700);
-    assert.equal(
-      resolvedSocket({
-        XDG_RUNTIME_DIR: join(dir, "absent"),
-        CLAUDE_PLUGIN_DATA: deep,
-      }),
-      join(tmpdir(), `agent-sanitizer-redactor-${UID}`, "redactor.sock"),
-    );
-  });
-
-  it("skips a symlinked root even when its target is private", (t) => {
-    const dir = scratch(t);
-    const target = dirWithMode(join(dir, "target"), 0o700);
-    const link = join(dir, "link");
-    symlinkSync(target, link);
-    assert.equal(
-      resolvedSocket({ XDG_RUNTIME_DIR: link, CLAUDE_PLUGIN_DATA: link }),
-      join(tmpdir(), `agent-sanitizer-redactor-${UID}`, "redactor.sock"),
-    );
-  });
-
-  it("skips roots owned by another uid", (t) => {
-    const dir = scratch(t);
-    const runtime = dirWithMode(join(dir, "run"), 0o700);
-    const env = { XDG_RUNTIME_DIR: runtime, CLAUDE_PLUGIN_DATA: runtime };
-    // Positive pair: the same roots are taken by their own uid, so the
-    // foreign-uid result below is the owner clause and nothing else.
-    assert.equal(
-      resolveSocketPath(env, UID),
-      join(runtime, "agent-sanitizer-redactor", "redactor.sock"),
-    );
-    assert.equal(
-      resolveSocketPath(env, UID + 1),
-      join(tmpdir(), `agent-sanitizer-redactor-${UID + 1}`, "redactor.sock"),
-    );
-  });
-
-  // The daemon binds "." + 16 hex digits before renaming onto redactor.sock,
-  // four bytes longer, so the longer name is what must fit sun_path.
-  for (const [pathBytes, taken] of [
-    [99, true],
-    [100, false],
-    [103, false],
-  ]) {
-    it(`takes a root only if the daemon's temp bind fits (socket path ${pathBytes} bytes)`, (t) => {
-      const dir = scratch(t);
-      const suffix = join("agent-sanitizer-redactor", "redactor.sock");
-      // join(dir, "r" * k, suffix) is len(join(dir, suffix)) + 1 + k bytes.
-      const fill = pathBytes - Buffer.byteLength(join(dir, suffix)) - 1;
-      const root = dirWithMode(join(dir, "r".repeat(fill)), 0o700);
-      assert.equal(
-        Buffer.byteLength(join(root, suffix)),
-        pathBytes,
-        "fixture sizing drifted",
-      );
-      const expected = taken
-        ? join(root, suffix)
-        : join(tmpdir(), `agent-sanitizer-redactor-${UID}`, "redactor.sock");
-      assert.equal(resolveSocketPath({ XDG_RUNTIME_DIR: root }, UID), expected);
-    });
-  }
-
-  it("falls back to a uid-named temp-dir socket, never a shared name", () => {
-    assert.equal(
-      resolvedSocket({}),
-      join(tmpdir(), `agent-sanitizer-redactor-${UID}`, "redactor.sock"),
-    );
-  });
+  /** @type {[string, Record<string, string>, number, string][]} */
+  const rows = [
+    [
+      "prefers a private XDG_RUNTIME_DIR over CLAUDE_PLUGIN_DATA",
+      { XDG_RUNTIME_DIR: priv, CLAUDE_PLUGIN_DATA: data },
+      UID,
+      join(priv, SUFFIX),
+    ],
+    [
+      "skips a group/other-writable XDG_RUNTIME_DIR",
+      { XDG_RUNTIME_DIR: open, CLAUDE_PLUGIN_DATA: data },
+      UID,
+      join(data, SUFFIX),
+    ],
+    [
+      "skips a missing root",
+      { XDG_RUNTIME_DIR: join(dir, "absent") },
+      UID,
+      fallback(UID),
+    ],
+    [
+      "skips a symlinked root even when its target is private",
+      { XDG_RUNTIME_DIR: link, CLAUDE_PLUGIN_DATA: link },
+      UID,
+      fallback(UID),
+    ],
+    [
+      "skips a private root owned by another uid",
+      { XDG_RUNTIME_DIR: priv },
+      UID + 1,
+      fallback(UID + 1),
+    ],
+    [
+      "takes a root whose daemon temp bind fits sun_path (99 bytes)",
+      { XDG_RUNTIME_DIR: fits },
+      UID,
+      join(fits, SUFFIX),
+    ],
+    [
+      "skips a root whose daemon temp bind overflows sun_path (100 bytes)",
+      { XDG_RUNTIME_DIR: tooLong },
+      UID,
+      fallback(UID),
+    ],
+  ];
+  for (const [name, env, uid, expected] of rows)
+    it(name, () => assert.equal(resolveSocketPath(env, uid), expected));
 });

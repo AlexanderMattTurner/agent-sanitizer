@@ -569,8 +569,6 @@ describe("slowHookNotice", () => {
       now,
       cpuNow,
     );
-    // The driven clock advanced exactly 60ms, so a single charge reads 60 and a
-    // double-count reads 120.
     assert.equal(timer.hostMs(), 60, "one interval, charged once");
   });
 

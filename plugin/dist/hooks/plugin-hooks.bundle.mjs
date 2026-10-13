@@ -50340,14 +50340,13 @@ function resolveSocketPath(env, uid) {
   for (const root2 of [env.XDG_RUNTIME_DIR, env.CLAUDE_PLUGIN_DATA]) {
     if (!root2 || !isPrivateRoot(root2, uid)) continue;
     const dir = join7(root2, "agent-sanitizer-redactor");
-    const longest = Math.max(SOCKET_NAME.length, TEMP_BIND_NAME.length);
-    if (Buffer.byteLength(dir) + 1 + longest <= SOCKET_PATH_MAX)
-      return join7(dir, SOCKET_NAME);
+    if (Buffer.byteLength(dir) + 1 + TEMP_BIND_NAME_LENGTH <= SOCKET_PATH_MAX)
+      return join7(dir, "redactor.sock");
   }
   return join7(
     tmpdir2(),
     `agent-sanitizer-redactor-${uid ?? "nouid"}`,
-    SOCKET_NAME
+    "redactor.sock"
   );
 }
 function daemonCommand() {
@@ -50608,7 +50607,7 @@ async function redactViaDaemon(text6, opts) {
     }
   }
 }
-var DAEMON_REASON, SOCKET_PATH_MAX, SOCKET_NAME, TEMP_BIND_NAME, DEFAULT_SOCKET_PATH, WAIT_DEADLINE_MS, sleep, STDERR_TAIL_CHARS;
+var DAEMON_REASON, SOCKET_PATH_MAX, TEMP_BIND_NAME_LENGTH, DEFAULT_SOCKET_PATH, WAIT_DEADLINE_MS, sleep, STDERR_TAIL_CHARS;
 var init_redactor_client = __esm({
   "claude-hooks/lib/redactor-client.mjs"() {
     "use strict";
@@ -50620,8 +50619,7 @@ var init_redactor_client = __esm({
     init_knobs();
     DAEMON_REASON = /^[\x20-\x7e]{1,200}$/u;
     SOCKET_PATH_MAX = 103;
-    SOCKET_NAME = "redactor.sock";
-    TEMP_BIND_NAME = `.${"0".repeat(16)}`;
+    TEMP_BIND_NAME_LENGTH = 17;
     DEFAULT_SOCKET_PATH = resolveSocketPath(process.env, currentUid());
     WAIT_DEADLINE_MS = readKnob("_AGENT_SANITIZER_REDACTOR_WAIT_MS");
     sleep = (ms) => new Promise((resolve6) => {

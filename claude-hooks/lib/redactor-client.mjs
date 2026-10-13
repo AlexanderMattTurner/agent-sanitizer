@@ -47,24 +47,18 @@ const DAEMON_REASON = /^[\x20-\x7e]{1,200}$/u;
 // millisecond knob lives with the knob table.
 export { positiveMsOr } from "./knobs.mjs";
 
-// sun_path is 104 bytes on macOS (108 on Linux), its terminating NUL included;
-// a longer path makes the daemon's bind() fail and every call fail closed.
+// sun_path is 104 bytes on macOS (108 on Linux), NUL included; a longer path
+// makes the daemon's bind() fail and every call fail closed. The daemon binds
+// "." + 16 hex digits before renaming onto "redactor.sock", so the longer
+// 17-byte name is what must fit.
 const SOCKET_PATH_MAX = 103;
-
-const SOCKET_NAME = "redactor.sock";
-// The daemon binds a sibling named "." + 16 hex digits before renaming it onto
-// the published name (_publish_listener), and THAT bind is what the limit
-// constrains first. It is longer than SOCKET_NAME, so a root is only usable if
-// the longer of the two names fits.
-const TEMP_BIND_NAME = `.${"0".repeat(16)}`;
+const TEMP_BIND_NAME_LENGTH = 17;
 
 /**
  * Whether `root` is a real directory this uid owns that no group/other can
- * write, so a socket dir created under it cannot be squatted. lstat, so a
- * symlinked root is refused rather than followed: a co-tenant who can replace
- * the link could point the dial at their own listener after the checks passed.
- * An unreadable or absent root is simply not a candidate; this runs at module
- * load, where a throw would stop the hook loading at all.
+ * write. lstat, so a symlinked root is refused rather than followed. An absent
+ * root is just not a candidate: this runs at module load, where a throw would
+ * stop the hook loading at all.
  * @param {string} root
  * @param {number | null} uid
  * @returns {boolean}
@@ -81,19 +75,16 @@ function isPrivateRoot(root, uid) {
 
 /**
  * The redactor socket path: one per user, shared by every session of that user
- * (the daemon redacts each REQUESTER's env secrets, so sharing is safe). The
- * daemon binds it 0600 under a 0700 dir AFTER priming, so its existence means
- * "ready". Resolution order:
+ * (the daemon redacts each REQUESTER's env secrets). The daemon binds it 0600
+ * under a 0700 dir AFTER priming, so its existence means "ready". In order:
  *
- * 1. `_AGENT_SANITIZER_REDACTOR_SOCKET` — explicit override (tests, operators).
+ * 1. `_AGENT_SANITIZER_REDACTOR_SOCKET` — explicit override.
  * 2. `$XDG_RUNTIME_DIR`, then `$CLAUDE_PLUGIN_DATA` — per-user directories no
- *    other uid can write, so the socket dir under them cannot be pre-created by
- *    a co-tenant. Each is taken only if it passes isPrivateRoot and the socket
- *    path fits sun_path.
- * 3. `<tmpdir>/agent-sanitizer-redactor-<uid>` — the fallback. On a shared /tmp a
- *    co-tenant can still pre-create it; the daemon then refuses to serve and the
- *    client refuses to connect (classifySocket), so a squat costs availability
- *    and never leaks a secret.
+ *    other uid can write, so a co-tenant cannot pre-create the socket dir under
+ *    them. Taken only if isPrivateRoot passes and the path fits sun_path.
+ * 3. `<tmpdir>/agent-sanitizer-redactor-<uid>` — on a shared /tmp a co-tenant
+ *    can still pre-create it; the daemon then refuses to serve and the client
+ *    refuses to connect (classifySocket), costing availability, never a secret.
  * @param {NodeJS.ProcessEnv} env
  * @param {number | null} uid  null where the platform has no uid model, which
  *   trusts no root (see {@link isPrivateDir})
@@ -105,14 +96,13 @@ export function resolveSocketPath(env, uid) {
   for (const root of [env.XDG_RUNTIME_DIR, env.CLAUDE_PLUGIN_DATA]) {
     if (!root || !isPrivateRoot(root, uid)) continue;
     const dir = join(root, "agent-sanitizer-redactor");
-    const longest = Math.max(SOCKET_NAME.length, TEMP_BIND_NAME.length);
-    if (Buffer.byteLength(dir) + 1 + longest <= SOCKET_PATH_MAX)
-      return join(dir, SOCKET_NAME);
+    if (Buffer.byteLength(dir) + 1 + TEMP_BIND_NAME_LENGTH <= SOCKET_PATH_MAX)
+      return join(dir, "redactor.sock");
   }
   return join(
     tmpdir(),
     `agent-sanitizer-redactor-${uid ?? "nouid"}`,
-    SOCKET_NAME,
+    "redactor.sock",
   );
 }
 

@@ -114,19 +114,12 @@ export function buildEngineWheel() {
 }
 
 /**
- * The zipapp's `__main__.py`, exported so a test can run the real stub.
- *
- * The engine reads data files through Path(__file__) (e.g.
- * agent_sanitizer/data/invisible-charset.json), which cannot be opened inside a
- * zip, so the stub self-extracts to a content-addressed per-user cache and
- * imports from there. The cache key is the archive digest, so a plugin update
- * extracts fresh and stale trees are inert.
- *
- * The cache root is `$CLAUDE_PLUGIN_DATA/redactor-pyz` when Claude Code supplies
- * that per-install directory and it is writable, else a uid-named directory in
- * the temp dir. The
- * temp-dir name and the digest are both predictable, so every directory the
- * stub imports from must pass `trusted_dir` — see its docstring.
+ * The zipapp's `__main__.py`, exported so a test can run the real stub. The
+ * engine reads data files through Path(__file__), which cannot be opened inside
+ * a zip, so the stub self-extracts to a cache keyed on the archive digest (stale
+ * trees are inert) under `$CLAUDE_PLUGIN_DATA/redactor-pyz` when writable, else
+ * a uid-named temp-dir directory. Both names are predictable, so every directory
+ * it imports from must pass `trusted_dir`.
  */
 export const PYZ_MAIN = String.raw`import hashlib, os, shutil, stat, sys, tempfile, zipfile
 

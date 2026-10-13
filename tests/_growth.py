@@ -150,14 +150,8 @@ def opcode_growth(call_for: CallFor, sizes) -> Growth:
 
 def _visit_order(count: int) -> list[int]:
     """The order :func:`cpu_growth` visits ``count`` sizes in on its even rounds
-    -- every other size from the smallest, then the ones between (0, 2, 1, 3 for
-    four) -- reversed on its odd rounds.
-
-    The JS twin's ``visitOrder`` documents why: plain ascending order, reversed
-    on odd rounds, runs the two smallest and the two largest sizes back to back
-    at round boundaries, so one fast stretch of a runner can cover exactly one
-    half of the curve, which moves a four-size fit by 0.4 for a 2x speed level.
-    In this order no contiguous stretch holds one half without the other."""
+    (0, 2, 1, 3 for four), reversed on odd rounds. The JS twin's ``visitOrder``
+    explains why ascending order lets one fast stretch cover half the curve."""
     return [*range(0, count, 2), *range(1, count, 2)]
 
 
