@@ -28,9 +28,11 @@ on: # zizmor: ignore[dangerous-triggers]
     workflows:
       - Auto version bump and publish
       - Release canary
-    # Both watched workflows only ever run on main/master (auto-version.yaml's
-    # own push trigger; release-canary.yaml's schedule/dispatch fire on the
-    # default branch) — this filter matches that, not the reverse.
+      - Plugin dist bake
+    # Every watched workflow only ever runs on main/master (auto-version.yaml's
+    # own push trigger; release-canary.yaml's schedule/dispatch and
+    # plugin-dist.yaml's workflow_run/dispatch fire on the default branch) —
+    # this filter matches that, not the reverse.
     branches: [main, master]
 
 concurrency:

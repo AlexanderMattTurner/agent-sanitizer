@@ -115,17 +115,21 @@ describe("generator output writes", () => {
   })
     .split("\n")
     .filter(Boolean);
-  // gen-unicode.mjs only spawns the others, so it has no writeGenerated call of
-  // its own; the raw-write ban still binds on it.
-  const generators = allGenerators.filter(
-    (f) => f !== "scripts/gen-unicode.mjs",
-  );
+  // These write no file of their own, so they have no writeGenerated call: the
+  // raw-write ban still binds on them. gen-unicode.mjs only spawns the others;
+  // the shell-lib generators print to stdout for the plugin-dist build.
+  const NON_WRITERS = new Set([
+    "scripts/gen-unicode.mjs",
+    "scripts/gen-fail-open-lib.mjs",
+    "scripts/gen-node-floor-lib.mjs",
+  ]);
+  const generators = allGenerators.filter((f) => !NON_WRITERS.has(f));
 
   it("enumerates the generators (guards against a vacuous pass)", () => {
-    assert.ok(generators.length >= 9, generators.join(", "));
+    assert.ok(generators.length >= 7, generators.join(", "));
     assert.ok(generators.includes("scripts/gen-cf-charset.mjs"));
     assert.ok(generators.includes("scripts/gen-unicode-properties.mjs"));
-    assert.ok(allGenerators.includes("scripts/gen-unicode.mjs"));
+    for (const rel of NON_WRITERS) assert.ok(allGenerators.includes(rel), rel);
   });
 
   for (const rel of allGenerators)

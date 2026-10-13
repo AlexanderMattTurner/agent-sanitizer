@@ -853,31 +853,49 @@ sanitizes (see `plugin/scripts/provision-hook-binary.sh`). That is the
 product's only path that fetches an executable over the network and later runs
 it, so what anchors its trust is worth stating exactly.
 
-- **The anchor is in the repo, not on the wire.** `plugin/dist/hooks/hook-binaries.sha256`
-  is committed, and the SessionStart provisioner refuses to install any download
-  that does not hash to the digest it pins for that platform. A compromised or
-  substituted release asset alone therefore cannot be installed: it fails the
-  comparison, is deleted, and the launcher keeps degrading loudly through node.
-- **What the digest is worth rests on the compile being reproducible.** The
-  committed digests are generated from the committed bundle, and the release
-  recompiles and byte-compares them (`build-hook-binaries.mjs --check` in
-  `release-hook-binaries.sh`), so binaries that do not reproduce the manifest are
-  never uploaded. The manifest is refreshed on the default branch by
-  `auto-version.yaml`, ahead of that release, so what it describes is the bundle
-  the release ships.
-- **A manifest that has fallen behind its bundle installs nothing.** Between a
-  merge and that refresh, the default branch pins binaries compiled from the
-  previous bundle. The provisioner compares its own bundle against the manifest's
-  `# bundle=` pin and refuses on a mismatch, so the window degrades to the node
-  path rather than running a binary that is not the code the install ships. A
-  binary provisioned before the window stays installed but loses its install
-  stamp, and the launcher runs a binary whose stamp does not name the shipped
-  manifest only on a host where no node is found — there an older sanitizer
-  still beats an unsanitized call.
-- **Not covered: an attacker who can write BOTH the repository and the release.**
-  There is no signature; the manifest is trusted because it arrives through the
-  same reviewed, gated path as the rest of the plugin. Rewriting it is rewriting
-  the plugin, which is outside this boundary.
+- **The anchor travels with the plugin, not on the wire.**
+  `plugin/dist/hooks/hook-binaries.sha256` ships in the installed plugin, and the
+  SessionStart provisioner refuses to install any download that does not hash
+  to the digest it pins for that platform. A compromised or substituted release
+  asset alone therefore cannot be installed: it fails the comparison, is
+  deleted, and the launcher keeps degrading loudly through node.
+- **The installed plugin is the `plugin-dist` branch, and no human reviews it.**
+  `.claude-plugin/marketplace.json` installs from `plugin-dist`, whose commits
+  `.github/workflows/plugin-dist.yaml` writes: it checks out a release tag (a
+  `main` commit that went through review and the required checks), builds the
+  bundle, the zipapp, the generated shell libs and the manifest, compiles the
+  binaries, uploads them only after `sha256sum --check` against that manifest
+  passes, and then pushes the build. The manifest and the binaries come from the
+  same run, so the digest proves the download is what that run built — not that
+  an independent rebuild agrees. What the user runs is therefore exactly as
+  trustworthy as whatever can write `plugin-dist`.
+- **Who can write `plugin-dist`.** The workflow pushes with
+  `TEMPLATE_SYNC_TOKEN_ORG` (the stock `GITHUB_TOKEN` where that secret is
+  unset), and the push is fast-forward only. Pushes are restricted to that
+  identity by a branch ruleset on `refs/heads/plugin-dist` blocking creation,
+  update, deletion and non-fast-forward for everyone but the repository's admin
+  bypass actors. That ruleset is repository configuration, not code in this
+  tree, so nothing here creates it; `plugin-dist-ruleset.yaml` only detects
+  its absence, failing daily and on any marketplace change while no active
+  `update` rule covers the branch. Without it, any collaborator with write
+  access can push the branch and ship code to every installed user. With it, the residual writers are the
+  admins and anything that can run a workflow holding that secret — a workflow
+  edited onto a branch of this repository can read it, so write access to the
+  repository still reaches `plugin-dist` through Actions, as it reaches `main`'s
+  release path.
+- **A manifest that disagrees with its bundle installs nothing.** The bake
+  refuses to stage a manifest whose `# bundle=` pin is not the bundle it built,
+  and the provisioner compares its own bundle against that pin and refuses on a
+  mismatch, so a hand-rebuilt bundle beside an older manifest degrades to the
+  node path rather than running a binary that is not the code the install ships.
+  A binary provisioned under an earlier release stays installed but loses its
+  install stamp, and the launcher runs a binary whose stamp does not name the
+  shipped manifest only on a host where no node is found — there an older
+  sanitizer still beats an unsanitized call.
+- **Not covered: an attacker who can write `plugin-dist`, or the workflow that
+  writes it.** There is no signature; the manifest is trusted because it arrives
+  in the same commit as the rest of the plugin. Rewriting it is rewriting the
+  plugin, which is outside this boundary.
 - **Not covered: re-verification at exec time.** The digest is checked once, at
   install. The launcher then execs
   `${CLAUDE_PLUGIN_DATA}/hook-binary/agent-sanitizer-hooks` on every hook
@@ -901,12 +919,12 @@ it, so what anchors its trust is worth stating exactly.
   location.** The provisioned redactor venv (`${CLAUDE_PLUGIN_DATA}/venv` and its
   `bin/`, whose daemon receives every secret-bearing payload) is handed to the
   client only when `trusted_dir` vouches for both directories; otherwise the
-  client redacts through the committed zipapp. The degraded-warning marker root
+  client redacts through the shipped zipapp. The degraded-warning marker root
   under `TMPDIR` is read only when this user owns it with owner-only write, so a
   squatted shared-temp entry cannot pre-suppress the warning that a call ran
   unsanitized.
 - **Opting out.** `AGENT_SANITIZER_HOOK_BINARY=0` never downloads and never runs
-  a binary. That leaves the node path running the committed bundle and the
+  a binary. That leaves the node path running the shipped bundle and the
   compile cache above; `AGENT_SANITIZER_COMPILE_CACHE=0` turns the cache off as
   well, and an operator's own `NODE_COMPILE_CACHE` is used unchanged.
 

@@ -8,7 +8,12 @@
   "plugins": [
     {
       "name": "agent-sanitizer",
-      "source": "./plugin"
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/AlexanderMattTurner/agent-sanitizer.git",
+        "path": "plugin",
+        "ref": "plugin-dist"
+      }
     }
   ]
 }

@@ -45,6 +45,7 @@ on: # zizmor: ignore[dangerous-triggers]
       - Mutation tests
       - Node tests
       - Pack smoke test
+      - Plugin dist ruleset
       - PR meta (privileged)
       - pre-commit
       - Release canary

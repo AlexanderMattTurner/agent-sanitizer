@@ -48,10 +48,6 @@ pytestmark = pytest.mark.drift_guard(
     "checked against package.json's repository.url instead"
 )
 
-# The committed plugin bundle inlines megabytes of third-party sources whose
-# comments cite unrelated repos; it is generated from the linted sources.
-GENERATED_PREFIXES = ("plugin/dist/",)
-
 GITHUB_REPO_URL = re.compile(
     r"github\.com/(?P<slug>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?(?![\w.-])"
 )
@@ -115,7 +111,7 @@ def _tracked_files() -> list[str]:
         text=True,
         check=True,
     ).stdout
-    return [p for p in out.split("\0") if p and not p.startswith(GENERATED_PREFIXES)]
+    return [p for p in out.split("\0") if p]
 
 
 def _read(relative: str) -> str:
@@ -171,6 +167,9 @@ def test_every_manifest_url_names_the_source_of_truth() -> None:
         "plugin.json homepage": plugin["homepage"],
         "plugin.json repository": plugin["repository"],
     }
+    # The git-subdir source Claude Code fetches each installed plugin from.
+    for entry in marketplace["plugins"]:
+        urls[f"marketplace.json {entry['name']} source.url"] = entry["source"]["url"]
     for field in ("Homepage", "Repository", "Issues"):
         match = re.search(rf'^{field}\s*=\s*"(?P<url>[^"]+)"', pyproject, re.M)
         assert match, f"python/pyproject.toml [project.urls] lost {field}"

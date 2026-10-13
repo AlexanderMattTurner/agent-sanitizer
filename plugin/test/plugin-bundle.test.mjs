@@ -1,11 +1,13 @@
 /**
- * Behavioural gate for the Claude Code plugin: the committed bundle is
- * reproducible, self-contained, and every hook still reaches its verdict when
- * spawned the way Claude Code spawns it — through the launcher, from a foreign
- * cwd, with no node_modules beside it.
+ * Behavioural gate for the Claude Code plugin: the built bundle is current,
+ * self-contained, and every hook still reaches its verdict when spawned the way
+ * Claude Code spawns it — through the launcher, from a foreign cwd, with no
+ * node_modules beside it.
  *
- * The plugin is STAGED into a temp dir for every subprocess case, so a test can
- * corrupt the bundle or strip PATH without touching the repo tree.
+ * Runs against the plugin as built in this checkout (`pnpm build:plugin`, which
+ * `pnpm install` runs, and `pnpm build:redactor`). The plugin is STAGED into a
+ * temp dir for every subprocess case, so a test can corrupt the bundle or strip
+ * PATH without touching the repo tree.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -28,21 +30,16 @@ import { isBuiltin } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { BAKED_ARTIFACTS } from "../scripts/baked-artifacts.mjs";
 import {
   BUNDLE_PATH,
-  REQUIREMENTS_IN_PATH,
   REQUIREMENTS_LOCK_PATH,
   bundlePluginHook,
   lockedEngineVersion,
   packageDirs,
   redactorRequirements,
 } from "../scripts/build-plugin.mjs";
-import {
-  MANIFEST_PATH,
-  PLATFORMS,
-  parseManifest,
-  repositorySlug,
-} from "../scripts/build-hook-binaries.mjs";
+import { MANIFEST_PATH } from "../scripts/build-hook-binaries.mjs";
 import {
   bundleTarget,
   runtimeRequires,
@@ -109,10 +106,33 @@ function scratch(t) {
   return dir;
 }
 
-/** Copy the shipped plugin tree into a scratch dir and return its root. */
+/** The hook-binary manifest's path inside a plugin tree. */
+const MANIFEST_REL = join("dist", "hooks", "hook-binaries.sha256");
+
+/**
+ * The manifest every staged plugin carries. Only the release bake writes the
+ * real one (it digests four ~100 MB bun compiles), and the launcher only
+ * compares it byte-for-byte with a binary's install stamp, so a fixed text
+ * stands in for it everywhere below.
+ */
+const STAGED_MANIFEST = "# staged hook-binary manifest\n";
+
+// Every case below runs the built plugin, so an unbuilt one would fail each of
+// them with a stack naming a missing file rather than the step that writes it.
+const UNBUILT = BAKED_ARTIFACTS.filter(
+  (path) => join(ROOT, path) !== MANIFEST_PATH && !existsSync(join(ROOT, path)),
+);
+if (UNBUILT.length > 0)
+  throw new Error(
+    `the plugin is not built (missing: ${UNBUILT.join(", ")}). Run ` +
+      "`pnpm build:plugin && pnpm build:redactor` first.",
+  );
+
+/** Copy the built plugin tree into a scratch dir and return its root. */
 function stagePlugin(t) {
   const dir = join(scratch(t), "plugin");
   cpSync(PLUGIN_DIR, dir, { recursive: true });
+  writeFileSync(join(dir, MANIFEST_REL), STAGED_MANIFEST);
   return dir;
 }
 
@@ -349,75 +369,35 @@ function stubBin(t, omit) {
   return dir;
 }
 
-// ─── The committed artifact ──────────────────────────────────────────────────
+// ─── The built artifact ──────────────────────────────────────────────────────
 
-test("the shipped artifacts are tracked by git, not just present on disk", () => {
-  // The build writes these locally, so every other assertion in this file passes
-  // against an UNTRACKED file — a .gitignore rule that swallows them ships a
-  // plugin with no bundle at all, and only a fresh clone notices. Ask git what it
-  // tracks rather than the filesystem what exists.
-  const tracked = spawnSync(
-    "git",
-    [
-      "ls-files",
-      "--",
-      "plugin/dist",
-      "plugin/requirements.in",
-      "plugin/requirements.txt",
-    ],
-    {
-      cwd: ROOT,
-      encoding: "utf8",
-    },
-  )
-    .stdout.split("\n")
-    .filter(Boolean);
-  for (const required of [
-    "plugin/dist/hooks/plugin-hooks.bundle.mjs",
-    "plugin/dist/hooks/hook-binaries.sha256",
-    "plugin/dist/redactor/daemon.pyz",
-    `plugin/dist/redactor/${ENGINE_WHEEL}`,
-    "plugin/requirements.in",
+test("the plugin's build output is git-ignored and untracked; its lock is tracked", () => {
+  // Only the release bake commits these, onto plugin-dist. Tracked here, they
+  // would be a second copy that every source change has to regenerate and every
+  // two such branches conflict on; un-ignored, a stray `git add -A` commits one.
+  const git = (...args) =>
+    spawnSync("git", args, { cwd: ROOT, encoding: "utf8" })
+      .stdout.split("\n")
+      .filter(Boolean);
+  assert.ok(BAKED_ARTIFACTS.length > 0, "baked-artifacts.mjs lists nothing");
+  assert.deepEqual(git("ls-files", "--", ...BAKED_ARTIFACTS), []);
+  assert.deepEqual(
+    git("check-ignore", "--no-index", "--", ...BAKED_ARTIFACTS),
+    BAKED_ARTIFACTS,
+  );
+  // The lock is compiled over the network, so the build cannot regenerate it:
+  // it is source, and must stay tracked beside the outputs it pins.
+  assert.deepEqual(git("ls-files", "--", "plugin/requirements.txt"), [
     "plugin/requirements.txt",
-  ])
-    assert.ok(
-      tracked.includes(required),
-      `${required} is not tracked by git (an ignore rule is swallowing it); tracked: ${JSON.stringify(tracked)}`,
-    );
+  ]);
 });
 
-test("committed bundle matches a fresh build from this tree", async () => {
+test("the built bundle is current with this tree (`pnpm build:plugin`)", async () => {
   assert.equal(readFileSync(BUNDLE_PATH, "utf-8"), await bundlePluginHook());
 });
 
-// The manifest describes the binaries attached to the last RELEASE, and it is
-// refreshed on the default branch (auto-version.yaml) rather than per-PR, so on
-// a branch that moves the bundle it is stale BY DESIGN — there is no freshness
-// claim for the offline suite to assert. What it can still gate is the shape
-// the SessionStart provisioner reads, and the release slug, which is stable
-// across a bundle change and wrong for a fork that never regenerated. The
-// freshness round trip is release-hook-binaries.sh's `--check`: it refuses to
-// upload binaries that do not reproduce the manifest users verify against.
-test("hook-binary manifest carries a full digest for every supported platform", () => {
-  const manifest = parseManifest(readFileSync(MANIFEST_PATH, "utf-8"));
-  assert.deepEqual(
-    Object.keys(manifest.digests).sort(),
-    Object.keys(PLATFORMS).sort(),
-  );
-  for (const [platform, digest] of Object.entries(manifest.digests))
-    assert.match(digest, /^[0-9a-f]{64}$/, `bad digest for ${platform}`);
-  // The provisioner downloads from this slug's releases, so a fork that
-  // repoints package.json's repository.url must regenerate the manifest too —
-  // otherwise its users fetch (and reject, on digest) the upstream's binaries.
-  assert.equal(manifest.repository, repositorySlug());
-});
-
-test("committed requirements.in matches the secrets extra", () => {
-  assert.equal(
-    readFileSync(REQUIREMENTS_IN_PATH, "utf-8"),
-    redactorRequirements(),
-  );
-  assert.match(readFileSync(REQUIREMENTS_IN_PATH, "utf-8"), /^detect-secrets/m);
+test("the redactor requirements carry the secrets extra's detector", () => {
+  assert.match(redactorRequirements(), /^detect-secrets/m);
 });
 
 // Compiling the lock needs the network, so the offline suite cannot re-resolve
@@ -579,7 +559,7 @@ test("hooks.json wires exactly the four modes, each through the launcher", () =>
   // in the transcript and no way to ask for the closed posture.
   for (const command of commands.filter((c) => c.includes("--hook=")))
     assert.match(command, /safe-launch\.sh/);
-  // Daemon resolution lives in the LAUNCHER (venv when provisioned, committed
+  // Daemon resolution lives in the LAUNCHER (venv when provisioned, shipped
   // zipapp as the floor), so no command may pin a daemon path here: an env
   // prefix in hooks.json would point at the venv unconditionally and reopen
   // the no-venv cold-start hole the zipapp exists to close.
@@ -1200,10 +1180,7 @@ function stageHookBinary(t, body, { mode = 0o755, dirMode = 0o700 } = {}) {
   // The install stamp the provisioner writes beside every binary it installs:
   // without it the launcher reads the binary as installed from some OTHER
   // manifest and prefers node, which is not the state these cases model.
-  cpSync(
-    join(PLUGIN_DIR, "dist", "hooks", "hook-binaries.sha256"),
-    join(dir, ".manifest-installed"),
-  );
+  writeFileSync(join(dir, ".manifest-installed"), STAGED_MANIFEST);
   // Stated, not inherited from the runner's umask: the launcher refuses to
   // execute a binary out of a group- or other-writable directory, so a
   // permissive umask would silently turn every case below into that refusal.
@@ -2990,17 +2967,17 @@ test("every wired hook sits in exactly one degraded-response class", () => {
   assert.ok(wiredHooks().length >= 4);
 });
 
-// ─── The committed Python artifact ───────────────────────────────────────────
+// ─── The shipped Python artifact ─────────────────────────────────────────────
 //
-// The redactor daemon ships as a committed, self-contained zipapp so a session
-// with no provisioned venv and no network still redacts from the first tool
-// call — the same cold-start hole the JS bundle closes, on the Python side.
+// The redactor daemon ships as a self-contained zipapp so a session with no
+// provisioned venv and no network still redacts from the first tool call — the
+// same cold-start hole the JS bundle closes, on the Python side.
 
 const PYZ_PATH = join(PLUGIN_DIR, "dist", "redactor", "daemon.pyz");
 
 test("the redactor zipapp is platform-independent (no compiled artifacts)", () => {
-  // A .pyz committed from one machine with a .so inside runs nowhere else —
-  // worse than no bundle. PyYAML and charset_normalizer both fall back to pure
+  // A .pyz built on one machine with a .so inside runs nowhere else — worse
+  // than no bundle. PyYAML and charset_normalizer both fall back to pure
   // Python when their speedups are absent, which is what makes this possible.
   const res = spawnSync(
     "python3",
@@ -3016,9 +2993,9 @@ sys.exit(1 if bad else 0)`,
   assert.equal(res.status, 0, "compiled artifacts found inside daemon.pyz");
 });
 
-test("with no venv and no env override, the output hook redacts via the committed zipapp", (t) => {
+test("with no venv and no env override, the output hook redacts via the shipped zipapp", (t) => {
   // The whole point of the artifact: this is a REAL engine run — python3 plus
-  // the committed .pyz, nothing provisioned — driven through the launcher the
+  // the built .pyz, nothing provisioned — driven through the launcher the
   // way Claude Code drives it.
   const plugin = stagePlugin(t);
   const res = launch(

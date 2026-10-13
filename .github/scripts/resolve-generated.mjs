@@ -25,7 +25,7 @@
 //   --root=<dir>       act on the tree at <dir> instead of this script's own repo.
 //
 // A run also STAGES each rule's outputs that are still unmerged once the rule
-// succeeds. A generated file git could not merge (plugin/dist is binary) keeps
+// succeeds. A generated file git could not merge (one marked binary) keeps
 // its three index stages after the generator rewrites the working copy, and the
 // resolver reads "still unmerged" as "did not regenerate cleanly".
 //

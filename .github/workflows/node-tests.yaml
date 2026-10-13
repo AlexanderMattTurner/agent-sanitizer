@@ -33,6 +33,12 @@ jobs:
         with:
           setup-python: "true"
 
+      # The plugin suites run the built plugin. `pnpm install` (prepare) wrote
+      # the offline half; the zipapp and the engine wheel need PyPI, so they are
+      # built here, from this tree, before any suite reads them.
+      - name: Build the redactor zipapp
+        run: pnpm build:redactor
+
       - name: Check if test script is configured
         id: check
         run: bash .github/scripts/script-configured-output.sh test configured
@@ -78,8 +84,8 @@ jobs:
         run: node --test .github/scripts/lib/anthropic-ladder.test.mjs
 
       # Named explicitly rather than left to `pnpm test`'s discovery. This suite
-      # gates the shipped plugin artifact — the reproducibility byte-compare and
-      # every hook's fail-closed verdict — so which invocation reaches it must be
+      # gates the plugin as it ships — the built bundle, the launcher and every
+      # hook's fail-closed verdict — so which invocation reaches it must be
       # visible here, not inferred from a default that a future config change
       # could silently narrow.
       - name: Run plugin tests
@@ -100,7 +106,7 @@ jobs:
       # ratchet from src/'s 100% (see `SCOPES` in scripts/coverage.mjs), applied
       # by `pnpm test` above. It is deliberately below the measured value: part
       # of this code is driven the way Claude Code drives it, as subprocesses
-      # running the committed BUNDLE, and those lines are attributed to the
+      # running the built BUNDLE, and those lines are attributed to the
       # bundle rather than back to the source, so the ratio moves when a file
       # merely grows. The ratio is a backstop, not the real gate; the behavioural
       # gates still hold this code — the degraded-verdict matrix, the env-var
@@ -124,53 +130,22 @@ jobs:
         with:
           setup-python: "true"
 
-      # Installs the pinned agent-sanitizer[secrets] from PyPI into a scratch
-      # CLAUDE_PLUGIN_DATA, exactly as the SessionStart provisioner does, then
-      # drives all four hooks through the launcher against a golden corpus.
+      # The engine wheel the provisioner installs is built beside the zipapp,
+      # from this tree; the hook bundle was built by `pnpm install` (prepare).
+      - name: Build the redactor zipapp
+        run: pnpm build:redactor
+
+      # Provisions the built engine wheel into a scratch CLAUDE_PLUGIN_DATA,
+      # exactly as the SessionStart provisioner does, then drives all four hooks
+      # through the launcher against a golden corpus.
       - name: Drive the hooks against the real engine
         run: node .github/scripts/plugin-live-engine.mjs
-
-      # The zipapp's reproducibility check lives here rather than in the default
-      # suite because rebuilding it needs PyPI; the network-free suite asserts
-      # the committed artifact's properties (tracked, pure-Python, runnable)
-      # without rebuilding.
-      - name: Rebuild the redactor zipapp and byte-compare
-        run: |
-          node plugin/scripts/build-redactor-pyz.mjs
-          git diff --exit-code plugin/dist/redactor
-
-      # No hook-binary digest round-trip here: the manifest describes the
-      # binaries attached to the last RELEASE, and it is refreshed on the
-      # default branch (auto-version.yaml), so on a PR that moves the bundle it
-      # is stale by design and `--check` would be red on every such PR.
-      # release-hook-binaries.sh runs the round-trip at the one moment it is
-      # meaningful — it refuses to upload binaries that do not reproduce the
-      # manifest users verify their download against.
-
-  # Ungated on purpose: a dist-only PR is exactly the case this catches, so it
-  # must not sit behind a paths filter that such a PR would miss.
-  dist-provenance:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Check the bundle only moved with its inputs
-        run: |
-          git fetch --no-tags origin "${BASE_REF}"
-          bash .github/scripts/check-dist-provenance.sh "origin/${BASE_REF}"
-        env:
-          BASE_REF: ${{ github.base_ref }}
 
   # Stable Required check: runs even when `test` is cancelled/skipped, so a
   # protected branch never gets stuck on a check that never reports.
   node-tests-passed: # required-check: true
     if: always()
-    needs: [test, live-engine, dist-provenance]
+    needs: [test, live-engine]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -190,10 +165,6 @@ jobs:
           # so the combining has to happen at the call site. Passing the failing
           # job's own result (rather than a flattened 'failure') keeps the
           # reporter's cancelled-vs-superseded adjudication intact.
-          # dist-provenance is skipped on push-to-main (it needs a PR base), and
-          # a skip there is benign, so it is compared against both.
           result: >-
             ${{ needs.test.result != 'success' && needs.test.result
-             || needs.live-engine.result != 'success' && needs.live-engine.result
-             || (needs.dist-provenance.result == 'skipped' && 'success')
-             || needs.dist-provenance.result }}
+             || needs.live-engine.result }}

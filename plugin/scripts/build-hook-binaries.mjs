@@ -1,24 +1,20 @@
 /**
- * Compile the committed hook bundle into one self-contained executable per
+ * Compile the built hook bundle into one self-contained executable per
  * supported platform with `bun build --compile`, and pin their SHA-256 digests
- * in the committed manifest `plugin/dist/hooks/hook-binaries.sha256`.
+ * in the manifest `plugin/dist/hooks/hook-binaries.sha256`.
  *
- * The binaries themselves are never committed (~100 MB each): the release
- * workflow rebuilds them and attaches them to the GitHub release, and the
- * SessionStart provisioner (`provision-hook-binary.sh`) downloads the one for
- * its platform and verifies it against the manifest before installing it. What
- * makes the committed digest the truth for a binary built elsewhere is that
- * `bun build --compile` is byte-deterministic for a fixed (bun version, target,
- * input bundle, outfile name) — so this build, the CI `--check` rebuild, and
- * the release build all produce identical bytes, and the reproducibility gate
- * survives as a digest round-trip even though the artifact lives outside git.
+ * The release workflow (`.github/workflows/plugin-dist.yaml`) runs this from
+ * the tagged tree with `--outdir`, attaches the binaries (~100 MB each) to the
+ * GitHub release, and bakes the manifest onto the `plugin-dist` branch beside
+ * the bundle it was compiled from. The SessionStart provisioner
+ * (`provision-hook-binary.sh`) downloads the binary for its platform and
+ * verifies it against that manifest before installing it. `bun build
+ * --compile` is byte-deterministic for a fixed (bun version, target, input
+ * bundle, outfile name), so anyone can rebuild a release and reproduce its
+ * digests.
  *
  * Needs the network on a cold cache: bun downloads each cross-target runtime
- * once, so the offline pre-commit rebuild cannot run it. The manifest is
- * refreshed by `auto-version.yaml` (`--if-stale`) on the default branch, ahead
- * of the release that uploads the binaries it describes — and only there: a
- * per-PR regen rewrites every digest, and `.gitattributes` marks plugin/dist
- * binary, so any two such branches conflict irreconcilably on the second merge.
+ * once.
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -42,7 +38,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 /** Repo root (this script lives at plugin/scripts/). */
 const ROOT = resolve(__dirname, "..", "..");
 
-/** Committed digest manifest, in `sha256sum -c` line format. */
+/** Digest manifest, in `sha256sum -c` line format. */
 export const MANIFEST_PATH = join(
   ROOT,
   "plugin",
@@ -166,22 +162,6 @@ export function parseManifest(text) {
   };
 }
 
-/**
- * Whether the committed manifest already describes THIS tree: same bundle,
- * same pinned bun, same repository. True means a rebuild would reproduce it
- * byte-for-byte, so `--if-stale` skips the compile entirely.
- */
-function manifestIsCurrent() {
-  if (!existsSync(MANIFEST_PATH)) return false;
-  const manifest = parseManifest(readFileSync(MANIFEST_PATH, "utf-8"));
-  return (
-    manifest.bundle === sha256(BUNDLE_PATH) &&
-    manifest.bun === installedBunVersion() &&
-    manifest.repository === repositorySlug() &&
-    Object.keys(PLATFORMS).every((platform) => manifest.digests[platform])
-  );
-}
-
 /** The name the compile input is given inside `outdir` — see compileBinaries. */
 const COMPILE_INPUT = "plugin-hooks.bundle.mjs";
 
@@ -194,7 +174,7 @@ const COMPILE_INPUT = "plugin-hooks.bundle.mjs";
  * makes a build reproduce only on the machine that ran it — this repo's
  * checkout lives at a different absolute path than CI's, so the digests would
  * never agree. Copying the bundle in and naming it relatively is what makes
- * the committed manifest verifiable anywhere.
+ * a release's manifest verifiable anywhere.
  * @param {string} outdir
  * @returns {Record<string, string>}
  */
@@ -231,10 +211,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     .find((a) => a.startsWith("--outdir="))
     ?.slice("--outdir=".length);
   if (outdirArg === "") throw new Error("--outdir= needs a path");
-  if (args.includes("--if-stale") && manifestIsCurrent()) {
-    process.stdout.write("hook-binary manifest already current\n");
-    process.exit(0);
-  }
+  const unknown = args.filter((a) => !a.startsWith("--outdir="));
+  if (unknown.length > 0)
+    throw new Error(`unknown arguments: ${unknown.join(" ")}`);
   const outdir =
     outdirArg ?? mkdtempSync(join(tmpdir(), "agent-sanitizer-hook-binaries-"));
   try {
@@ -244,29 +223,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       repository: repositorySlug(),
       digests: compileBinaries(outdir),
     });
-    if (args.includes("--check")) {
-      const committed = readFileSync(MANIFEST_PATH, "utf-8");
-      if (committed !== built)
-        throw new Error(
-          "committed hook-binary manifest does not match a rebuild from this tree.\n" +
-            `--- committed (${MANIFEST_PATH})\n${committed}` +
-            `--- rebuilt\n${built}` +
-            "Regenerate with `node plugin/scripts/build-hook-binaries.mjs`.",
-        );
-      process.stdout.write("hook-binary manifest reproduced byte-for-byte\n");
-    } else {
-      const existing = existsSync(MANIFEST_PATH)
-        ? readFileSync(MANIFEST_PATH, "utf-8")
-        : null;
-      if (existing === built) {
-        process.stdout.write("hook-binary manifest already current\n");
-      } else {
-        writeFileSync(MANIFEST_PATH, built);
-        process.stdout.write(
-          "hook-binary manifest regenerated from this tree\n",
-        );
-      }
-    }
+    mkdirSync(dirname(MANIFEST_PATH), { recursive: true });
+    writeFileSync(MANIFEST_PATH, built);
+    process.stdout.write(`wrote ${MANIFEST_PATH}\n`);
   } finally {
     if (!outdirArg) rmSync(outdir, { recursive: true, force: true });
   }

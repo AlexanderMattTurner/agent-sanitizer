@@ -6,48 +6,43 @@
  * that module is imported by every hook at runtime, and a shell template string
  * is not hook I/O. The closed set still lives there — this only renders it.
  *
- * Usage: `pnpm gen:fail-open-lib` (writes the file), or `node
- * scripts/gen-fail-open-lib.mjs --stdout` to inspect the bytes.
+ * `plugin/scripts/build-plugin.mjs` writes the file (`pnpm build:plugin`); it is
+ * git-ignored and baked onto the `plugin-dist` branch with the rest of the
+ * plugin's build output. `node scripts/gen-fail-open-lib.mjs` prints the bytes.
  */
 import { realpathSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
   FAIL_CLOSED_VALUES,
   FAIL_OPEN_ENV,
 } from "../claude-hooks/lib/hook-io.mjs";
-import { writeGenerated } from "./lib/write-generated.mjs";
 
-const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 export const OUTPUT_PATH = join("plugin", "scripts", "lib", "fail-open.sh");
 
 /**
- * The committed bytes of `plugin/scripts/lib/fail-open.sh`: a shell function
- * deciding the posture exactly as `failOpenEnabled()` does, rendered from
+ * The bytes of `plugin/scripts/lib/fail-open.sh`: a shell function deciding
+ * the posture exactly as `failOpenEnabled()` does, rendered from
  * `FAIL_CLOSED_VALUES` so the shell and JS spellings come from one source.
- *
- * Emitted already Prettier-clean (two-space indent, trailing newline) because a
- * generator whose output a formatter then rewrites makes the round-trip test
- * fail on a freshly regenerated file.
  * @returns {string}
  */
 export function failOpenShellLib() {
   return `# shellcheck shell=bash
 # GENERATED from FAIL_CLOSED_VALUES in claude-hooks/lib/hook-io.mjs by
-# scripts/gen-fail-open-lib.mjs — do not edit by hand. Regenerate with:
+# scripts/gen-fail-open-lib.mjs — do not edit by hand. Rebuild with:
 #
-#   pnpm gen:fail-open-lib
+#   pnpm build:plugin
 #
 # The posture knob (${FAIL_OPEN_ENV}) has to be read by shell shims that
 # cannot import the JS. Rather than restate the closed set in each of them, they
-# source this one function. plugin/test/fail-open-parity.test.mjs asserts these
-# bytes are what the generator still produces, and tests/test_safe_launch.py
+# source this one function. plugin/test/fail-open-parity.test.mjs asserts it
+# decides exactly as failOpenEnabled() does, and tests/test_safe_launch.py
 # asserts every remaining hand-written implementation agrees with it.
 #
 # Returns 0 to fail OPEN (the default: the guarded action runs, loudly), 1 to
 # fail CLOSED (block/ask/suppress). Sourced, never executed — hence no shebang
-# and no +x bit (the repo's shebang/executable pre-commit hook pairs the two).
+# and no +x bit.
 agent_sanitizer_fail_open() {
   case "\${${FAIL_OPEN_ENV}:-}" in
   ${FAIL_CLOSED_VALUES.join(" | ")}) return 1 ;;
@@ -57,13 +52,8 @@ agent_sanitizer_fail_open() {
 `;
 }
 
-// Importable without side effects: the parity test reads `failOpenShellLib()`
-// and must not rewrite the committed file just by importing this module.
 if (
   process.argv[1] &&
   realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
-  if (process.argv.includes("--stdout"))
-    process.stdout.write(failOpenShellLib());
-  else writeGenerated(join(ROOT, OUTPUT_PATH), failOpenShellLib());
-}
+)
+  process.stdout.write(failOpenShellLib());

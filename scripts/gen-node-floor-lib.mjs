@@ -13,13 +13,13 @@
  * `gen-fail-open-lib.mjs`): nothing a hook imports at runtime should carry a
  * shell template.
  *
- * Usage: `pnpm gen:node-floor-lib` (writes the file), or `node
- * scripts/gen-node-floor-lib.mjs --stdout` to inspect the bytes.
+ * `plugin/scripts/build-plugin.mjs` writes the file (`pnpm build:plugin`); it is
+ * git-ignored and baked onto the `plugin-dist` branch with the rest of the
+ * plugin's build output. `node scripts/gen-node-floor-lib.mjs` prints the bytes.
  */
 import { readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { writeGenerated } from "./lib/write-generated.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 export const OUTPUT_PATH = join("plugin", "scripts", "lib", "node-floor.sh");
@@ -54,30 +54,25 @@ export function nodeMajorFloor() {
 }
 
 /**
- * The committed bytes of `plugin/scripts/lib/node-floor.sh`: the floor plus the
- * two helpers the launcher diagnoses with.
- *
- * Emitted already Prettier-clean so a freshly regenerated file still passes the
- * round-trip test.
+ * The bytes of `plugin/scripts/lib/node-floor.sh`: the floor plus the two
+ * helpers the launcher diagnoses with.
  * @returns {string}
  */
 export function nodeFloorShellLib() {
   const floor = nodeMajorFloor();
   return `# shellcheck shell=bash
 # GENERATED from engines.node in package.json by scripts/gen-node-floor-lib.mjs
-# — do not edit by hand. Regenerate with:
+# — do not edit by hand. Rebuild with:
 #
-#   pnpm gen:node-floor-lib
+#   pnpm build:plugin
 #
 # The plugin launcher runs inside an INSTALLED plugin, where package.json is not
 # on disk, so it cannot read the floor at runtime. Rather than re-type the
 # number there (where it would drift the day engines.node moves),
 # scripts/safe-launch.sh sources this. plugin/test/node-floor-parity.test.mjs
-# asserts these bytes are what the generator still produces AND that the shell
-# comparison agrees with the declared range.
+# asserts the shell comparison agrees with the declared range.
 #
-# Sourced, never executed — hence no shebang and no +x bit (the repo's
-# shebang/executable pre-commit hook pairs the two).
+# Sourced, never executed — hence no shebang and no +x bit.
 AGENT_SANITIZER_NODE_MAJOR_FLOOR=${floor}
 
 # The major version \`$1\` (a node binary) reports, or nothing when it cannot be
@@ -113,13 +108,8 @@ agent_sanitizer_node_meets_floor() {
 `;
 }
 
-// Importable without side effects: the parity test reads `nodeFloorShellLib()`
-// and must not rewrite the committed file just by importing this module.
 if (
   process.argv[1] &&
   realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
-  if (process.argv.includes("--stdout"))
-    process.stdout.write(nodeFloorShellLib());
-  else writeGenerated(join(ROOT, OUTPUT_PATH), nodeFloorShellLib());
-}
+)
+  process.stdout.write(nodeFloorShellLib());

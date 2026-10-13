@@ -75,10 +75,10 @@ NOT_THE_FLOOR = {
 }
 
 
-# Tracked but not hand-written: a generated bundle, a lockfile and the
-# append-only release notes restate versions nobody here chose, and none of them
-# is a place a maintainer would copy the floor into.
-GENERATED_PREFIXES = ("plugin/dist/", "pnpm-lock.yaml", "uv.lock", "CHANGELOG.md")
+# Tracked but not hand-written: the lockfiles and the append-only release notes
+# restate versions nobody here chose, and none of them is a place a maintainer
+# would copy the floor into.
+GENERATED_PREFIXES = ("pnpm-lock.yaml", "uv.lock", "CHANGELOG.md")
 
 
 def _tracked_files() -> list[str]:

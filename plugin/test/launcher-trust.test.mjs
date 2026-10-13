@@ -30,6 +30,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { PYZ_PATH } from "../scripts/build-redactor-pyz.mjs";
+
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const PLUGIN_DIR = join(ROOT, "plugin");
 const MANIFEST_REL = join("dist", "hooks", "hook-binaries.sha256");
@@ -44,14 +46,18 @@ function scratch(t) {
   return dir;
 }
 
-/** The launcher and its libs, plus the manifest its stale-binary check reads. */
+/**
+ * The launcher and its libs, plus a manifest for its stale-binary check. The
+ * launcher only compares the manifest byte-for-byte with the install stamp, so
+ * fixed text stands in for the one only the release bake writes.
+ */
 function stagePlugin(t) {
   const plugin = join(scratch(t), "plugin");
   cpSync(join(PLUGIN_DIR, "scripts"), join(plugin, "scripts"), {
     recursive: true,
   });
   mkdirSync(join(plugin, "dist", "hooks"), { recursive: true });
-  cpSync(join(PLUGIN_DIR, MANIFEST_REL), join(plugin, MANIFEST_REL));
+  writeFileSync(join(plugin, MANIFEST_REL), "# staged hook-binary manifest\n");
   return plugin;
 }
 
@@ -409,7 +415,7 @@ for (const [name, opts, runtime, mutate] of STALE_CASES)
 
 // ─── What the runtimes are handed ────────────────────────────────────────────
 
-test("both runtimes are told where the committed zipapp is", (t) => {
+test("both runtimes are told where the shipped zipapp is", (t) => {
   // The compiled binary resolves its modules inside bun's virtual filesystem,
   // where a module-relative zipapp path names nothing on disk.
   const s = setup(t);
@@ -417,8 +423,8 @@ test("both runtimes are told where the committed zipapp is", (t) => {
     JSON.parse(launch(s, { env: NO_BINARY }).stdout).pyz,
     join(s.plugin, PYZ_REL),
   );
-  // The path names the artifact the plugin really ships there.
-  assert.ok(existsSync(join(PLUGIN_DIR, PYZ_REL)));
+  // The path names the artifact the build really writes there.
+  assert.equal(join(PLUGIN_DIR, PYZ_REL), PYZ_PATH);
 });
 
 test("an explicit zipapp path is honored, not overwritten", (t) => {

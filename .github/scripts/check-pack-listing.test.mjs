@@ -57,10 +57,32 @@ test("a non-.mjs file actually under src/ fails", () => {
   assert.doesNotMatch(res.stderr, /types\/src/);
 });
 
-test("a src/ path at the start of a line is still caught", () => {
-  const res = gate(["src/oops.py"]);
+test("a src/ path as the only packed file is still caught", () => {
+  const res = gate(["npm notice 1kB src/oops.py"]);
   assert.equal(res.status, 1);
   assert.match(res.stderr, /src\/oops\.py/);
+});
+
+// Regression: `npm pack` echoes the lifecycle scripts it runs, and `prepare`
+// prints `node plugin/scripts/build-plugin.mjs` plus the src/ tables it writes.
+// Read as packed paths, that output reported the plugin tree as shipped.
+test("lifecycle-script output naming plugin/ and src/ is not a packed file", () => {
+  const res = gate([
+    "> agent-sanitizer@1.0.1 prepare",
+    "> pnpm gen:unicode && pnpm build:plugin && pnpm build:types",
+    "$ node plugin/scripts/build-plugin.mjs",
+    "wrote /work/src/cf-charset.d.ts",
+    "plugin artifacts already current",
+    ...HEALTHY,
+  ]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stderr, "");
+});
+
+test("a listing that names no packed file fails rather than passing empty", () => {
+  const res = gate(["npm notice === Tarball Contents ===", "src/oops.py"]);
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /names no packed file/);
 });
 
 test("python egg-info build artifacts fail", () => {

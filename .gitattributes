@@ -164,8 +164,3 @@ poetry.lock      -merge
 Gemfile.lock     -merge
 go.sum           -merge
 go.work.sum      -merge
-
-# plugin/dist is a build output committed for the plugin loader. `-merge` refuses
-# the line merge between two builds; regenerate instead. It sits LAST so it wins
-# over the mergiraf patterns above for every file type it contains.
-plugin/dist/** -merge linguist-generated=true
