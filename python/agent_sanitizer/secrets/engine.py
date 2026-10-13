@@ -43,6 +43,7 @@ from .config import RedactorConfig
 from .credential_names import (
     credential_field_name_patterns,
     credential_name_segments,
+    non_secret_name_segments,
 )
 from .invisible import (
     identity_map,
@@ -59,6 +60,10 @@ from .prefilter import LiteralProbe, degroup, denylist_patterns, fold
 # metavariable shape (`YOUR_API_KEY`), a different concept from the redaction
 # placeholder text this matches.
 from .placeholders import PLACEHOLDER_RE as _REDACTED_TEXT_RE
+from .placeholders import MARK_CLOSE as _MARK_CLOSE
+from .placeholders import MARK_OPEN as _MARK_OPEN
+from .placeholders import MASK_SENTINEL as _MASK_SENTINEL
+from .placeholders import SENTINEL_CHARS as _SENTINEL_CHARS
 from .placeholders import placeholder
 
 # Bundled detect-secrets plugins, each mapped to whether its type is
@@ -67,12 +72,10 @@ from .placeholders import placeholder
 # custom plugins carry the same flag in `data/secret-detectors.json`
 # (`cross_line`) and in `_INLINE_PLUGINS` below.
 #
-# Cloudant, IBM Cloud IAM, IBM COS HMAC and SoftLayer are ABSENT: each bundled
-# pattern backtracks cubically on a run of spaces (regexploit complexity 3), so
-# `detectors.py` replaces them with linear equivalents carrying the identical
-# secret_type. See that module's "cubic-backtracking pattern" section. OpenAI is
-# absent too: its pattern is quadratic over repeated `sk-`, and the
-# `OpenAiTokenDetector` row in data/secret-detectors.json replaces it.
+# Every plugin detect-secrets ships is in exactly one of this map and
+# `_DISABLED_BUNDLED` below (tests/secrets/test_secrets_detectors.py partitions
+# the installed package), so an upgrade that adds a plugin fails loudly rather
+# than landing silently off.
 _BUNDLED_PLUGINS = {
     "AWSKeyDetector": True,
     "ArtifactoryDetector": False,
@@ -88,6 +91,34 @@ _BUNDLED_PLUGINS = {
     "StripeDetector": True,
     "TelegramBotTokenDetector": False,
     "TwilioKeyDetector": False,
+}
+# The bundled plugins left OFF, each with the reason. A "replaced by" entry names
+# the detectors.py class carrying the same secret_type without the defect.
+_DISABLED_BUNDLED = {
+    "Base64HighEntropyString": "entropy alone fires on every hash, integrity "
+    "string and data URI — a false-positive flood on ordinary tool output",
+    "HexHighEntropyString": "entropy alone fires on git SHAs and content digests",
+    "IPPublicDetector": "a public IP address is not a credential",
+    "CloudantDetector": "cubic backtracking on a space run; replaced by "
+    "CloudantCredentialsDetector",
+    "IbmCloudIamDetector": "cubic backtracking on a space run; replaced by "
+    "IbmCloudIamKeyDetector",
+    "IbmCosHmacDetector": "cubic backtracking on a space run; replaced by "
+    "IbmCosHmacKeyDetector",
+    "SoftlayerDetector": "cubic backtracking on a space run; replaced by "
+    "SoftlayerCredentialsDetector",
+    "GitHubTokenDetector": "its capture group reports only the prefix, leaking "
+    "the token body; replaced by GitHubClassicTokenDetector",
+    "GitLabTokenDetector": "its capture group reports only the prefix, leaking "
+    "the token body; replaced by GitLabAccessTokenDetector",
+    "JwtTokenDetector": "its lazy signature segment leaks the signature; "
+    "replaced by JwtFullTokenDetector",
+    "KeywordDetector": "an unclosed backtick over-captures thousands of chars; "
+    "replaced by BoundedKeywordDetector",
+    "NpmDetector": "quadratic unbounded `.+`; replaced by NpmDetector (the "
+    "bounded detectors.py class of the same name)",
+    "OpenAIDetector": "quadratic unbounded run after `sk-`; replaced by "
+    "OpenAiTokenDetector",
 }
 PLUGINS = [{"name": name} for name in _BUNDLED_PLUGINS]
 
@@ -171,9 +202,26 @@ PLUGINS_HIGH_CONFIDENCE = [p for p in ALL_PLUGINS if p["name"] != _KEYWORD_PLUGI
 # start offset) per occurrence. Detector matching runs against the pre-replacement
 # text, so the resolved text equals the normal-mode output. The sentinel keeps a
 # space inside so FIELD_VALUE_RE treats it like the space-bearing placeholder.
-_MARK_OPEN = ""
-_MARK_CLOSE = ""
 _MARK_RE = re.compile(f"{_MARK_OPEN}(\\d+) {_MARK_CLOSE}")
+# Every code point the engine reserves for its own bookkeeping. Each is excluded
+# from FIELD_VALUE_RE's value class (so a value stops at a sentinel exactly as it
+# stops at the bracket of a plain-mode placeholder, keeping map mode's text equal
+# to plain mode's) and refused in input by every path that plants one: a text
+# already carrying one would be mis-paired with, or masked as, a secret. The
+# constants live in `placeholders.py` so `RedactorConfig` can refuse an
+# invisible charset that would strip them.
+
+
+def _holds_sentinel(text: str) -> bool:
+    """True when ``text`` carries a code point the engine reserves."""
+    return any(ch in text for ch in _SENTINEL_CHARS)
+
+
+def _refuse_sentinels(text: str) -> None:
+    """Raise when ``text`` carries a reserved code point. This refusal is what
+    keeps a forged sentinel from being reported, or masked, as a secret."""
+    if _holds_sentinel(text):
+        raise ValueError("input contains reserved sentinel characters")
 
 
 class RedactionBudgetExceeded(RuntimeError):
@@ -419,103 +467,194 @@ def _redact_env_bound(
 # appear here: a noun broad enough for a name scrub (`key`, `pat`) would redact
 # whatever follows `key = ` throughout ordinary text.
 _FIELD_NAMES = "|".join(credential_field_name_patterns())
-FIELD_VALUE_RE = re.compile(
-    # An optional quote after the field name absorbs a quoted KEY (`"token": …`),
-    # and the value's own optional opening quote is captured so it can wrap
-    # [REDACTED] — so `"token": "<v>"` and `bearer: '<v>'` redact, not just the
-    # unquoted `token=<v>`. The closing quote is an OPTIONAL backreference: a
-    # value whose closing quote is absent or mismatched (truncated/streamed log
-    # output, a value split so the close lands on the next line the per-line scan
-    # can't see) must still redact, not slip through because a symmetric close
-    # failed to match — the value class excludes quotes, so a backtracked-empty
-    # opening `quote` could never re-consume the literal `"`/`'` itself.
-    # No leading-letter lookbehind so "mypassword: ..." still matches. The value
-    # is non-whitespace/quote/backtick bytes minus the structural delimiters
-    # {}()[] that open shell expansions ${VAR}, command substitutions $(...), code
-    # calls foo(...), and subscripts/array literals a[i] / [x, y] — none occur
-    # inside a contiguous secret token, so excluding them trims a class of
-    # source-code false positives without shortening a real secret. Other specials
-    # (!@#) stay allowed so a symbol inside a secret doesn't truncate the capture
-    # below the length threshold, and the anchor avoids swallowing trailing prose.
-    #
-    # The optional open/close bracket groups peel a wrapper that *encloses* the
-    # value (`password = (<secret>)`, `key: {<secret>}`, `token: ["<secret>"]`):
-    # without them a value that BEGINS with `(`/`{`/`[` (the three excluded from the
-    # value class) left no ≥20-char run for secret_value to anchor on, so the whole
-    # arm failed to match and the secret leaked verbatim. The brackets are matched
-    # only at the value's edge, so the FP guards above are unchanged — `${VAR}`/
-    # `$(...)`/`foo(...)` still begin with `$`/a letter, never the peeled bracket,
-    # so they neither match here nor (as before) reach the length floor.
-    # The assignment operator is `:` `=` or one of the multi-char forms `:=`
-    # `=>` `==` (Go/Pascal walrus, Ruby/PHP hash-rocket, comparison-as-config)
-    # and the shell parameter-expansion operators `:-` `:+` `:?`
-    # (`${SECRET_FILE:-/etc/app/secret}`). A bare `[:=]` matched only the first
-    # char of these, leaving the value to start at the second operator byte
-    # (`= "v"` / `> "v"` / `-/etc/app/secret`). For `:=`/`=>` that value was <20
-    # contiguous chars, so the arm failed and the secret leaked; for `:-`/`:+`/`:?`
-    # the operator byte glued onto the front of the value instead, so a shell
-    # default the value-shape skips below would have passed (a filesystem path, an
-    # env reference, a placeholder) no longer matched its shape and was redacted —
-    # the FALSE POSITIVE that mangles ordinary shell source. Consuming the whole
-    # operator hands each skip the value the author actually wrote, while a real
-    # hardcoded default (`${TOKEN:-ghp_…}`) still redacts.
-    #
-    # `(?:[_-][A-Za-z0-9]+)*` after the keyword lets it be a PREFIX of a longer
-    # underscore/hyphen-segmented identifier (`api_key_prod`, `secret_value`,
-    # the env-suffixed `AWS_SECRET_ACCESS_KEY_OLD`) — without it the keyword had
-    # to abut the operator and these extremely common names leaked verbatim. The
-    # `[_-]` separator is REQUIRED (not a bare `\w*`), so a plain word that merely
-    # starts with a keyword (`secretary` = `secret`+`ary`, `tokenizer`) is not
-    # mistaken for a credential field. The segment body is `[A-Za-z0-9]+`, NOT
-    # `\w+`: `\w` includes `_`, which is also the separator, so `(?:[_-]\w+)*`
-    # let a run of `_` be repartitioned exponentially many ways — measured
-    # catastrophic backtracking (`token` + `"_"*n` + `!` doubled per 2 chars).
-    # Disjoint separator/body classes make each `[_-]`-delimited segment parse
-    # exactly one way, so the match is linear in the input length (see
-    # tests/secrets/test_secrets_engine.py::test_field_value_re_linear_on_underscore_run).
-    # The one-byte `[:=]` arm carries a negative lookahead over the operator
-    # CONTINUATION bytes (`-+?=>~`): an operator this alternation doesn't know
-    # (`=~`, a future `:@`) must fail to match AT ALL — a false negative — never
-    # match its first byte and glue the rest onto the value, where the stray byte
-    # breaks every fullmatch-anchored value-shape skip at once and produces the
-    # false positive that mangles real content. `===` is explicit for the same
-    # reason: `==` alone would leave the third `=` on the value.
-    rf"(?P<field_prefix>(?P<field_name>(?:{_FIELD_NAMES})(?:[_-][A-Za-z0-9]+)*)[\"']?\s*"
-    r"(?P<op>:=|===|==|=>|:[-+?]|[:=](?![-+?=>~]))\s*"
-    r"(?:(?:Bearer|Token|Basic)\s+)?)"
-    r"(?P<openbracket>[(\[{]?)"
-    r"(?P<quote>[\"']?)"
-    # A trailing statement/list terminator is punctuation of the ENCLOSING
-    # syntax, never of the value, but the class above would swallow it and leave
-    # the stray byte on `secret_value` — the same false positive the operator
-    # lookahead above exists to prevent, arriving from the other end. Nine of the
-    # twelve benign-shape gates judge the value with an anchored `fullmatch`, so
-    # one un-peeled `;` disarms all of them at once and rewrites
-    # `const token = process.env.GH_TOKEN;` into `const token = [REDACTED];`.
-    # Peeling it HERE, in the one expression that decides the value's extent,
-    # means no gate can be written that forgets the normalization: no gate ever
-    # sees an un-peeled value. Precision-safe in the redacting direction too —
-    # no issuer's token alphabet contains `;` or `,`, so the peel can only ever
-    # shorten a non-credential. `.` is deliberately NOT peeled: it is a JWT's
-    # own segment separator.
-    #
-    # A QUOTED value runs to its own closing quote, spaces, brackets and
-    # backslash escapes included: a password may hold any of them, so a template
-    # or expansion (`"${TOKEN}"`, `"%(pw)s"`) is told apart by `_TEMPLATE_RE` on
-    # the value, not by stopping short of it. Every arm stops at a map-mode
-    # sentinel. A short or spaced value must then pass
-    # `_short_or_spaced_value_allowed`.
-    r"(?P<secret_value>"
-    r'(?<=")(?:[^"\\\n\ue000\ue001]|\\[^\n\ue000\ue001]){1,4096}(?=")'
-    r"|(?<=')(?:[^'\\\n\ue000\ue001]|\\[^\n\ue000\ue001]){1,4096}(?=')"
-    r"|[^\s\"'`{}()\[\]\ue000\ue001]{19,}[^\s\"'`{}()\[\];,\ue000\ue001]"
-    r"|[^\s\"'`{}()\[\];,\ue000\ue001]{1,19}(?=[\s;,)\]}\"'`]|$)"
-    r")"
-    r"(?P<terminator>[;,]*)"
-    r"(?P<closequote>(?P=quote)?)"
-    r"(?P<closebracket>[)\]}]?)",
-    re.IGNORECASE | re.MULTILINE,
+
+# Typographic quote pairs, opening -> closing. An ASCII quote closes with itself
+# (a backreference); these pair two distinct code points, so each opener gets its
+# own named group and a conditional for its partner (see `_CLOSE_QUOTE`). Every
+# quote is also excluded from the value class, so the fullmatch-anchored benign
+# gates judge `process.env.DB_PASSWORD`, never the quotes around it.
+_TYPOGRAPHIC_QUOTE_PAIRS = (
+    ("\u201c", "\u201d"),  # double, English
+    ("\u2018", "\u2019"),  # single, English
+    ("\u201e", "\u201c"),  # double, German low-high
+    ("\u201a", "\u2018"),  # single, German low-high
+    ("\u00ab", "\u00bb"),  # guillemets
+    ("\u00bb", "\u00ab"),  # reversed guillemets (Danish, German)
+    ("\u2039", "\u203a"),  # single guillemets
+    ("\uff02", "\uff02"),  # fullwidth double
+    ("\uff07", "\uff07"),  # fullwidth single
 )
+_QUOTE_CHARS = "\"'" + "".join(
+    dict.fromkeys(ch for pair in _TYPOGRAPHIC_QUOTE_PAIRS for ch in pair)
+)
+_OPEN_QUOTE = (
+    "(?P<quote>(?P<q_ascii>[\"'])"
+    + "".join(
+        f"|(?P<q{i}>{opener})"
+        for i, (opener, _close) in enumerate(_TYPOGRAPHIC_QUOTE_PAIRS)
+    )
+    + "|)"
+)
+# At most one opener group participates, so at most one conditional is live; a
+# conditional whose group did not participate matches empty. Every close is
+# OPTIONAL — see the closing-quote note on FIELD_VALUE_RE below.
+_CLOSE_QUOTE = (
+    "(?P<closequote>(?(q_ascii)(?P=q_ascii)?)"
+    + "".join(
+        f"(?(q{i}){closer}?)"
+        for i, (_open, closer) in enumerate(_TYPOGRAPHIC_QUOTE_PAIRS)
+    )
+    + ")"
+)
+_ASSIGN_OP = r"(?::=|===|==|=>|:[-+?]|[:=](?![-+?=>~]))"
+# A credential field name, and the name through its assignment operator. Every
+# run is bounded: FIELD_VALUE_RE is tried at every credential noun in the
+# payload, so an unbounded segment or whitespace run would let each attempt scan
+# to the end of a crafted run (`token` + `_token` * n, O(n^2)).
+_FIELD_NAME = rf"(?:{_FIELD_NAMES})(?:[_-][A-Za-z0-9]{{1,64}}){{0,8}}"
+_KEY_TO_OP = rf"[{_QUOTE_CHARS}]?\s{{0,64}}"
+_FIELD_KEY = rf"{_FIELD_NAME}{_KEY_TO_OP}{_ASSIGN_OP}"
+_VALUE_EXCLUDED = rf"\s{_QUOTE_CHARS}`{{}}()\[\]{_SENTINEL_CHARS}"
+
+
+def _field_value_re(*, nested: bool) -> re.Pattern[str]:
+    """The ``field = value`` regex. ``nested`` builds the variant tried INSIDE a
+    value already judged benign — a value made of further pairs, joined by a
+    pair delimiter (`&` `;` `,`). Its value stops at that delimiter, so
+    `token_type=bearer&access_token=X&expires_in=3600` judges `X` on its own
+    span and the redaction leaves `&expires_in=3600` (and the `&` before a
+    following credential pair) in place. It also stops where another credential
+    field's assignment begins, for a pair glued on with no delimiter; that bound
+    is what keeps the nested pass linear — each inner value ends at the next
+    inner key instead of re-scanning to the end of the enclosing value once per
+    key. Top-level values stop at neither: a human-chosen password containing
+    `&` or `Secret:` must redact whole."""
+    delimiters = "&;," if nested else ""
+    excluded = _VALUE_EXCLUDED + delimiters
+    body = rf"[^{excluded}]"
+    last = rf"[^{excluded};,]"
+    stop = rf"\n{_SENTINEL_CHARS}{delimiters}"
+    if nested:
+        body = rf"(?:(?!{_FIELD_KEY}){body})"
+        last = rf"(?!{_FIELD_KEY}){last}"
+
+    def quoted(q: str) -> str:
+        char = rf"(?:[^{q}\\{stop}]|\\[^{stop}])"
+        if nested:
+            char = rf"(?:(?!{_FIELD_KEY}){char})"
+        return rf"(?<={q}){char}{{1,4096}}(?={q})"
+
+    return re.compile(
+        # An optional quote after the field name absorbs a quoted KEY (`"token": …`),
+        # and the value's own optional opening quote is captured so it can wrap
+        # [REDACTED] — so `"token": "<v>"` and `bearer: '<v>'` redact, not just the
+        # unquoted `token=<v>`. The closing quote is OPTIONAL: a value whose closing
+        # quote is absent or mismatched (truncated/streamed log output, a value
+        # split so the close lands on the next line the per-line scan can't see)
+        # must still redact, not slip through because a symmetric close failed to
+        # match — the unquoted arms exclude quotes, so a backtracked-empty opening
+        # `quote` could never re-consume the literal quote itself.
+        # No leading-letter lookbehind so "mypassword: ..." still matches. The value
+        # is non-whitespace/quote/backtick bytes minus the structural delimiters
+        # {}()[] that open shell expansions ${VAR}, command substitutions $(...), code
+        # calls foo(...), and subscripts/array literals a[i] / [x, y] — none occur
+        # inside a contiguous secret token, so excluding them trims a class of
+        # source-code false positives without shortening a real secret. Other specials
+        # (!@#) stay allowed so a symbol inside a secret doesn't truncate the capture
+        # below the length threshold, and the anchor avoids swallowing trailing prose.
+        #
+        # The optional open/close bracket groups peel a wrapper that *encloses* the
+        # value (`password = (<secret>)`, `key: {<secret>}`, `token: ["<secret>"]`):
+        # without them a value that BEGINS with `(`/`{`/`[` (the three excluded from the
+        # value class) left no ≥20-char run for secret_value to anchor on, so the whole
+        # arm failed to match and the secret leaked verbatim. The brackets are matched
+        # only at the value's edge, so the FP guards above are unchanged — `${VAR}`/
+        # `$(...)`/`foo(...)` still begin with `$`/a letter, never the peeled bracket,
+        # so they neither match here nor (as before) reach the length floor.
+        # The assignment operator is `:` `=` or one of the multi-char forms `:=`
+        # `=>` `==` (Go/Pascal walrus, Ruby/PHP hash-rocket, comparison-as-config)
+        # and the shell parameter-expansion operators `:-` `:+` `:?`
+        # (`${SECRET_FILE:-/etc/app/secret}`). A bare `[:=]` matched only the first
+        # char of these, leaving the value to start at the second operator byte
+        # (`= "v"` / `> "v"` / `-/etc/app/secret`). For `:=`/`=>` that value was <20
+        # contiguous chars, so the arm failed and the secret leaked; for `:-`/`:+`/`:?`
+        # the operator byte glued onto the front of the value instead, so a shell
+        # default the value-shape skips below would have passed (a filesystem path, an
+        # env reference, a placeholder) no longer matched its shape and was redacted —
+        # the FALSE POSITIVE that mangles ordinary shell source. Consuming the whole
+        # operator hands each skip the value the author actually wrote, while a real
+        # hardcoded default (`${TOKEN:-ghp_…}`) still redacts.
+        #
+        # `(?:[_-][A-Za-z0-9]{1,64}){0,8}` after the keyword lets it be a PREFIX of a
+        # longer underscore/hyphen-segmented identifier (`api_key_prod`,
+        # `secret_value`, the env-suffixed `AWS_SECRET_ACCESS_KEY_OLD`) — without it
+        # the keyword had to abut the operator and these extremely common names
+        # leaked verbatim. The `[_-]` separator is REQUIRED (not a bare `\w*`), so a
+        # plain word that merely starts with a keyword (`secretary` = `secret`+`ary`,
+        # `tokenizer`) is not mistaken for a credential field. The segment body is
+        # `[A-Za-z0-9]`, NOT `\w`: `\w` includes `_`, which is also the separator, so
+        # `(?:[_-]\w+)*` let a run of `_` be repartitioned exponentially many ways.
+        # Disjoint separator/body classes make each segment parse exactly one way,
+        # and the bounds keep one attempt O(1) (see `_FIELD_KEY`).
+        # The one-byte `[:=]` arm carries a negative lookahead over the operator
+        # CONTINUATION bytes (`-+?=>~`): an operator this alternation doesn't know
+        # (`=~`, a future `:@`) must fail to match AT ALL — a false negative — never
+        # match its first byte and glue the rest onto the value, where the stray byte
+        # breaks every fullmatch-anchored value-shape skip at once and produces the
+        # false positive that mangles real content. `===` is explicit for the same
+        # reason: `==` alone would leave the third `=` on the value.
+        rf"(?P<field_prefix>(?P<field_name>{_FIELD_NAME}){_KEY_TO_OP}"
+        rf"(?P<op>{_ASSIGN_OP})\s{{0,64}}"
+        r"(?:(?:Bearer|Token|Basic)\s{1,64})?)"
+        r"(?P<openbracket>[(\[{]?)"
+        + _OPEN_QUOTE
+        # A trailing statement/list terminator is punctuation of the ENCLOSING
+        # syntax, never of the value, but the class above would swallow it and leave
+        # the stray byte on `secret_value` — the same false positive the operator
+        # lookahead above exists to prevent, arriving from the other end. Nine of the
+        # twelve benign-shape gates judge the value with an anchored `fullmatch`, so
+        # one un-peeled `;` disarms all of them at once and rewrites
+        # `const token = process.env.GH_TOKEN;` into `const token = [REDACTED];`.
+        # Peeling it HERE, in the one expression that decides the value's extent,
+        # means no gate can be written that forgets the normalization: no gate ever
+        # sees an un-peeled value. Precision-safe in the redacting direction too —
+        # no issuer's token alphabet contains `;` or `,`, so the peel can only ever
+        # shorten a non-credential. `.` is deliberately NOT peeled: it is a JWT's
+        # own segment separator.
+        #
+        # The value takes one of four arms, tried in order. An ASCII-QUOTED value
+        # is the whole span up to its own closing quote — spaces and backslash
+        # escapes included, so `"<key> tail"` and JSON's `"a\"<key>"` redact whole
+        # instead of leaking past the first space or escaped quote. The one-byte
+        # lookbehind is the quote group itself: nothing else in the prefix can end
+        # in a quote. A typographically quoted or unquoted value is either the 20+
+        # char run above, or a 1-19 char run that must end at a terminator; a short
+        # or spaced value is then accepted only by `_short_or_spaced_value_allowed`,
+        # which reads the whole field name. Every arm stops at a reserved sentinel,
+        # as `[` stops it at a plain-mode placeholder, so an earlier redaction is
+        # never swallowed and map mode's text stays equal to plain mode's. A quoted
+        # value may hold brackets, since a password may: a template or expansion
+        # (`"${TOKEN}"`, `"%(pw)s"`) is told apart by `_TEMPLATE_RE` on the value,
+        # not by stopping short of it.
+        + "(?P<secret_value>"
+        + quoted('"')
+        + "|"
+        + quoted("'")
+        + rf"|{body}{{19,}}{last}"
+        + rf"|{last}{{1,19}}(?=[\s;,)\]}}{_QUOTE_CHARS}`{delimiters}]|$)"
+        + ")"
+        r"(?P<terminator>[;,]*)" + _CLOSE_QUOTE + r"(?P<closebracket>[)\]}]?)",
+        re.IGNORECASE | re.MULTILINE,
+    )
+
+
+FIELD_VALUE_RE = _field_value_re(nested=False)
+_NESTED_FIELD_VALUE_RE = _field_value_re(nested=True)
+# A pair delimiter that opens a further credential pair inside a top-level value
+# (`token_url=https://idp/x&password=…`): where `_field_value_spans` tries to
+# end that value early. Each attempt starts only at a delimiter and reads one
+# bounded `_FIELD_KEY`, so the search is linear in the value.
+_INNER_PAIR_RE = re.compile(rf"[&;,](?={_FIELD_KEY})", re.IGNORECASE)
 
 # A value under FIELD_VALUE_RE's 20-char floor, or one spanning whitespace, is
 # credible only where the key/value reading is unambiguous: the credential noun
@@ -644,6 +783,13 @@ def _quoted_auth_scheme(m: re.Match[str]) -> str:
     quoted value can hold one: the unquoted arms stop at whitespace."""
     scheme = _AUTH_SCHEME_RE.match(m.group("secret_value"))
     return scheme.group(0) if scheme else ""
+
+
+def _field_secret_span(m: re.Match[str]) -> tuple[int, int]:
+    """The span of a FIELD_VALUE_RE match that a redaction replaces: its
+    ``secret_value``, less the auth scheme a quoted value opens with."""
+    start, end = m.span("secret_value")
+    return start + len(_quoted_auth_scheme(m)), end
 
 
 # Pagination/cursor fields named "<prefix>token" are opaque page cursors, not
@@ -932,17 +1078,12 @@ def _is_placeholder_value(c: Candidate) -> bool:
     )
 
 
-# A field named `secret_type` / `token_name` / `key_label` holds metadata *about*
-# a secret (its kind, its display name), not the secret itself — `secret_type =
-# "Anthropic API Key"` trips the keyword detector and corrupts ordinary code/test
-# output. Likewise `secret_path` / `ssh_private_key_file` name WHERE a secret
-# lives (`secret_path="$RUN_DIR/secret"`, `key_file=args.ssh_private_key_path`),
-# not its bytes — and the location value (a relative path, a variable-rooted
-# path, an attribute chain) routinely escapes the value-shape skips, which only
-# know absolute paths and anchored env references. Skip when the identifier
-# directly before the matched value's assignment ends in a metadata suffix. Real
-# secrets live under the bare keyword fields, which have no such suffix.
-_METADATA_SUFFIXES = ("type", "name", "label", "keyword", "kind", "path", "file")
+# A field whose name ends in a published non-secret suffix holds something other
+# than the secret: metadata about it (`secret_type`, `token_name`), where it lives
+# (`secret_path`, `key_file` — a location the value-shape skips often miss), a
+# key's identifier (`private_key_id`) or a public half. The suffixes are
+# credential-names.json's `nonSecretSuffixes`, the list the name matchers decline.
+_METADATA_SUFFIXES = tuple(s.lower() for s in non_secret_name_segments())
 _ASSIGN_OP_CHARS = "=:!>"
 
 
@@ -1143,17 +1284,16 @@ def _is_config_attr_reference(c: Candidate) -> bool:
     )
 
 
-# A value rooted at a conventional system/mount directory — optionally with a
-# trailing mount mode (":ro") — is a config path, not a credential.
-_FS_PATH_RE = re.compile(
-    r"/(?:run|var|etc|home|root|opt|srv|mnt|media|tmp|usr|lib|proc|sys|dev|boot|data|workspace)"
-    r"/[\w./-]+(?::\w+)?"
-)
+# A filesystem LOCATOR — absolute (`/`), home (`~/`), relative (`./`, `../`) or
+# a Windows drive (`C:\`, `C:/`) — then path bytes, optionally a trailing mount
+# mode (":ro"). The shape is the locator, not a list of known roots: a root list
+# misses `/Users/…`, `/nix/…`, `C:\…` and every relative path.
+_FS_PATH_RE = re.compile(r"(?:/|~/|\.\.?/|[A-Za-z]:[\\/])[\w./\\-]*(?::\w+)?")
 
 
 def _is_filesystem_path(c: Candidate) -> bool:
-    """True when the matched value is an absolute filesystem path, not a secret."""
-    return _FS_PATH_RE.fullmatch(c.value) is not None
+    """True when the matched value is a filesystem path, not a secret."""
+    return _is_clean_locator(c.value, _FS_PATH_RE)
 
 
 # A bare origin/endpoint URL (`https://oauth2.googleapis.com/token`, an OAuth
@@ -1179,6 +1319,15 @@ def _has_opaque_run(value: str) -> bool:
         any(c.isdigit() for c in run) and any(c.isalpha() for c in run)
         for run in _URL_OPAQUE_RUN_RE.findall(value)
     )
+
+
+def _is_clean_locator(value: str, shape: re.Pattern[str]) -> bool:
+    """True when ``value`` is wholly a locator of ``shape`` (a path, a URL) and
+    carries no opaque credential-shaped run. THE locator verdict, shared by the
+    path and URL gates: the shape is what the author wrote, the opaque run is
+    what a token looks like, and the second outranks the first — so neither
+    ``/etc/<token>`` nor ``https://host/<token>`` passes as a mere location."""
+    return shape.fullmatch(value) is not None and not _has_opaque_run(value)
 
 
 def _has_userinfo(value: str) -> bool:
@@ -1209,11 +1358,7 @@ def _is_public_endpoint_url(c: Candidate) -> bool:
     Slack ``webhook_url`` token path, ``user:pass@``, a bare ``token@``) is not
     skipped. Attacker-safe on web ingress: a clean URL hides no secret, and a
     smuggled token in the path trips the opaque-run gate."""
-    if _ENDPOINT_URL_RE.fullmatch(c.value) is None:
-        return False
-    if _has_userinfo(c.value):
-        return False
-    return not _has_opaque_run(c.value)
+    return _is_clean_locator(c.value, _ENDPOINT_URL_RE) and not _has_userinfo(c.value)
 
 
 # A content-addressed digest is public data, not a credential: git/OCI object IDs
@@ -1322,55 +1467,87 @@ def _is_regex_literal(c: Candidate) -> bool:
     return close > 0 and all(ch in _REGEX_LITERAL_FLAGS for ch in value[close + 1 :])
 
 
-# detect-secrets' PrivateKeyDetector only matches the "-----BEGIN-----" header
-# line, so a per-line scan leaves the base64 body unredacted. Match and collapse
-# the whole PEM block. The keyword is "PRIVATE KEY" only, so public material
-# (certs, public keys, PGP messages) stays verbatim. The label runs are
-# length-capped so a crafted header can't drive O(n^2) backtracking.
-_PEM_LABEL_RUN = r"[A-Z0-9 ]{0,40}?"
-# One line of PEM body: RFC 7468 base64, or an RFC 1421 "Field: value" header.
-# Env-bound redaction runs before this one, so a base64 run may already carry its
-# output — a sentinel in map mode, the placeholder itself in plain mode. Both
+# One unit of base64 body: RFC 7468 base64, or a run env-bound redaction already
+# replaced. Env-bound redaction runs before this pass, so a base64 run may carry
+# its output — a sentinel in map mode, the placeholder itself in plain mode. Both
 # count as body, otherwise a key whose body embeds a configured env value would
 # end the block early and leave the rest of its base64 visible.
 # The placeholder alternative is PLACEHOLDER_RE's own pattern, not a restatement
 # of it: the label charset excludes "]" and every control character, so the atom
 # and the producer cannot disagree about where a placeholder ends.
 _PEM_B64_ATOM = (
-    r"(?:[A-Za-z0-9+/=]"
+    # `\/` is a JSON encoder's escaped `/` (PHP's json_encode writes every one),
+    # at any escape depth for the same reason `_PEM_SEP` below accepts one.
+    r"(?:[A-Za-z0-9+/=]|\\+/"
     + f"|{re.escape(_MARK_OPEN)}"
     + r"\d+ "
     + f"{re.escape(_MARK_CLOSE)}"
     + f"|{_REDACTED_TEXT_RE.pattern})"
 )
-_PEM_CONTENT = r"(?:" + _PEM_B64_ATOM + r"+|[A-Za-z][A-Za-z0-9-]*:[^\r\n]*)"
-# A block with no "-----END-----" still hides its body — truncated output must
-# FAIL SAFE — but only as far as the run of PEM-shaped lines after the header
-# (blank lines included, a truncated final line needing no newline). Stopping at
-# the first line that is neither is what keeps a lone header from swallowing the
-# rest of the file behind one placeholder: everything after it would vanish from
-# the caller's view of an otherwise secret-free document.
-_PEM_BODY = (
-    r"(?:[ \t]*(?:" + _PEM_CONTENT + r"[ \t]*)?\r?\n)*"
-    # A body line only counts when the PEM shape covers the WHOLE line, so the
-    # final unterminated line is anchored at end-of-text; without "\Z" it would
-    # match the leading word of an ordinary following line ("keep me" -> "keep").
-    r"(?:[ \t]*" + _PEM_CONTENT + r"[ \t]*\Z)?"
-)
+# THE PEM body grammar, shared by both branches of PEM_BLOCK_RE: a block is its
+# header followed by LINES, each holding one base64 run or one RFC 1421
+# `Field: value` header (or nothing), separated by a real line break or the `\n`
+# escape a JSON string carries a key's line breaks as — at ANY escape depth:
+# each re-serialisation doubles the backslashes (`\n`, `\\n`, `\\\\n`), and a
+# separator that knew one depth ended a doubly-encoded block at its header,
+# leaving the base64 body and END marker visible. A line holding anything
+# else ends the body, which is what keeps code or prose that merely NAMES both
+# markers (`if pem.startswith("-----BEGIN …")` … `"-----END …"`) from collapsing
+# every line between them into one placeholder.
+_PEM_SEP = r"(?:\r?\n|(?:\\+r)?\\+n)"
+# A header field runs to its line's end; the lookahead pins that end, so the
+# field parses one way only and cannot swallow a later line's base64. A key
+# flattened onto one line (`echo $KEY`) has no line end before its END marker,
+# so the field also ends at `-----`: run to the end of the text instead, it
+# swallowed the END marker and every byte after it into the placeholder. No
+# header value contains `-----`.
+_PEM_FIELD = r"[A-Za-z][A-Za-z0-9-]*:(?:(?!-----)[^\r\n\\])*(?=[\r\n\\]|-----|\Z)"
+# Several runs share a line only as a key echoed with its line breaks turned to
+# spaces (`echo $KEY`): every run but the last is then a full 64-char line, so a
+# run under 16 chars cannot precede another — which keeps prose (`then the base64
+# body follows`) out.
+_PEM_CONTENT = rf"(?:{_PEM_FIELD}|(?:{_PEM_B64_ATOM}{{16,}}[ \t]+)*{_PEM_B64_ATOM}+)"
+_PEM_LINE = rf"[ \t]*(?:{_PEM_CONTENT}[ \t]*)?"
+_PEM_LABEL_RUN = r"[A-Z0-9 ]{0,40}?"
+# detect-secrets' PrivateKeyDetector only matches the "-----BEGIN-----" header
+# line, so a per-line scan leaves the base64 body unredacted. Match and collapse
+# the whole PEM block. The keyword is "PRIVATE KEY" only, so public material
+# (certs, public keys, PGP messages) stays verbatim. The label runs are
+# length-capped so a crafted header can't drive O(n^2) backtracking.
 PEM_BLOCK_RE = re.compile(
     r"(?P<header>-----BEGIN (?P<label>"
     + _PEM_LABEL_RUN
     + r"PRIVATE KEY"
     + _PEM_LABEL_RUN
     + r")-----)"
-    # A terminated block wins, and its body may hold anything — a PEM embedded in
-    # a JSON string carries its whole body on one line as \n escapes. The
-    # tempered "(?!-----BEGIN )" keeps that scan from reaching a LATER block's
-    # END line and collapsing the text between them.
-    r"(?:(?:(?!-----BEGIN )[\s\S])*?-----END (?P=label)-----"
-    r"|" + _PEM_BODY + r")",
+    # A terminated block wins. Its body cannot contain "-----", so it never
+    # reaches a LATER block's END line either.
+    + rf"(?:(?:{_PEM_LINE}{_PEM_SEP})*{_PEM_LINE}-----END (?P=label)-----"
+    # A block with no END still hides its body — truncated output must FAIL
+    # SAFE — but only as far as the run of body lines after the header. The
+    # last, unterminated line counts only when it ends the text or a quoted
+    # string; without that it would match the leading word of an ordinary
+    # following line ("keep me" -> "keep").
+    + rf"|(?:{_PEM_LINE}{_PEM_SEP})*(?:[ \t]*{_PEM_CONTENT}[ \t]*(?=\Z|\\*[\"']))?)",
     re.IGNORECASE,
 )
+
+
+def _pem_gap_start(block: str, end: int) -> int:
+    """Index where the trailing run of blanks and line breaks (real, or JSON
+    ``\\n``/``\\r`` escapes at any depth, as ``_PEM_SEP`` reads them) ending at
+    ``end`` begins. Walked by hand: a regex anchored at ``\\Z`` and searched from
+    the left re-scans a long gap once per position."""
+    while end > 0:
+        if block[end - 1] in " \t\r\n":
+            end -= 1
+        elif block[end - 1] in "nr" and block[end - 2 : end - 1] == "\\":
+            end -= 1
+            while end > 0 and block[end - 1] == "\\":
+                end -= 1
+        else:
+            break
+    return end
 
 
 def is_bare_pem_header(value: str) -> bool:
@@ -1382,35 +1559,46 @@ def is_bare_pem_header(value: str) -> bool:
     doubt, and asks this to tell a header that names no key from one that wraps a body.
     The answer comes from the same pattern the redaction took, so the two cannot
     disagree about where a block starts and ends — a block written on one line, as a
-    key inside a JSON string is, carries a body and answers False.
+    key inside a JSON string is, carries a body and answers False. Line breaks after
+    the header (real, or JSON escapes) are not a body.
     """
-    match = PEM_BLOCK_RE.fullmatch(value.strip())
-    return match is not None and match.end("header") == match.end()
+    stripped = value.strip()
+    match = PEM_BLOCK_RE.fullmatch(stripped)
+    return match is not None and _pem_gap_start(stripped, match.end()) == match.end(
+        "header"
+    )
 
 
 def _redact_pem_blocks(
-    text: str, found: list[str], entries: list[tuple[str, str]] | None = None
+    text: str,
+    found: list[str],
+    entries: list[tuple[str, str]] | None = None,
+    charset: frozenset[int] | None = None,
 ) -> str:
     """Collapse every PEM private-key block in ``text`` to one placeholder.
 
-    A payload with no ``-----BEGIN `` in it cannot hold a block, so the whole
-    `re.sub` — a pass over the entire request — is skipped on the probe's word
-    rather than run to find nothing.
+    Matched on the invisible-stripped view, like every other pass, so a
+    zero-width character spliced into a marker cannot hide the block. A payload
+    with no ``-----BEGIN `` in it cannot hold a block, so the pass is skipped on
+    the probe's word rather than run to find nothing.
     """
-    if not _PEM_PROBE.may_match(text):
+    view, offsets = strip_invisible_with_map(text, charset)
+    if not _PEM_PROBE.may_match(view):
         return text
-
-    def _repl(m: re.Match[str]) -> str:
+    spans = []
+    for m in PEM_BLOCK_RE.finditer(view):
         found.append("Private Key")
         # An unterminated body stops at a line break, so the match can end with
-        # the whitespace that separates the block from the following text. That
-        # whitespace is not key material: keep it outside the placeholder so the
-        # next line does not get pulled onto the placeholder's line.
-        block = m.group(0).rstrip(" \t\r\n")
-        trailing = m.group(0)[len(block) :]
-        return _mark(entries, placeholder("Private Key"), block) + trailing
-
-    return PEM_BLOCK_RE.sub(_repl, text)
+        # the separator that divides the block from the following text. That is
+        # not key material: keep it outside the placeholder so the next line does
+        # not get pulled onto the placeholder's line.
+        end = _pem_gap_start(view, m.end())
+        spans.append(
+            SpliceSpan(
+                offsets[m.start()], offsets[end - 1] + 1, placeholder("Private Key")
+            )
+        )
+    return _splice(text, spans, entries)
 
 
 # Cross-line redaction scans a newline-free collapse of the text, so two adjacent
@@ -1460,15 +1648,20 @@ def _cross_line_eligible_types() -> frozenset[str]:
 _PREFILTER_WINDOW_PAD = 64
 
 
-# A pattern of a boundary-anchored detector opens with one of these two
-# literal lookbehinds, and closes with one of the two literal lookaheads below
-# (`secret-detectors.json`'s own convention). Stripping a KNOWN literal
+# A pattern of a boundary-anchored detector opens with one of these literal
+# lookbehinds, and closes with one of the two literal lookaheads below
+# (`secret-detectors.json`'s own convention; the `-`-bearing spelling is the
+# JWT's, whose body admits `-`). Stripping a KNOWN literal
 # affix, rather than parsing the assertion generally, is what keeps this
 # mechanical and auditable — but that same literalness means a spelling
 # outside the known set must be REFUSED, not silently kept anchored: keeping
 # it would refuse a genuinely wrapped token at that end and no test would see
 # it, since the relax step would look like a no-op instead of a miss.
-_LEADING_BOUNDARY_LOOKBEHINDS = ("(?<![A-Za-z0-9_])", "(?<![A-Za-z0-9])")
+_LEADING_BOUNDARY_LOOKBEHINDS = (
+    "(?<![A-Za-z0-9_])",
+    "(?<![A-Za-z0-9])",
+    "(?<![A-Za-z0-9_-])",
+)
 # A pattern may follow its boundary with this one, which refuses a hyphenated
 # identifier (`my-sk-ant-x`); it is a boundary too and relaxes with the first.
 _HYPHEN_LOOKBEHIND = "(?<!-)"
@@ -1490,7 +1683,7 @@ def _relax_leading_boundary(pattern: str) -> str:
     actually enforces it.
 
     Raises if ``pattern`` opens with a negative lookbehind that is not one of
-    the two known spellings: silently leaving an unrecognized one in place
+    the known spellings: silently leaving an unrecognized one in place
     would restore the exact missed-secret bug this cross-line pass exists to
     fix, for whichever detector owns it.
     """
@@ -1686,16 +1879,19 @@ _PEM_PROBE = LiteralProbe([PEM_BLOCK_RE])
 
 # Every FIELD_VALUE_RE match opens with a credential noun, so the positions it can
 # START at are exactly the positions this alternation matches at — which is what
-# lets `_redact_field_values` try the expensive regex at those positions instead of
+# lets `_field_value_spans` try the expensive regex at those positions instead of
 # sweeping it over the payload. Compiled from the same `_FIELD_NAMES` the regex
 # itself is built from, so the two cannot name different vocabularies; the guard
 # below is what says the noun list is still the FIRST thing the regex matches.
 _FIELD_NAME_ANCHOR_PREFIX = rf"(?P<field_prefix>(?P<field_name>(?:{_FIELD_NAMES})"
-if not FIELD_VALUE_RE.pattern.startswith(_FIELD_NAME_ANCHOR_PREFIX):
+if not all(
+    pattern.pattern.startswith(_FIELD_NAME_ANCHOR_PREFIX)
+    for pattern in (FIELD_VALUE_RE, _NESTED_FIELD_VALUE_RE)
+):
     raise RuntimeError(
         "FIELD_VALUE_RE no longer opens with the credential-noun alternation, so "
         "a noun match is no longer a necessary condition for a match START and "
-        "_redact_field_values would skip real field values"
+        "_field_value_spans would skip real field values"
     )
 # Searched in `fold`'s lowercased view instead of carrying `re.IGNORECASE`:
 # CPython disables its literal/charset prefix optimization outright for an
@@ -1710,6 +1906,8 @@ if _FIELD_NAMES != _FIELD_NAMES.lower():
         "so an uppercase literal in the pattern could never match"
     )
 _FIELD_NAME_ANCHOR = re.compile(_FIELD_NAMES)
+# The same anchor over UNFOLDED text, for the one text `fold` refuses.
+_FIELD_NAME_ANCHOR_UNFOLDED = re.compile(_FIELD_NAMES, re.IGNORECASE)
 
 
 class _Sweep(NamedTuple):
@@ -2302,38 +2500,68 @@ def _redact_lines(
     return redacted_lines
 
 
-def _redact_field_values(
+def _benign_head(
+    match: re.Match[str], is_cleared: Callable[[re.Match[str]], bool]
+) -> bool:
+    """Whether the top-level ``match``'s value, cut at its first delimiter that
+    opens another credential pair, is a value ``is_cleared`` positively clears.
+
+    The top-level value class admits `&` `;` `,` — a password may hold them — so
+    `token_url=https://idp/x&password=<secret>` reads as ONE value, and the
+    secret in its tail redacts the public URL with it. Cut at the inner pair,
+    the URL is judged alone. Only a head a benign-shape gate clears counts: one
+    merely under the length floor (`password=hunter2&api_key=…`) is too short to
+    judge, not shown benign, and may be the start of one password, so the whole
+    value still redacts. A quoted value splits the same way (the regex's closing
+    quote is optional), keeping a cleared URL and judging its inner pair.
+    """
+    start, end = match.span("secret_value")
+    inner = _INNER_PAIR_RE.search(match.string, start, end)
+    if inner is None:
+        return False
+    head = FIELD_VALUE_RE.match(match.string, match.start(), inner.start())
+    return head is not None and is_cleared(head)
+
+
+def _field_value_spans(
     text: str,
-    replace: Callable[[re.Match[str]], str | None],
+    is_secret: Callable[[re.Match[str]], bool],
+    is_cleared: Callable[[re.Match[str]], bool],
     deadline: _Deadline = _NO_DEADLINE,
-) -> str:
-    """``FIELD_VALUE_RE.sub(replace, text)``, evaluated only where a match can
-    begin, except that ``replace`` may return ``None`` to decline a match.
+) -> list[tuple[int, int]]:
+    """The ascending, disjoint redacted spans (see :func:`_field_secret_span`)
+    of every credential ``field = value`` pair in ``text`` that ``is_secret``
+    judges a secret. ``is_cleared`` is the benign-shape verdict alone, with no
+    length floor and no side effect (see :func:`_benign_head`).
 
-    ``re.sub`` tries the pattern at every one of the payload's positions; this
-    tries it only at the positions :data:`_FIELD_NAME_ANCHOR` matches, which is
-    every position a match can START at (the guard beside that anchor is what
-    holds the claim) plus, harmlessly, some where the rest of the pattern then
-    fails. While ``replace`` declines nothing the result is byte-identical to
-    ``sub``: ``Pattern.match(text, pos)`` is exactly the attempt ``sub`` makes at
-    ``pos`` — it reads the WHOLE string, so a lookbehind, ``^`` under
-    ``re.MULTILINE`` and ``$`` all see the same text a full sweep shows them,
-    which slicing the payload into windows would not — and resuming at the
-    previous match's END reproduces ``sub``'s non-overlapping order.
+    The pattern is tried only at the positions :data:`_FIELD_NAME_ANCHOR`
+    matches, which is every position a match can START at (the guard beside that
+    anchor is what holds the claim). ``Pattern.match(text, pos)`` reads the WHOLE
+    string, so a lookbehind, ``^`` under ``re.MULTILINE`` and ``$`` see the same
+    text a full sweep shows them.
 
-    A declined QUOTED match resumes at its value instead: a quote that really
-    closed an outer string makes the match span the next field's name
-    (`"password=" ; TOKEN="<key>"`), which must still be tried. A quoted span
-    holds no quote of its own kind, so the rescans stay linear.
-
-    A payload holding no credential noun anywhere therefore costs one failed
-    anchor search, which is why nothing gates this call. A text ``fold`` refuses
-    (a length-changing case fold, which no code point reaches today) is swept
-    with ``FIELD_VALUE_RE.search`` instead: slower, never wrong.
+    Only a REDACTION consumes bytes. A benign verdict is about the value as a
+    whole under ITS field name, and says nothing about a later pair the value
+    happens to contain — ``token_type=bearer&access_token=<secret>`` reads as
+    one metadata value whose name is ``token_type``. So the search resumes at the
+    benign value's start, and every pair found inside it is tried with
+    :data:`_NESTED_FIELD_VALUE_RE`, whose value stops at the next inner key; that
+    bound is what keeps a run of nested benign pairs linear rather than re-scanning
+    the enclosing value once per key. A top-level value whose head, before an
+    inner credential pair, is cleared on its own (:func:`_benign_head`) is
+    treated the same way, so that head survives and the inner pair is judged.
     """
     folded = fold(text)
-    out: list[str] = []
-    cursor = 0
+    # A text `fold` refuses (a length-changing case fold, which no code point
+    # reaches today) is anchored case-insensitively in place: slower, never wrong.
+    haystack, anchor_re = (
+        (text, _FIELD_NAME_ANCHOR_UNFOLDED)
+        if folded is None
+        else (folded, _FIELD_NAME_ANCHOR)
+    )
+    spans: list[tuple[int, int]] = []
+    # End of the outermost benign value the search is currently inside.
+    benign_end = -1
     # `at` is the next position to look from, and both the loop guard and every
     # assignment to it keep it strictly increasing and within the text. That is
     # load-bearing, not defensive: `Pattern.search(s, pos)` CLAMPS a pos past the
@@ -2345,32 +2573,27 @@ def _redact_field_values(
         # is bounded work, so the deadline gets a chance to fire between them
         # rather than only after the whole pass.
         deadline.check("field-value scan")
-        if folded is None:
-            match = FIELD_VALUE_RE.search(text, at)
-            if match is None:
-                break
-            start = match.start()
-        else:
-            anchor = _FIELD_NAME_ANCHOR.search(folded, at)
-            if anchor is None:
-                break
-            start = anchor.start()
-            match = FIELD_VALUE_RE.match(text, start)
-        replacement = None if match is None else replace(match)
-        if replacement is None:
-            resume = start + 1
-            if match is not None:
-                resume = (
-                    match.start("secret_value") if match.group("quote") else match.end()
-                )
-            at = max(resume, start + 1)
+        anchor = anchor_re.search(haystack, at)
+        if anchor is None:
+            break
+        start = anchor.start()
+        pattern = _NESTED_FIELD_VALUE_RE if start < benign_end else FIELD_VALUE_RE
+        match = pattern.match(text, start)
+        if match is None:
+            at = start + 1
             continue
-        out.append(text[cursor:start])
-        out.append(replacement)
-        cursor = match.end()
-        at = max(cursor, start + 1)
-    out.append(text[cursor:])
-    return "".join(out)
+        # The head goes first because `is_cleared` is pure while `is_secret`
+        # records a finding: the whole value is judged only when no cleared head
+        # ends it early.
+        nested = pattern is _NESTED_FIELD_VALUE_RE
+        if (not nested and _benign_head(match, is_cleared)) or not is_secret(match):
+            benign_end = max(benign_end, match.end("secret_value"))
+            # The value starts after the non-empty field prefix, so this advances.
+            at = match.start("secret_value")
+            continue
+        spans.append(_field_secret_span(match))
+        at = match.end()
+    return spans
 
 
 def _redact_core(
@@ -2396,7 +2619,7 @@ def _redact_core(
     # Redact configured env-var values first, then collapse PEM blocks so the line
     # scan never sees the base64 key body.
     working = _redact_env_bound(text, found, config, entries, deadline)
-    working = _redact_pem_blocks(working, found, entries)
+    working = _redact_pem_blocks(working, found, entries, charset)
     # Catch newline-split tokens first, then scan what remains line by line.
     working = _redact_cross_line(working, found, config, entries, deadline)
     # Stage 1 of the per-line cascade: rule out whole lines in one C-speed sweep
@@ -2426,17 +2649,22 @@ def _redact_core(
         # high-confidence scan reports only structural detections.
         return rejoined, found
 
-    strings = _StringContext(rejoined)
+    # Matched on the invisible-stripped view, like every other pass, so a
+    # zero-width character spliced into a field NAME cannot hide its value; only
+    # the value's own span (invisibles inside it included) is replaced.
+    view, offsets = strip_invisible_with_map(rejoined, charset)
+    strings = _StringContext(view)
 
-    def _replace_field(m: re.Match[str]) -> str | None:
+    def _is_secret_field(m: re.Match[str]) -> bool:
         deadline.check("field-value scan")
         if m.group("quote") and _quoted_inside_string(m, strings):
-            return None
+            return False
         # The regex match supplies every positional field, so the name-based
         # gates (cursor / metadata field) are live on this path.
         candidate = Candidate.from_field_match(m)
         # A quoted header value keeps its auth scheme visible, exactly as the
-        # unquoted `Authorization: Bearer <v>` form does through the prefix.
+        # unquoted `Authorization: Bearer <v>` form does through the prefix;
+        # `_field_secret_span` starts the redacted span after it to match.
         scheme = _quoted_auth_scheme(m)
         if scheme:
             candidate = dataclasses.replace(
@@ -2447,29 +2675,27 @@ def _redact_core(
         value = candidate.value
         # A quoted value can enclose an earlier pass's placeholder.
         if _REDACTED_TEXT_RE.search(value) or _TEMPLATE_RE.search(value):
-            return None
+            return False
         short_or_spaced = len(value) < _FIELD_VALUE_FLOOR or any(
             ch.isspace() for ch in value
         )
         if short_or_spaced and not _short_or_spaced_value_allowed(m, value):
-            return None
+            return False
         if is_benign(candidate, web_ingress=web_ingress):
-            return None
+            return False
         found.append("named secret field")
-        return (
-            m.group("field_prefix")
-            + m.group("openbracket")
-            + m.group("quote")
-            + scheme
-            + _mark(entries, placeholder(), value)
-            # Re-emitted in source order (value, terminator, closequote) so the
-            # bytes outside the placeholder are preserved exactly, quoted or not.
-            + m.group("terminator")
-            + m.group("closequote")
-            + m.group("closebracket")
-        )
+        return True
 
-    return _redact_field_values(rejoined, _replace_field, deadline), found
+    spans = [
+        SpliceSpan(offsets[start], offsets[end - 1] + 1, placeholder())
+        for start, end in _field_value_spans(
+            view,
+            _is_secret_field,
+            lambda m: is_benign(Candidate.from_field_match(m), web_ingress=web_ingress),
+            deadline,
+        )
+    ]
+    return _splice(rejoined, spans, entries), found
 
 
 def configure_plugins(high_confidence: bool = False):
@@ -2605,7 +2831,7 @@ def _redact_map(text: str, config: RedactorConfig, engine) -> dict:
     """
     if not text:
         return {"text": "", "pairs": [], "found": []}
-    if _MARK_OPEN in text or _MARK_CLOSE in text:
+    if _holds_sentinel(text):
         return {"unmappable": "input contains reserved sentinel characters"}
     entries: list[tuple[str, str]] = []
     redacted, found = engine(text, entries, config)
@@ -2623,7 +2849,11 @@ def detected_secret_values(
     Runs the engine in map mode purely to harvest the recorded originals — the
     redacted text is discarded. Useful for hashing detected values into an
     ignore list without ever surfacing the value itself.
+
+    Raises ``ValueError`` on text carrying a reserved sentinel, which the map
+    machinery would mis-pair with a recorded value.
     """
+    _refuse_sentinels(text)
     entries: list[tuple[str, str]] = []
     _redact(text, entries, config or RedactorConfig())
     return list(
@@ -2659,10 +2889,14 @@ def mask_secret_lines(text: str, values: list[str]) -> list[str]:
     The secret bytes never appear — only the surrounding field/context — so a
     warning can show *where* a secret sits without leaking it. The mask is
     fixed-width, so it reveals nothing about the value's length.
+
+    Raises ``ValueError`` on text carrying a reserved sentinel: a line already
+    holding the mask code point would be previewed as holding a secret.
     """
     if not values:
         return []
-    mask = ""  # private-use sentinel, swapped to asterisks after masking
+    _refuse_sentinels(text)
+    mask = _MASK_SENTINEL
     masked = text
     # Longest first so a short value isn't masked inside a longer value's span.
     for value in sorted(values, key=len, reverse=True):

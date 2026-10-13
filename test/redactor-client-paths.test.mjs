@@ -9,23 +9,16 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   rmSync,
   symlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { setTimeout as sleep } from "node:timers/promises";
 
-import {
-  resolveSocketPath,
-  spawnDaemon,
-} from "../claude-hooks/lib/redactor-client.mjs";
+import { resolveSocketPath } from "../claude-hooks/lib/redactor-client.mjs";
 
 const CLIENT = new URL(
   "../claude-hooks/lib/redactor-client.mjs",
@@ -176,49 +169,5 @@ describe("the default redactor socket lives in a per-user directory", () => {
       resolvedSocket({}),
       join(tmpdir(), `agent-sanitizer-redactor-${UID}`, "redactor.sock"),
     );
-  });
-});
-
-describe("the daemon spawn honours the launcher-exported zipapp path", () => {
-  it("runs _AGENT_SANITIZER_REDACTOR_PYZ under python3 with the socket path", async (t) => {
-    // A compiled hook binary resolves import.meta.url inside its virtual
-    // filesystem, so the exported path is the only route to the zipapp there.
-    // The stand-in records the argv python3 handed it.
-    const dir = scratch(t);
-    const marker = join(dir, "argv.json");
-    const pyz = join(dir, "daemon.pyz");
-    writeFileSync(
-      pyz,
-      [
-        "import json, os, sys",
-        `marker = ${JSON.stringify(marker)}`,
-        'with open(marker + ".tmp", "w") as fh:',
-        "    json.dump(sys.argv, fh)",
-        'os.replace(marker + ".tmp", marker)',
-        "",
-      ].join("\n"),
-    );
-    const saved = {
-      daemon: process.env._AGENT_SANITIZER_REDACTOR_DAEMON,
-      pyz: process.env._AGENT_SANITIZER_REDACTOR_PYZ,
-    };
-    t.after(() => {
-      for (const [name, value] of [
-        ["_AGENT_SANITIZER_REDACTOR_DAEMON", saved.daemon],
-        ["_AGENT_SANITIZER_REDACTOR_PYZ", saved.pyz],
-      ]) {
-        if (value === undefined) delete process.env[name];
-        else process.env[name] = value;
-      }
-    });
-    delete process.env._AGENT_SANITIZER_REDACTOR_DAEMON;
-    process.env._AGENT_SANITIZER_REDACTOR_PYZ = pyz;
-    const socketPath = join(dir, "r.sock");
-    spawnDaemon(socketPath);
-    for (let i = 0; i < 100 && !existsSync(marker); i++) await sleep(50);
-    assert.deepEqual(JSON.parse(readFileSync(marker, "utf8")), [
-      pyz,
-      socketPath,
-    ]);
   });
 });

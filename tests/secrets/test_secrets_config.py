@@ -1,7 +1,10 @@
 """RedactorConfig: env-secret union semantics and charset resolution."""
 
+import pytest
+
 from agent_sanitizer.secrets import RedactorConfig, redact
 from agent_sanitizer.secrets.config import DEFAULT_MIN_SECRET_LEN
+from agent_sanitizer.secrets.placeholders import SENTINEL_CHARS
 
 _LONG = "qZ7vK2mNp9rT4wX1cY6bA8dF3gH5jL0e"
 
@@ -50,6 +53,25 @@ def test_explicit_charset_is_used_without_touching_shared_dep():
     imports the shared dependency."""
     config = RedactorConfig(invisible_charset=frozenset({0x200B}))
     assert config.resolved_charset() == frozenset({0x200B})
+
+
+@pytest.mark.parametrize("sentinel", list(SENTINEL_CHARS))
+def test_a_charset_holding_a_reserved_sentinel_is_refused(sentinel):
+    """Every pass matches on the charset-stripped view, so a charset that strips
+    a sentinel deletes map mode's own marks and splices half of one into the
+    output. Refused at construction, naming the code point."""
+    with pytest.raises(ValueError, match=f"U\\+{ord(sentinel):04X}$"):
+        RedactorConfig(invisible_charset=frozenset({0x200B, ord(sentinel)}))
+
+
+def test_the_shared_charset_reserves_no_sentinel():
+    """The default path: the SSOT charset is disjoint from the sentinels, so
+    passing it explicitly constructs."""
+    from agent_sanitizer.invisible import invisible_charset
+
+    assert not invisible_charset() & set(map(ord, SENTINEL_CHARS))
+    config = RedactorConfig(invisible_charset=invisible_charset())
+    assert config.resolved_charset() == invisible_charset()
 
 
 def test_resolved_charset_defaults_to_shared_ssot():

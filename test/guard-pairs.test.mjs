@@ -202,8 +202,6 @@ const RESIDUE_PENDING = {
 
 /** Inputs with no commit-time suite by design, each with the gate it has. */
 const CI_ONLY = {
-  "plugin/scripts/lock-redactor-deps.mjs":
-    "re-locks plugin/requirements.txt over the network; plugin-dist-autofix runs it and plugin-bundle.test checks the lock it writes",
   "scripts/bundle-python-cli.mjs":
     "a release-time build run by auto-version and publish-python; its output is git-ignored",
   "src/vendor/gfm-autolink-literal.d.ts":

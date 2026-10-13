@@ -1,15 +1,21 @@
 """Ported custom-detector tests (was the secret_plugins.py half of the suite)."""
 
+import importlib
+import inspect
 import json
+import pkgutil
 import re
 import string
 
+import detect_secrets.plugins
 import pytest
+from detect_secrets.plugins.base import BasePlugin
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
 import agent_sanitizer.secrets.detectors as D
 import agent_sanitizer.secrets.engine as E
+from agent_sanitizer.secrets.prefilter import inspect_width
 from detect_secrets.plugins.cloudant import CloudantDetector as _UpstreamCloudant
 from detect_secrets.plugins.ibm_cloud_iam import IbmCloudIamDetector as _UpstreamIbmIam
 from detect_secrets.plugins.ibm_cos_hmac import IbmCosHmacDetector as _UpstreamIbmCos
@@ -22,6 +28,148 @@ from tests._growth import assert_linear, cpu_growth, geometric_sizes
 
 _DETECTORS_JSON = D.DETECTORS_FILE
 _INLINE_DETECTORS = tuple(E._INLINE_PLUGINS)
+
+
+def _shipped_bundled_plugins() -> dict[str, type]:
+    """Every concrete plugin class the installed detect-secrets ships, by name."""
+    classes = {}
+    for info in pkgutil.iter_modules(detect_secrets.plugins.__path__):
+        module = importlib.import_module(f"detect_secrets.plugins.{info.name}")
+        for name, obj in inspect.getmembers(module, inspect.isclass):
+            if (
+                issubclass(obj, BasePlugin)
+                and obj.__module__ == module.__name__
+                and not inspect.isabstract(obj)
+            ):
+                classes[name] = obj
+    return classes
+
+
+def test_every_shipped_bundled_plugin_is_enabled_or_disabled_with_a_reason():
+    """Shipped == enabled ⊔ disabled: a detect-secrets upgrade that adds a plugin
+    reds here instead of landing silently off, and a plugin left off carries the
+    reason it is off."""
+    shipped = set(_shipped_bundled_plugins())
+    enabled, disabled = set(E._BUNDLED_PLUGINS), set(E._DISABLED_BUNDLED)
+    assert len(shipped) >= 20, shipped
+    assert not enabled & disabled, enabled & disabled
+    assert enabled | disabled == shipped, {
+        "unclassified": sorted(shipped - enabled - disabled),
+        "not shipped": sorted((enabled | disabled) - shipped),
+    }
+    assert all(reason.strip() for reason in E._DISABLED_BUNDLED.values())
+
+
+def test_every_replaced_bundled_plugin_names_a_live_replacement():
+    """A "replaced by X" reason is a claim that X carries the type: it must name
+    a class this engine registers."""
+    registered = {p["name"] for p in E.ALL_PLUGINS}
+    replaced = {
+        name: reason.rsplit("replaced by ", 1)[1].split()[0]
+        for name, reason in E._DISABLED_BUNDLED.items()
+        if "replaced by " in reason
+    }
+    assert len(replaced) >= 8, replaced
+    for name, replacement in replaced.items():
+        assert replacement in registered, (name, replacement)
+
+
+def _registered_detector_classes() -> dict[str, type]:
+    """Every detector class the engine enables, from all three registries."""
+    bundled = _shipped_bundled_plugins()
+    custom = (*E._CONFIGURED_DETECTORS, *E._INLINE_PLUGINS)
+    return {
+        **{name: bundled[name] for name in E._BUNDLED_PLUGINS},
+        **{name: getattr(D, name) for name in custom},
+    }
+
+
+# How far one match attempt may read before its cost stops being a constant.
+_BOUNDED_ATTEMPT_WIDTH = 1024
+# The live patterns whose attempts are neither boundary-anchored nor bounded,
+# each with the reason no two attempts re-read one run — a claim about the
+# pattern's shape a reader can check. A cross-line-eligible pattern's lookbehind
+# does not count: cross-line discovery strips it (`_relax_leading_boundary`).
+_UNBOUNDED_WITHOUT_LOOKBEHIND = {
+    "ArtifactoryDetector": "opens on a delimiter (whitespace, `=`, `:`, a quote, "
+    "line start) its body class excludes, so an attempt starts only where a run "
+    "begins",
+    "BasicAuthDetector": "opens on `://`, which neither of its runs admits",
+    "BoundedKeywordDetector": "opens on a keyword or a quote; every value run is "
+    "capped at 4096, and the only open-ended runs are whitespace between fixed "
+    "tokens",
+    "CloudantCredentialsDetector": "keyword arms open on a not-a-word-char "
+    "lookbehind; URL arms open on `http(s)://`, which their host run excludes",
+    "GitHubClassicTokenDetector": "nothing follows its open-ended run, so an "
+    "attempt that reaches 36 chars succeeds and consumes the whole run",
+    "IbmCloudIamKeyDetector": "opens on a not-a-word-char lookbehind before a keyword",
+    "IbmCosHmacKeyDetector": "opens on a not-a-word-char lookbehind before a keyword",
+    "PypiTokenDetector": "nothing follows its open-ended run, so an attempt that "
+    "reaches 70 chars succeeds and consumes the whole run",
+    "SlackDetector": "opens on `xox?-` or the webhook URL, which its runs "
+    "exclude, and nothing it can fail on follows the last run",
+    "SoftlayerCredentialsDetector": "keyword arm opens on a not-a-word-char "
+    "lookbehind; the URL arm is bounded",
+}
+# The live patterns that ARE quadratic on some reachable path: accepted gaps,
+# not linearity proofs. Kept apart so growing this set is a deliberate edit
+# the pin below makes visible, never one more line among the proofs above.
+_KNOWN_QUADRATIC = {
+    "JwtFullTokenDetector": "cross-line discovery only: with its lookbehind "
+    "stripped, every `eyJ` of a wrapped run re-reads up to 65536 chars per "
+    "segment. The per-line pass keeps the lookbehind and is linear",
+}
+
+
+def _attempt_is_linear(name: str, pattern: re.Pattern[str]) -> bool:
+    """A leading lookbehind refusing starts inside a run (and kept on every pass
+    that runs the pattern), or a bounded attempt."""
+    width = inspect_width(pattern.pattern, pattern.flags)
+    if width is not None and width <= _BOUNDED_ATTEMPT_WIDTH:
+        return True
+    return (
+        pattern.pattern.startswith(E._LEADING_BOUNDARY_LOOKBEHINDS)
+        and name not in E._CROSS_LINE_ELIGIBLE_CLASSES
+    )
+
+
+def _live_patterns() -> list[tuple[str, re.Pattern[str]]]:
+    return [
+        (name, pattern)
+        for name, cls in _registered_detector_classes().items()
+        for pattern in cls.denylist
+    ]
+
+
+def test_every_live_pattern_is_linear_by_shape_or_exempt_with_a_reason():
+    """A pattern whose attempts can start inside a run another attempt already
+    read, and read it without bound, costs O(n^2) on that run repeated — the
+    bundled OpenAI and the unanchored JWT shapes did. Each live pattern must open
+    on a lookbehind every pass keeps, read a bounded width, or carry an entry
+    above."""
+    offenders = {
+        name
+        for name, pattern in _live_patterns()
+        if not _attempt_is_linear(name, pattern)
+    }
+    assert set(_UNBOUNDED_WITHOUT_LOOKBEHIND).isdisjoint(_KNOWN_QUADRATIC)
+    assert set(_KNOWN_QUADRATIC) == {"JwtFullTokenDetector"}
+    exempt = set(_UNBOUNDED_WITHOUT_LOOKBEHIND) | set(_KNOWN_QUADRATIC)
+    assert offenders == exempt, {
+        "unexempted": sorted(offenders - exempt),
+        "stale exemption": sorted(exempt - offenders),
+    }
+
+
+def test_the_linear_shape_partition_has_both_sides():
+    """Non-vacuity: the lookbehind arm and the bounded-width arm each admit
+    real patterns, so neither predicate is dead."""
+    linear = [(n, p) for n, p in _live_patterns() if _attempt_is_linear(n, p)]
+    led = [
+        p for _n, p in linear if p.pattern.startswith(E._LEADING_BOUNDARY_LOOKBEHINDS)
+    ]
+    assert len(led) >= 2, len(led)
+    assert len(linear) - len(led) >= 10, len(linear)
 
 
 def test_custom_plugins_derived_from_detector_ssot():
@@ -89,6 +237,42 @@ def test_jwt_with_x5c_cert_chain_header_is_redacted():
     token = f"{encoded_header}.{_JWT_PAYLOAD}.{'A' * 43}"
     detector = D.JwtFullTokenDetector()
     assert list(detector.analyze_string(token)), "x5c-header JWT leaked in cleartext"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"token={_JWT_HEADER}.{_JWT_PAYLOAD}.c2lnbmF0dXJl",
+        f'"id_token": "{_JWT_HEADER}.{_JWT_PAYLOAD}.c2lnbmF0dXJl"',
+        f"Authorization: Bearer {_JWT_HEADER}.{_JWT_PAYLOAD}.c2lnbmF0dXJl",
+        f"jwt:{_JWT_HEADER}.{_JWT_PAYLOAD}",
+    ],
+)
+def test_jwt_boundary_admits_every_real_separator(text):
+    """The lookbehind refuses a start inside a base64url run and nothing else:
+    a JWT after `=`, a quote, a space or a colon still matches in full."""
+    (pattern,) = D.JwtFullTokenDetector.denylist
+    found = [m.group(0) for m in pattern.finditer(text)]
+    assert any(m.startswith(_JWT_HEADER) and _JWT_PAYLOAD in m for m in found), text
+
+
+@pytest.mark.parametrize("before", ["a", "_", "-", "9"])
+def test_jwt_does_not_start_inside_a_base64url_run(before):
+    (pattern,) = D.JwtFullTokenDetector.denylist
+    assert pattern.search(f"{before}{_JWT_HEADER}.{_JWT_PAYLOAD}") is None
+
+
+_OPENAI_KEY = "sk-proj-" + "Ab3dEf6hIj9kLm2nOp5q" + "T3BlbkFJ" + "Zz8yXw7vUt6sRq5pOn4m"
+
+
+@pytest.mark.parametrize("before", ["\t", " ", "=", '"', ":", "'", "\n"])
+def test_openai_key_still_redacts_after_every_separator(before):
+    """The bounded copy keeps the bundled detector's recall on every boundary a
+    real key follows."""
+    result = run_plain(f"OPENAI_API_KEY{before}{_OPENAI_KEY}")
+    assert result is not None, before
+    assert _OPENAI_KEY not in result["text"], before
+    assert "OpenAI Token" in result["found"], before
 
 
 def test_custom_detectors_defined():
@@ -311,9 +495,8 @@ def test_shape_detectors_find_nothing_in_legitimate_content(label):
 
     detect-secrets' own BUNDLED plugins are out for a different reason: this repo
     does not own their regexes and `detectors.py` exposes no class to reach them
-    through. Two corpus entries therefore do nothing HERE and are carried by the
-    engine-level test alone — "url with query string" (`BasicAuthDetector`) and
-    "prose naming a key prefix" (the upstream `sk-` arms).
+    through. One corpus entry therefore does nothing HERE and is carried by the
+    engine-level test alone — "url with query string" (`BasicAuthDetector`).
     """
     text = LEGITIMATE[label]
     for cls_name in _SHAPE_DETECTORS:

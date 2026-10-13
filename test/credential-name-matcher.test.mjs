@@ -113,6 +113,21 @@ describe("a non-secret suffix is declined, unless the caller says otherwise", ()
     assert.equal(holds("DEPLOY_API_KEY_ID"), false);
   });
 
+  // The decline must walk as far as the longest NON-SECRET suffix: bounded by
+  // the one-word nouns instead, it never reaches the two-word PUBLIC_KEY run.
+  for (const scope of /** @type {const} */ (["trailing", "any-segment"]))
+    it(`declines a suffix longer than every noun (${scope})`, () => {
+      const holds = credentialNameMatcher({
+        scope,
+        spec: {
+          nouns: [{ parts: ["key"], uses: ["env-name", "field-value"] }],
+          nonSecretSuffixes: [["public", "key"]],
+        },
+      });
+      assert.equal(holds("SSH_PUBLIC_KEY"), false);
+      assert.equal(holds("SSH_PRIVATE_KEY"), true);
+    });
+
   it("declineNonSecret: false keeps it, for a scrub that prefers over-stripping", () => {
     const holds = credentialNameMatcher({
       spec: SPEC,

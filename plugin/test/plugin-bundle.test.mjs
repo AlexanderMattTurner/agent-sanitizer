@@ -19,7 +19,6 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
-  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -321,7 +320,8 @@ function stubBin(t, omit) {
   // degraded-warning marker, without which every warning repeats and a dedupe
   // test passes vacuously. cat/mktemp/rm replay a captured payload to the node
   // path. sleep and chmod are the provisioners': without them the lock's
-  // waiting arm dies at 127 and the daemon it installs is not executable.
+  // waiting arm dies at 127 and the daemon it installs is not executable; mv
+  // swaps a freshly built venv in over the previous one.
   for (const cmd of [
     "bash",
     "sh",
@@ -334,6 +334,7 @@ function stubBin(t, omit) {
     "mktemp",
     "pwd",
     "mkdir",
+    "mv",
     "rm",
     "rmdir",
     "sleep",
@@ -521,13 +522,15 @@ test("bundle is self-contained: only builtin imports, no residue", () => {
   // tables in this way and took Layer 2 down on the first HTML tool output —
   // static import specifiers were all clean while the artifact was broken, which
   // is why this assertion exists beside them rather than trusting them.
-  const survivors = runtimeRequires(text);
+  // Sorted on both sides: runtimeRequires answers in the bundle's emission
+  // order, which esbuild does not promise and which is no part of the contract.
+  const survivors = runtimeRequires(text).sort();
   assert.deepEqual(
     survivors,
     // The declared allowlist, read from the shared bundle list rather than
-    // restated: today the registry-first namespace-guard fallback, which only
-    // runs on a host that has a node_modules.
-    [...bundleTarget("plugin-hooks").allowedRuntimeRequires],
+    // restated: the registry-first fallbacks that only run on a host that has
+    // a node_modules. Exact membership, not a subset.
+    [...bundleTarget("plugin-hooks").allowedRuntimeRequires].sort(),
     `bundle keeps unresolvable runtime require(): ${survivors.join(", ")}`,
   );
   // Layer 5 (prompt armor) is deliberately not shipped: its subprocess helper
@@ -1194,6 +1197,13 @@ function stageHookBinary(t, body, { mode = 0o755, dirMode = 0o700 } = {}) {
   const bin = join(dir, "agent-sanitizer-hooks");
   writeFileSync(bin, `#!/bin/sh\n${body}\n`);
   chmodSync(bin, mode);
+  // The install stamp the provisioner writes beside every binary it installs:
+  // without it the launcher reads the binary as installed from some OTHER
+  // manifest and prefers node, which is not the state these cases model.
+  cpSync(
+    join(PLUGIN_DIR, "dist", "hooks", "hook-binaries.sha256"),
+    join(dir, ".manifest-installed"),
+  );
   // Stated, not inherited from the runner's umask: the launcher refuses to
   // execute a binary out of a group- or other-writable directory, so a
   // permissive umask would silently turn every case below into that refusal.
@@ -1287,51 +1297,6 @@ test("a provisioned binary answers even when node IS available", (t) => {
   );
   assert.equal(res.status, 0, res.stderr);
   assert.deepEqual(JSON.parse(res.stdout), { fromBinary: true });
-});
-
-test("the launcher hands the compiled binary the real zipapp path", (t) => {
-  // Inside the binary import.meta.url is a virtual filesystem with no zipapp
-  // beside it, so the exported path is the binary's only route to the engine.
-  const plugin = stagePlugin(t);
-  const run = (extra) =>
-    spawnSync(
-      "bash",
-      [
-        join(plugin, "scripts", "safe-launch.sh"),
-        "PreToolUse",
-        "--hook=pretooluse-sanitize",
-      ],
-      {
-        input: "{}",
-        encoding: "utf8",
-        cwd: tmpdir(),
-        env: {
-          ...baseEnv(),
-          ...sessionEnv(),
-          _AGENT_SANITIZER_REDACTOR_PYZ: "",
-          ...extra,
-          CLAUDE_PLUGIN_DATA: stageHookBinary(
-            t,
-            `cat >/dev/null; printf '{"pyz":"%s"}' "$_AGENT_SANITIZER_REDACTOR_PYZ"`,
-          ),
-        },
-      },
-    );
-
-  const unset = run({});
-  assert.equal(unset.status, 0, unset.stderr);
-  assert.deepEqual(JSON.parse(unset.stdout), {
-    pyz: join(plugin, "dist", "redactor", "daemon.pyz"),
-  });
-
-  // An explicit setting is authoritative, never overwritten.
-  const explicit = run({
-    _AGENT_SANITIZER_REDACTOR_PYZ: "/operator/daemon.pyz",
-  });
-  assert.equal(explicit.status, 0, explicit.stderr);
-  assert.deepEqual(JSON.parse(explicit.stdout), {
-    pyz: "/operator/daemon.pyz",
-  });
 });
 
 test("the binary receives the same argv and payload the bundle would", (t) => {
@@ -2534,10 +2499,10 @@ test("a missing peer package fails the output hook CLOSED under the opt-out", (t
 const EXERCISED_ENV_VARS = new Set([
   // "output hook fails CLOSED when the redactor is unreachable"
   "_AGENT_SANITIZER_REDACTOR_DAEMON",
+  // test/claude-hooks-redactor-pyz.test.mjs: "runs the zipapp the variable names"
+  "_AGENT_SANITIZER_REDACTOR_PYZ",
   // "output hook redacts through the daemon wire protocol"
   "_AGENT_SANITIZER_REDACTOR_SOCKET",
-  // "…REDACTOR_PYZ is the only route to the zipapp when none sits beside the bundle"
-  "_AGENT_SANITIZER_REDACTOR_PYZ",
   // "…WAIT_MS bounds the wait for a daemon that never starts"
   "_AGENT_SANITIZER_REDACTOR_WAIT_MS",
   // "…REQUEST_MS is what ends a post-connect stall"
@@ -2567,54 +2532,6 @@ test("every _AGENT_SANITIZER_* var the sources read has a behavioural case", () 
     [],
     `these vars are read by the hooks but no test drives them: ${missing.join(", ")}`,
   );
-});
-
-test("_AGENT_SANITIZER_REDACTOR_PYZ is the only route to the zipapp when none sits beside the bundle", (t) => {
-  const plugin = stagePlugin(t);
-  // Move the zipapp out from beside the bundle: the sibling lookup then finds
-  // nothing, exactly as inside the compiled hook binary, so only the exported
-  // path can reach the engine.
-  const elsewhere = join(scratch(t), "daemon.pyz");
-  renameSync(join(plugin, "dist", "redactor", "daemon.pyz"), elsewhere);
-  const payload = {
-    hook_event_name: "PostToolUse",
-    tool_name: "Bash",
-    tool_input: {},
-    tool_response: { stdout: "key=AKIAIOSFODNN7EXAMPLE done" },
-  };
-  const env = {
-    ...FAIL_CLOSED,
-    _AGENT_SANITIZER_REDACTOR_WAIT_MS: "400",
-    _AGENT_SANITIZER_REDACTOR_REQUEST_MS: "400",
-    _AGENT_SANITIZER_SANITIZE_BUDGET_MS: "3000",
-  };
-
-  // Negative half: without the variable nothing finds the engine, so the hook
-  // fails closed. This is what makes the positive half non-vacuous.
-  const without = launch(plugin, "PostToolUse", "sanitize-output", payload, {
-    env: {
-      ...env,
-      _AGENT_SANITIZER_REDACTOR_SOCKET: join(scratch(t), "a.sock"),
-    },
-  });
-  assert.equal(without.status, 0, without.stderr);
-  assert.match(
-    JSON.parse(without.stdout).hookSpecificOutput.updatedToolOutput.stdout,
-    /SANITIZATION FAILED/,
-  );
-
-  // Positive half: a REAL engine run from the exported path.
-  const withPyz = launch(plugin, "PostToolUse", "sanitize-output", payload, {
-    env: {
-      ...FAIL_CLOSED,
-      _AGENT_SANITIZER_REDACTOR_SOCKET: join(scratch(t), "b.sock"),
-      _AGENT_SANITIZER_REDACTOR_PYZ: elsewhere,
-    },
-  });
-  assert.equal(withPyz.status, 0, withPyz.stderr);
-  const out = JSON.parse(withPyz.stdout).hookSpecificOutput;
-  assert.ok(!JSON.stringify(out).includes("AKIAIOSFODNN7EXAMPLE"));
-  assert.match(out.updatedToolOutput.stdout, /REDACTED/);
 });
 
 test("_AGENT_SANITIZER_REDACTOR_WAIT_MS bounds the wait for a daemon that never starts", (t) => {

@@ -98,14 +98,17 @@ if [[ ! "$repository" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ || ! "$expected_diges
   exit 1
 fi
 
-# A refresh that fails on a host that ALREADY has a binary leaves that binary
-# serving — the launcher prefers it over node — so one sentence cannot cover
-# both cases without misnaming the runtime that is actually running. Recomputed
-# rather than fixed, because removing a tampered binary below changes which
-# case the host is in.
+# A failed refresh leaves any ALREADY-installed binary in place, and the
+# launcher prefers it over node only while its stamp names this manifest — so
+# one sentence cannot name the runtime that is actually running. Recomputed
+# because removing a tampered binary or a stale stamp below changes the case.
 set_consequence() {
+  if [[ -x "$binary" && -f "$installed_stamp" ]] && cmp -s "$manifest" "$installed_stamp"; then
+    consequence="the hooks keep running the previously provisioned $binary."
+    return 0
+  fi
   if [[ -x "$binary" ]]; then
-    consequence="the hooks keep running the previously provisioned $binary, which was compiled from an OLDER bundle — this session sanitizes one plugin version behind until a later session refreshes it."
+    consequence="the previously provisioned $binary was compiled from an OLDER bundle, so the hooks run this install's bundle through node instead, and fall back to that binary only on a host where no node is found, until a later session refreshes it."
     return 0
   fi
   consequence="the hooks keep using the node runtime search; on a host without node >=22, sanitization stays DEGRADED (failing open unless AGENT_SANITIZER_FAIL_OPEN=0) until a new session provisions the binary."
@@ -185,6 +188,16 @@ if [[ ! "$expected_bundle" =~ ^[0-9a-f]{64}$ ]]; then
 fi
 installed_bundle="$(sha256_of "$bundle")" || installed_bundle=""
 if [[ "$installed_bundle" != "$expected_bundle" ]]; then
+  # A binary provisioned earlier was compiled from an older bundle too; removing
+  # its stamp makes the launcher prefer node until a refresh lands.
+  if [[ -f "$installed_stamp" ]]; then
+    rm -f -- "$installed_stamp"
+    if [[ -e "$installed_stamp" ]]; then
+      echo "agent-sanitizer: cannot remove $installed_stamp — the launcher keeps preferring $binary, compiled from an older bundle, over node; delete it by hand" >&2
+      exit 1
+    fi
+    set_consequence
+  fi
   echo "agent-sanitizer: $bundle hashes to ${installed_bundle:-nothing readable}, but $manifest pins $expected_bundle — the release binary was compiled from a DIFFERENT bundle than this install ships, so it will not be provisioned; $consequence (Regenerate the manifest with plugin/scripts/build-hook-binaries.mjs.)" >&2
   exit 1
 fi

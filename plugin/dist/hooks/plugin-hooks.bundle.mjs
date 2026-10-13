@@ -4275,8 +4275,8 @@ function cfClassSource(codepoints) {
 function isSgrOnly(text6) {
   return scanAnsi(text6).every((token) => token.kind === TOKEN_KIND.SGR);
 }
-function* findLongRuns(text6) {
-  let pos = 0;
+function* findLongRuns(text6, from = 0) {
+  let pos = from;
   for (; ; ) {
     LONG_RUN_CHUNK_RE.lastIndex = pos;
     const match = LONG_RUN_CHUNK_RE.exec(text6);
@@ -4570,8 +4570,7 @@ function markTagSequences(cps) {
 }
 function isStandardizedVariationSelector(cps, i) {
   const cp = cps[i];
-  if (cp < STANDARDIZED_SELECTOR_MIN || cp > STANDARDIZED_SELECTOR_MAX)
-    return false;
+  if (!STANDARDIZED_SELECTORS.has(cp)) return false;
   return i > 0 && isStandardizedVariant(cps[i - 1], cp);
 }
 function isIdeographicVariationSelector(cps, i) {
@@ -4897,17 +4896,19 @@ function carveOf(body) {
   if (lastCarve !== null && lastCarve.body === body) return lastCarve;
   const cps = codePointArray(body);
   const analysis = analyzeCarve(cps);
-  lastCarve = { body, cps, analysis, strip: null, removed: null };
+  lastCarve = { body, cps, analysis, strip: null, removed: null, view: null };
   return lastCarve;
 }
 function needsCarveOut(body) {
   return body.includes(String.fromCodePoint(ZWNJ)) || body.includes(String.fromCodePoint(ZWJ)) || VARIATION_SELECTOR.test(body) || TAG_CHAR_RE.test(body) || GATED_BLANK_RE.test(body);
 }
 function payloadInvisibleView(text6) {
+  const entry = carveOf(text6);
+  if (entry.view !== null) return entry.view;
   const {
     cps,
     analysis: { codes, kind: kind2 }
-  } = carveOf(text6);
+  } = entry;
   const offsets = u16Offsets(cps);
   const isPayload = (i2) => codes[i2] !== CODE_VISIBLE && kind2[i2] === KIND_NONE;
   const parts2 = [];
@@ -4920,7 +4921,8 @@ function payloadInvisibleView(text6) {
     while (i < cps.length && isPayload(i)) i++;
     if (i > keepFrom) parts2.push(text6.slice(offsets[keepFrom], offsets[i]));
   }
-  return parts2.join("");
+  entry.view = parts2.join("");
+  return entry.view;
 }
 function payloadLongRunSample(text6) {
   return payloadLongRuns(text6).next().value?.text ?? null;
@@ -4946,6 +4948,8 @@ function countEffectiveInvisible(text6) {
     return surplusOver(countPayloadInvisible(text6), text6, stripInvisible(text6));
   const entry = carveOf(text6);
   const payload = entry.analysis.payloadInvis;
+  if (payload === entry.analysis.invisible.length && !LONE_LOW_SURROGATE_RE.test(text6))
+    return payload;
   if (!needsCarveOut(text6))
     return surplusOver(
       payload,
@@ -4987,7 +4991,7 @@ function stripBody(body) {
 function stripInvisible(text6) {
   return stripInvisibleWithReport(text6).cleaned;
 }
-var VS, ZERO_WIDTH_MN, BLANK_NON_CF, REGEX_FLAGS, CF_CLASS_SOURCE, CATEGORY, CATEGORY_LABELS, CHECKS, STRIP, LONG_RUN_THRESHOLD, SCATTERED_THRESHOLD, LONG_RUN_RE, RUN_CHUNK, LONG_RUN_CHUNK_RE, RUN_TAIL_RE, BOM, ZWNJ, ZWJ, CONSECUTIVE_JOINER_CAP, CONSECUTIVE_SELECTOR_CAP, TOTAL_PRESERVED_JOINER_BUDGET, PRESERVED_JOINER_PER_VISIBLE, PRESERVE_HARD_CAP, TOTAL_PRESERVED_BLANK_BUDGET, PRESERVED_BLANK_PER_ANCHOR, LINGUISTIC_SCRIPTS, isEmojiLeft, KEYCAP_BASE, COMBINING_KEYCAP, isEmojiBase, VARIATION_SELECTOR, isKeycapBase, PRESENTATION_SELECTORS, TAG_BASE, TAG_CANCEL, TAG_SPEC_MIN, TAG_SPEC_MAX, REGISTERED_TAG_PAYLOADS, MAX_TAG_SPEC_CHARS, VS16, isTextDefaultEmoji, isEmojiModifierCp, isExtendedPictographic, IVS_MIN, IVS_MAX, CJK_COMPATIBILITY_IDEOGRAPH_BLOCKS, inCjkIdeographTables, BRAILLE_BLANK, HANGUL_FILLERS, GATED_BLANK_RE, isBrailleScript, isHangulScript, CODE_VISIBLE, CODE_CF, CODE_VS, CODE_BLANK, KIND_NONE, KIND_JOINER, KIND_EMOJIVS, KIND_GLYPH, KIND_STDVS, KIND_IVS, KIND_BLANK, CODE_CATEGORY, TRACKED_INVISIBLE, TRACKED_TABLE_END, TRACKED_LOW, CP_PREDICATE_MEMO_CAP, isCursiveLetter, CP_PROPS_END, JOINING_TYPES, PROP_TYPE_MASK, PROP_VIRAMA, PROP_BRAHMIC_CONSONANT, PROP_EMOJI_TEXT_DEFAULT, PROP_EMOJI_MODIFIER, PROP_CJK_IDEOGRAPH, PROP_EXTENDED_PICTOGRAPHIC, PROP_JOINING_LETTER, cpPropsTable, propsTable, STANDARDIZED_SELECTOR_MIN, STANDARDIZED_SELECTOR_MAX, segmenterCache, PAIR_BREAK_MEMO_CAP, PAIR_BREAK_MEMO, CONTAINING_CANDIDATE_SHARE, LONE_LOW_SURROGATE_RE, isHighSurrogate, isLowSurrogate, lastCarve, TAG_CHAR_RE;
+var VS, ZERO_WIDTH_MN, BLANK_NON_CF, REGEX_FLAGS, CF_CLASS_SOURCE, CATEGORY, CATEGORY_LABELS, CHECKS, STRIP, LONG_RUN_THRESHOLD, SCATTERED_THRESHOLD, LONG_RUN_RE, RUN_CHUNK, LONG_RUN_CHUNK_RE, RUN_TAIL_RE, BOM, ZWNJ, ZWJ, CONSECUTIVE_JOINER_CAP, CONSECUTIVE_SELECTOR_CAP, TOTAL_PRESERVED_JOINER_BUDGET, PRESERVED_JOINER_PER_VISIBLE, PRESERVE_HARD_CAP, TOTAL_PRESERVED_BLANK_BUDGET, PRESERVED_BLANK_PER_ANCHOR, LINGUISTIC_SCRIPTS, isEmojiLeft, KEYCAP_BASE, COMBINING_KEYCAP, isEmojiBase, VARIATION_SELECTOR, isKeycapBase, PRESENTATION_SELECTORS, TAG_BASE, TAG_CANCEL, TAG_SPEC_MIN, TAG_SPEC_MAX, REGISTERED_TAG_PAYLOADS, MAX_TAG_SPEC_CHARS, VS16, isTextDefaultEmoji, isEmojiModifierCp, isExtendedPictographic, IVS_MIN, IVS_MAX, CJK_COMPATIBILITY_IDEOGRAPH_BLOCKS, inCjkIdeographTables, BRAILLE_BLANK, HANGUL_FILLERS, GATED_BLANK_RE, isBrailleScript, isHangulScript, CODE_VISIBLE, CODE_CF, CODE_VS, CODE_BLANK, KIND_NONE, KIND_JOINER, KIND_EMOJIVS, KIND_GLYPH, KIND_STDVS, KIND_IVS, KIND_BLANK, CODE_CATEGORY, TRACKED_INVISIBLE, TRACKED_TABLE_END, TRACKED_LOW, CP_PREDICATE_MEMO_CAP, isCursiveLetter, CP_PROPS_END, JOINING_TYPES, PROP_TYPE_MASK, PROP_VIRAMA, PROP_BRAHMIC_CONSONANT, PROP_EMOJI_TEXT_DEFAULT, PROP_EMOJI_MODIFIER, PROP_CJK_IDEOGRAPH, PROP_EXTENDED_PICTOGRAPHIC, PROP_JOINING_LETTER, cpPropsTable, propsTable, STANDARDIZED_SELECTORS, segmenterCache, PAIR_BREAK_MEMO_CAP, PAIR_BREAK_MEMO, CONTAINING_CANDIDATE_SHARE, LONE_LOW_SURROGATE_RE, isHighSurrogate, isLowSurrogate, lastCarve, TAG_CHAR_RE;
 var init_invisible = __esm({
   "src/invisible.mjs"() {
     "use strict";
@@ -5165,11 +5169,8 @@ var init_invisible = __esm({
     PROP_JOINING_LETTER = 512;
     cpPropsTable = null;
     propsTable = () => cpPropsTable ??= new Uint16Array(CP_PROPS_END);
-    STANDARDIZED_SELECTOR_MIN = Math.min(
-      ...STANDARDIZED_VARIANTS.map(([, selector2]) => selector2)
-    );
-    STANDARDIZED_SELECTOR_MAX = Math.max(
-      ...STANDARDIZED_VARIANTS.map(([, selector2]) => selector2)
+    STANDARDIZED_SELECTORS = new Set(
+      STANDARDIZED_VARIANTS.map(([, selector2]) => selector2)
     );
     segmenterCache = null;
     PAIR_BREAK_MEMO_CAP = 4096;
@@ -48699,7 +48700,14 @@ function scanText(content3) {
   let runChars = 0;
   let line = 1;
   let counted = 0;
-  const runs = verdict.firstRun === null ? [] : findLongRuns(payloadInvisibleView(content3));
+  const { firstRun } = verdict;
+  const runs = firstRun === null ? [] : [
+    firstRun,
+    ...findLongRuns(
+      payloadInvisibleView(content3),
+      firstRun.index + firstRun.text.length
+    )
+  ];
   for (const run of runs) {
     for (; counted < run.index; counted++)
       if (content3.charCodeAt(counted) === NEWLINE) line++;
@@ -49954,19 +49962,19 @@ function credentialNameMatcher(options = {}) {
   const vocabulary = spec2 ? parseCredentialNames(spec2) : credentialNames();
   const nouns = new Set(vocabulary.segments);
   const nonSecret = new Set(vocabulary.nonSecretSegments);
-  const maxRun = Math.max(
-    ...vocabulary.segments.map((noun) => noun.split("_").length)
-  );
-  const trailingRuns = (words) => Array.from(
-    { length: Math.min(maxRun, words.length) },
+  const longestRun = (segments) => Math.max(...Array.from(segments, (s2) => s2.split("_").length));
+  const maxRun = longestRun(nouns);
+  const maxNonSecretRun = longestRun(nonSecret);
+  const trailingRuns = (words, bound) => Array.from(
+    { length: Math.min(bound, words.length) },
     (_, i) => words.slice(words.length - (i + 1)).join("_")
   );
   return (name50) => {
     const words = name50.toUpperCase().split("_");
-    if (declineNonSecret && trailingRuns(words).some((run) => nonSecret.has(run)))
+    if (declineNonSecret && trailingRuns(words, maxNonSecretRun).some((run) => nonSecret.has(run)))
       return false;
     if (scope === "trailing")
-      return trailingRuns(words).some((run) => nouns.has(run));
+      return trailingRuns(words, maxRun).some((run) => nouns.has(run));
     for (let start = 0; start < words.length; start++)
       for (let span = 1; span <= maxRun && start + span <= words.length; span++)
         if (nouns.has(words.slice(start, start + span).join("_"))) return true;
@@ -49999,7 +50007,7 @@ var credential_names_default;
 var init_credential_names2 = __esm({
   "python/agent_sanitizer/secrets/data/credential-names.json"() {
     credential_names_default = {
-      $comment: "The credential-noun vocabulary: the words that make an identifier name a secret. Published so every consumer derives its own matcher from ONE list \u2014 a newly recognized noun reaches them all through a version bump instead of N hand edits. Read it from Python via agent_sanitizer.secrets (credential_name_segments / credential_field_name_patterns / non_secret_name_segments) or from JavaScript via the npm subpath export `agent-sanitizer/credential-names`. `parts` are the lowercase words of the noun; a consumer renders them for its own matcher (underscore-joined `API_KEY` and bare-joined `APIKEY` for an env-var NAME, `api[_-]?key` for a `field = value` regex). `uses` says which matcher may use the noun, because the two are not interchangeable: `env-name` matches a variable NAME and never inspects a value, so a broad noun there costs nothing, while `field-value` redacts whatever follows `noun = ` and a broad noun there mangles ordinary text \u2014 `key = <20 chars>` is a false-positive flood, so `key`, `pat`, `credential`, `credentials` and `secrets` are env-name only \u2014 `credential`/`credentials` are everyday variable names, and an attribute chain (`credentials = service_account.Credentials.from_service_account_info(info)`) escapes every value-shape skip, so a field-value rendering would redact ordinary source lines. `passphrase` is the exception among them: it is as shape-specific as `password`, and detect-secrets' own KeywordDetector DENYLIST omits it, so name-only would let `passphrase = <secret>` reach the model in cleartext. `nonSecretSuffixes` are the trailing words that make a credential-shaped name hold a NON-secret (a key's identifier, the public half of a keypair), which a consumer must not redact. Every part is restricted to a-z0-9 so it carries no regex metacharacter; the accessors enforce that and fail closed on a violation, an empty list, or an unknown `uses` value. It sits inside the Python package because a wheel can only ship data under its package directory, while npm's `files`/`exports` can name any path \u2014 so ONE physical file backs both ecosystems and there is no copy to drift.",
+      $comment: "The credential-noun vocabulary: the words that make an identifier name a secret. Published so every consumer derives its own matcher from ONE list \u2014 a newly recognized noun reaches them all through a version bump instead of N hand edits. Read it from Python via agent_sanitizer.secrets (credential_name_segments / credential_field_name_patterns / non_secret_name_segments) or from JavaScript via the npm subpath export `agent-sanitizer/credential-names`. `parts` are the lowercase words of the noun; a consumer renders them for its own matcher (underscore-joined `API_KEY` and bare-joined `APIKEY` for an env-var NAME, `api[_-]?key` for a `field = value` regex). `uses` says which matcher may use the noun, because the two are not interchangeable: `env-name` matches a variable NAME and never inspects a value, so a broad noun there costs nothing, while `field-value` redacts whatever follows `noun = ` and a broad noun there mangles ordinary text \u2014 `key = <20 chars>` is a false-positive flood, so `key`, `pat`, `credential`, `credentials` and `secrets` are env-name only \u2014 `credential`/`credentials` are everyday variable names, and an attribute chain (`credentials = service_account.Credentials.from_service_account_info(info)`) escapes every value-shape skip, so a field-value rendering would redact ordinary source lines. `passphrase` is the exception among them: it is as shape-specific as `password`, and detect-secrets' own KeywordDetector DENYLIST omits it, so name-only would let `passphrase = <secret>` reach the model in cleartext. `nonSecretSuffixes` are the trailing words that make a credential-shaped name hold a NON-secret \u2014 a key's identifier, the public half of a keypair, or metadata ABOUT a secret (its type, display name, label, kind, or the path/file it lives at) \u2014 which a consumer must not redact. A bare `id` is deliberately absent: Vault's `secret_id` is itself a credential. Every part is restricted to a-z0-9 so it carries no regex metacharacter; the accessors enforce that and fail closed on a violation, an empty list, or an unknown `uses` value. It sits inside the Python package because a wheel can only ship data under its package directory, while npm's `files`/`exports` can name any path \u2014 so ONE physical file backs both ecosystems and there is no copy to drift.",
       nouns: [
         { parts: ["api", "key"], uses: ["env-name", "field-value"] },
         { parts: ["access", "key"], uses: ["env-name", "field-value"] },
@@ -50024,7 +50032,14 @@ var init_credential_names2 = __esm({
       ],
       nonSecretSuffixes: [
         ["key", "id"],
-        ["public", "key"]
+        ["public", "key"],
+        ["type"],
+        ["name"],
+        ["label"],
+        ["keyword"],
+        ["kind"],
+        ["path"],
+        ["file"]
       ]
     };
   }
@@ -50338,9 +50353,7 @@ function resolveSocketPath(env, uid) {
 function daemonCommand() {
   const configured = readKnob("_AGENT_SANITIZER_REDACTOR_DAEMON");
   if (configured) return [configured];
-  const exported = readKnob("_AGENT_SANITIZER_REDACTOR_PYZ");
-  if (exported) return ["python3", exported];
-  const pyz = fileURLToPath4(new URL("../redactor/daemon.pyz", import.meta.url));
+  const pyz = readKnob("_AGENT_SANITIZER_REDACTOR_PYZ") || fileURLToPath4(new URL("../redactor/daemon.pyz", import.meta.url));
   if (existsSync2(pyz)) return ["python3", pyz];
   return ["agent-secret-redactor-daemon"];
 }
