@@ -53,6 +53,22 @@ describe("severity: the vocabulary", () => {
     assert.notEqual(SEVERITY.NOTE, SEVERITY.WARNING);
   });
 
+  // Every reported byte change rides a Finding, so refusing an empty message
+  // here is what makes a silent mutation unconstructible.
+  for (const [name, build] of [
+    ["warning", warning],
+    ["note", note],
+    ["finding(true)", (m) => finding(true, m)],
+    ["finding(false)", (m) => finding(false, m)],
+  ])
+    for (const bad of ["", undefined, null, 0])
+      it(`${name} refuses ${JSON.stringify(bad) ?? "undefined"} as a message`, () => {
+        assert.throws(() => build(/** @type {any} */ (bad)), {
+          name: "TypeError",
+          message: "agent-sanitizer: a finding needs a non-empty message",
+        });
+      });
+
   it("resolves a computed tier both ways round", () => {
     assert.deepEqual(finding(true, "m"), warning("m"));
     assert.deepEqual(finding(false, "m"), note("m"));

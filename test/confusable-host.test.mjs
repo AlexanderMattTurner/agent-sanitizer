@@ -85,6 +85,28 @@ describe("corpus: the attack half produces the declared severity", () => {
   });
 });
 
+describe("corpus: same-script Latin words stay quiet", () => {
+  it("every sameScript label reads as ASCII yet is a NOTE, never a WARNING", () => {
+    assert.ok(CORPUS.sameScript.length >= 8, "sameScript corpus too small");
+    const wrong = CORPUS.sameScript.filter(
+      ({ label, reads }) =>
+        confusableLabel(label) !== SEVERITY.NOTE ||
+        confusableHost(`https://${label}.example`)?.reads !==
+          `${reads}.example`,
+    );
+    assert.deepEqual(wrong, []);
+  });
+
+  it("an all-orthographic host draws no WARNING through the pipeline", async () => {
+    const r = await sanitize("Sipariş için https://yazılım.com.tr/ adresine", {
+      exfilScan: true,
+    });
+    assert.deepEqual(r.warnings, []);
+    assert.deepEqual(r.found, [CATEGORY.CONFUSABLE_HOST]);
+    assert.equal(r.notes.length, 1);
+  });
+});
+
 describe("corpus: the declared misses really are missed", () => {
   it("each residual is a tested fact, not a claim in a doc", () => {
     assert.ok(CORPUS.misses.length > 0, "misses list is empty");

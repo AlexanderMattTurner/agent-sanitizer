@@ -101,9 +101,9 @@ UNRESOLVABLE_SITES = {
 
 # Patterns regexploit cannot parse even after the translations below, keyed by
 # (file, pattern), each reviewed by hand. Empty: its only members were the
-# \p{...} property escapes src/invisible.mjs used to ask the runtime for, and
-# test/unicode-property-pin.test.mjs now fails on any such escape in src/, so
-# those properties are pinned range tables rather than regexes.
+# \p{...} property escapes src/invisible.mjs and src/confusables.mjs used to ask
+# the runtime for, and test/unicode-property-pin.test.mjs now fails on any such
+# escape in src/, so those properties are pinned range tables rather than regexes.
 UNANALYZABLE_JS_ONLY: set[tuple[str, str]] = set()
 
 # JS `(?<name>` -> Python `(?P<name>`, leaving lookbehinds `(?<=` / `(?<!`

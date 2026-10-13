@@ -113,49 +113,95 @@ export function buildEngineWheel() {
   }
 }
 
-/** Zip-writing helper, run under python3 (stdlib only; PYZ_* env carries args). */
-const WRITE_PYZ = `
-import os, sys, zipfile
-
-target = os.environ["PYZ_TARGET_DIR"]
-out = os.environ["PYZ_OUT"]
-
-# The engine reads data files through Path(__file__) (e.g.
-# agent_sanitizer/data/invisible-charset.json), which cannot be opened inside
-# a zip — the Python twin of the css-tree runtime-require defect on the JS
-# side. So the entry self-extracts to a content-addressed per-user cache and
-# imports from there: the COMMITTED artifact stays one deterministic file,
-# and any Path-based file access works at runtime. The cache key is the
-# archive digest, so a plugin update extracts fresh and stale trees are inert.
-MAIN = """\\
-import hashlib, os, shutil, sys, tempfile, zipfile
+/**
+ * The zipapp's `__main__.py`, exported so a test can run the real stub. The
+ * engine reads data files through Path(__file__), which cannot be opened inside
+ * a zip, so the stub self-extracts to a cache keyed on the archive digest (stale
+ * trees are inert) under `$CLAUDE_PLUGIN_DATA/redactor-pyz` when writable, else
+ * a uid-named temp-dir directory. Both names are predictable, so every directory
+ * it imports from must pass `trusted_dir`.
+ */
+export const PYZ_MAIN = String.raw`import hashlib, os, shutil, stat, sys, tempfile, zipfile
 
 archive = os.path.dirname(os.path.abspath(__file__))
+
+
+def trusted_dir(path):
+    """Exit unless only this uid can write PATH: a real directory (lstat, so a
+    symlink is refused rather than followed), owned by this uid, with no
+    group/other write bit. This refusal is what blocks another local user
+    pre-creating the predictable cache directory and planting modules that
+    this process would then import and run as us."""
+    st = os.lstat(path)
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        raise SystemExit(
+            f"agent-sanitizer redactor: refusing {path}: not a real directory"
+        )
+    if st.st_uid != os.getuid():
+        raise SystemExit(
+            f"agent-sanitizer redactor: refusing {path}: owned by uid "
+            f"{st.st_uid}, not {os.getuid()}"
+        )
+    if st.st_mode & 0o022:
+        raise SystemExit(
+            f"agent-sanitizer redactor: refusing {path}: writable by group or "
+            f"other (mode {stat.S_IMODE(st.st_mode):o})"
+        )
+
 
 with open(archive, "rb") as fh:
     digest = hashlib.sha256(fh.read()).hexdigest()[:16]
 
-base = os.path.join(
-    tempfile.gettempdir(), f"agent-sanitizer-pyz-{os.getuid()}"
-)
-os.makedirs(base, mode=0o700, exist_ok=True)
+candidates = [
+    os.path.join(tempfile.gettempdir(), f"agent-sanitizer-pyz-{os.getuid()}")
+]
+plugin_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+if plugin_data:
+    candidates.insert(0, os.path.join(plugin_data, "redactor-pyz"))
+# The per-install directory is preferred, but a host that cannot write it (the
+# same read-only plugin data that leaves no venv) still has a usable temp
+# cache. Only a base that cannot be created or written is skipped: a base that
+# exists and fails trusted_dir below is an attack signal and stays fatal.
+for base in candidates:
+    try:
+        os.makedirs(base, mode=0o700, exist_ok=True)
+    except OSError:
+        if base is candidates[-1]:
+            raise
+        continue
+    if os.access(base, os.W_OK) or base is candidates[-1]:
+        break
+trusted_dir(base)
 tree = os.path.join(base, digest)
 
-if not os.path.isdir(tree):
+if not os.path.lexists(tree):
+    # Extracted privately and renamed into place, so the digest path only ever
+    # names a complete tree.
     scratch = tempfile.mkdtemp(dir=base)
     with zipfile.ZipFile(archive) as zf:
         zf.extractall(scratch)
     try:
         os.rename(scratch, tree)
     except OSError:
+        if not os.path.isdir(tree):
+            raise
         # A concurrent spawn won the race; its tree is identical by digest.
-        shutil.rmtree(scratch, ignore_errors=True)
+        shutil.rmtree(scratch)
+trusted_dir(tree)
 
 sys.path.insert(0, tree)
 from agent_sanitizer.secrets.daemon import main
 
 sys.exit(main())
-"""
+`;
+
+/** Zip-writing helper, run under python3 (stdlib only; PYZ_* env carries args). */
+const WRITE_PYZ = `
+import os, sys, zipfile
+
+target = os.environ["PYZ_TARGET_DIR"]
+out = os.environ["PYZ_OUT"]
+MAIN = os.environ["PYZ_MAIN"]
 
 entries = []
 for base, dirs, files in os.walk(target):
@@ -272,6 +318,7 @@ export function buildRedactorPyz() {
     const out = run("python3", ["-c", WRITE_PYZ], {
       PYZ_TARGET_DIR: target,
       PYZ_OUT: PYZ_PATH,
+      PYZ_MAIN,
     });
     process.stderr.write(out);
   } finally {

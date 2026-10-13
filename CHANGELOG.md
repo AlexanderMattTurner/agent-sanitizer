@@ -8,6 +8,32 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.63.1] - 2026-10-13
+
+### Added
+- Unicode properties dataset and utilities for character analysis.
+- Key collision detection test for claude-hooks exports.
+- New test suite for confusable host detection.
+- Confusables test coverage and extended confusable hosts data.
+- Deadline test for layer 2-3 performance constraints.
+- Redactor client path coverage and pyz stub tests.
+- Severity tier classification tests.
+
+### Changed
+- Refactored output module to inline span-delete re-runs and reduce table overhead.
+- Refactored redactor tests to compress socket/extraction-dir trust test suite.
+- Refactored output module helpers to fold single-use walk/import utilities inline.
+- Optimized HTML processing and gates logic.
+- Improved test coverage with table-driven test cases for output validation.
+- Updated hook-latency ceiling derivation based on CI runner performance.
+
+### Fixed
+- Fixed output processing to ensure NOTE messages reach the model alongside warnings.
+- Fixed test growth calculation to prevent rope flatten from charging to largest sizes.
+- Fixed ReDoS test coverage for literal-range DISPLAY_UNSAFE with proper guards.
+- Optimized SessionStart scan latency to stay within performance budget.
+- Corrected copy control evidence scope in test documentation (translate vs memmove).
+
 ## [2.63.0] - 2026-10-13
 
 ### Fixed

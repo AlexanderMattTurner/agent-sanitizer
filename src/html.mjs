@@ -2451,7 +2451,9 @@ const VALUE_HAS_DIGIT_RE = /\d/;
 // signed-CDN token (imgix `?s=`, KeyCDN `?secure=`) are all a bare digest under
 // a generic name, and every one of them was reported before: hex is a subset of
 // base64's alphabet, so the 40-char base64 arm caught them on charset alone.
-const BLOB_VALUE_B64_RE = /^[A-Za-z0-9+/]{40,}={0,2}$/;
+// Spelled `X{40}X*`, not the equivalent `X{40,}`: irregexp runs `{40,}` as a
+// counted loop pushing a backtrack entry per character (4x slower on 64 KB).
+const BLOB_VALUE_B64_RE = /^[A-Za-z0-9+/]{40}[A-Za-z0-9+/]*={0,2}$/;
 const HEX_ONLY_RE = /^[A-Fa-f0-9]+$/;
 // 16 bytes, the floor the hex arm has always carried.
 const HEX_BLOB_MIN_LEN = 32;
@@ -2473,7 +2475,8 @@ const DIGEST_HEX_LENGTHS = new Set([32, 40, 56, 64, 96, 128]);
 // (`?d=<200-char base64url of cookies>`) routinely dodged it. The mix test keeps
 // the slug benign (no uppercase) while catching the scattered-separator blob the
 // run gate missed. Anchored to the whole value for the same RAW-query reason.
-const BLOB_VALUE_B64URL_RE = /^[A-Za-z0-9_-]{40,}={0,2}$/;
+// `X{40}X*` for the reason given at BLOB_VALUE_B64_RE.
+const BLOB_VALUE_B64URL_RE = /^[A-Za-z0-9_-]{40}[A-Za-z0-9_-]*={0,2}$/;
 
 /**
  * True when `value` carries at least one uppercase letter AND one digit — the
@@ -3149,41 +3152,54 @@ function collectUrls(text) {
  * how loudly (see the exfil tier in ./output.mjs).
  * @param {string} text
  * @param {{ flagDigestValues?: boolean }} [options] see {@link checkExfilUrl}
- * @returns {Array<{ isImage: boolean, autoFetched: boolean, reason: string, target: string }> | null}
+ * @returns {Array<{ isImage: boolean, autoFetched: boolean, reason: string, target: string, unscannable?: true }> | null}
  */
 export function detectExfil(text, options = {}) {
   if (!needsUrlScan(text)) return null;
+  return scanUrlsOrSentinel(
+    () => {
+      /** @type {Array<{ isImage: boolean, autoFetched: boolean, reason: string, target: string, unscannable?: true }>} */
+      const threats = [];
+      for (const { url, isImage, autoFetched, context } of collectUrls(text)) {
+        const reason =
+          checkExfilUrl(url, options) ||
+          (context !== "resource" && isOffOrigin(url)
+            ? OFF_ORIGIN_REASON[context]
+            : null);
+        if (!reason) continue;
+        threats.push({ isImage, autoFetched, reason, target: urlHost(url) });
+      }
+      return threats;
+    },
+    {
+      isImage: false,
+      // Fail closed on the severity tier too: an input the scanner could not
+      // read is not evidence that what it hides is harmless.
+      autoFetched: true,
+      reason: "input too deeply nested to scan for exfil URLs",
+      target: "(unparseable HTML)",
+      unscannable: true,
+    },
+  );
+}
 
-  /** @type {Array<{ isImage: boolean, autoFetched: boolean, reason: string, target: string }>} */
-  const threats = [];
-
+/**
+ * Run one URL scan; null when it finds nothing. A stack overflow (pathological
+ * nesting) fails CLOSED as the lone `unscannable` sentinel; any other throw is
+ * a scan bug and propagates. Shared so both detectors have one rethrow arm.
+ * @template T
+ * @param {() => T[]} scan
+ * @param {T} sentinel
+ * @returns {T[] | null}
+ */
+function scanUrlsOrSentinel(scan, sentinel) {
+  let threats;
   try {
-    for (const { url, isImage, autoFetched, context } of collectUrls(text)) {
-      const reason =
-        checkExfilUrl(url, options) ||
-        (context !== "resource" && isOffOrigin(url)
-          ? OFF_ORIGIN_REASON[context]
-          : null);
-      if (!reason) continue;
-      threats.push({ isImage, autoFetched, reason, target: urlHost(url) });
-    }
-  } catch {
-    // The parse/visit blew up (stack overflow on pathological nesting). Fail
-    // CLOSED so the never-throw contract holds: report one sentinel threat so
-    // the caller still warns rather than crashing, since an input too nested to
-    // scan could itself be hiding an exfil URL.
-    return [
-      {
-        isImage: false,
-        // Fail closed on the severity tier too: an input the scanner could not
-        // read is not evidence that what it hides is harmless.
-        autoFetched: true,
-        reason: "input too deeply nested to scan for exfil URLs",
-        target: "(unparseable HTML)",
-      },
-    ];
+    threats = scan();
+  } catch (err) {
+    if (!(err instanceof RangeError)) throw err;
+    return [sentinel];
   }
-
   return threats.length > 0 ? threats : null;
 }
 
@@ -3196,35 +3212,32 @@ export function detectExfil(text, options = {}) {
  *
  * Fails CLOSED on a parse blow-up for the same reason detectExfil does.
  * @param {string} text
- * @returns {Array<{ severity: string, description: string }> | null}
+ * @returns {Array<{ severity: string, description: string, unscannable?: true }> | null}
  */
 export function detectConfusableHosts(text) {
   if (!needsUrlScan(text)) return null;
-
-  /** @type {Array<{ severity: string, description: string }>} */
-  const threats = [];
-  /** @type {Set<string>} */
-  const seen = new Set();
-
-  try {
-    for (const { url } of collectUrls(text)) {
-      const found = confusableHost(url);
-      // One host repeated across a document is one deception, not N.
-      if (!found || seen.has(found.ascii)) continue;
-      seen.add(found.ascii);
-      threats.push({
-        severity: found.severity,
-        description: describeConfusableHost(found),
-      });
-    }
-  } catch {
-    return [
-      {
-        severity: SEVERITY.WARNING,
-        description: "input too deeply nested to scan for confusable hosts",
-      },
-    ];
-  }
-
-  return threats.length > 0 ? threats : null;
+  return scanUrlsOrSentinel(
+    () => {
+      /** @type {Array<{ severity: string, description: string, unscannable?: true }>} */
+      const threats = [];
+      /** @type {Set<string>} */
+      const seen = new Set();
+      for (const { url } of collectUrls(text)) {
+        const found = confusableHost(url);
+        // One host repeated across a document is one deception, not N.
+        if (!found || seen.has(found.ascii)) continue;
+        seen.add(found.ascii);
+        threats.push({
+          severity: found.severity,
+          description: describeConfusableHost(found),
+        });
+      }
+      return threats;
+    },
+    {
+      severity: SEVERITY.WARNING,
+      description: "input too deeply nested to scan for confusable hosts",
+      unscannable: true,
+    },
+  );
 }

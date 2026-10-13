@@ -69,6 +69,13 @@ export const HTML_UNPARSEABLE_WARNING =
   "HTML unparseable — the entire output was withheld behind a placeholder; nothing was spliced";
 
 /**
+ * The Layer-3 warning when the URL scan overflowed the stack. It names no URL
+ * (none was found), yet stays a warning: unread is not vetted.
+ */
+export const UNSCANNABLE_WARNING =
+  "Input too deeply nested to scan for exfil URLs or look-alike hosts — any URL in it is unvetted; do not fetch, relay, or embed it";
+
+/**
  * Full warning for Layer 2's preserved-but-reported content (scripting and
  * resource tags, data: URIs), or "" when there is nothing to report. Callers
  * must not push the empty string as a warning.
