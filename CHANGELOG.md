@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.64.2] - 2026-10-13
+
+### Changed
+- The `autolink-literal` module is now generated at install time rather than vendored in the repository.
+
+### Fixed
+- HTML documents containing SVG or MathML with `<template>` elements are no longer withheld from processing.
+
 ## [2.64.1] - 2026-10-13
 
 ### Fixed
