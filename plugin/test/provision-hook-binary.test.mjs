@@ -319,6 +319,34 @@ test("a manifest that does not describe this install's bundle provisions nothing
   );
 });
 
+test("a bundle that moves past an installed binary un-stamps it, so the launcher prefers node", (t) => {
+  // The binary from the previous bundle stays installed — on a host with no
+  // node it is still the only sanitizer — but its install stamp is what tells
+  // the launcher it matches this install, so the stamp must go.
+  const staged = stageProvisionable(t);
+  const { path } = provisionPath(t, staged.fixture);
+  assert.equal(provision(staged, path).status, 0);
+  const dir = join(staged.data, "hook-binary");
+  assert.ok(existsSync(join(dir, ".manifest-installed")));
+
+  const bundle = join(
+    staged.plugin,
+    "dist",
+    "hooks",
+    "plugin-hooks.bundle.mjs",
+  );
+  writeFileSync(bundle, `${readFileSync(bundle, "utf8")}\n// a later commit\n`);
+  const res = provision(staged, path);
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /compiled from a DIFFERENT bundle/);
+  assert.match(res.stderr, /run this install's bundle through node instead/);
+  assert.equal(existsSync(join(dir, ".manifest-installed")), false);
+  assert.equal(
+    readFileSync(join(dir, "agent-sanitizer-hooks"), "utf8"),
+    "FAKE HOOK BINARY\n",
+  );
+});
+
 test("a manifest with no bundle digest provisions nothing", (t) => {
   const staged = stageProvisionable(t);
   writeFileSync(
