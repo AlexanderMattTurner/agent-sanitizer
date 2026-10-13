@@ -78,6 +78,26 @@ describe("a spent deadline before Layers 2/3", () => {
     assert.ok(reads >= 2, `expected a re-check before Layer 3; reads=${reads}`);
   });
 
+  it("re-checks after the HTML module loads, before the uninterruptible parse", async () => {
+    // The lazy import is awaited, so it can consume the budget the entry check
+    // saw. A driven clock (live for the first read only) stands in for that:
+    // with no check after the import, Layer 2 parses on a spent budget and the
+    // call returns instead of refusing. Both routes share the one loader.
+    for (const options of [{ html: true }, { exfilScan: true }]) {
+      let reads = 0;
+      const spendsInImport = { remainingMs: () => (reads++ === 0 ? 5_000 : 0) };
+      await assert.rejects(
+        () =>
+          sanitizeText(options.html ? HTML_DOC : LINK_DOC, {
+            ...options,
+            deadline: spendsInImport,
+          }),
+        SPENT_MESSAGE,
+      );
+      assert.ok(reads >= 2, `expected a post-import check; reads=${reads}`);
+    }
+  });
+
   it("still returns normally when the pre-gate runs neither layer", async () => {
     // The refusal is scoped to work that would actually spend time. A call the
     // pre-gate declines costs nothing, so refusing it would withhold output for

@@ -302,6 +302,7 @@ const PUBLISHED_EXPORTS = {
     "connectAndRequest",
     "positiveMsOr",
     "redactViaDaemon",
+    "resolveSocketPath",
     "spawnDaemon",
     "waitForSocket",
   ],

@@ -27,6 +27,7 @@
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import remarkGfmUpstream from "remark-gfm";
@@ -42,6 +43,7 @@ import {
   renderGfmAutolink,
 } from "../scripts/gen-gfm-autolink.mjs";
 import remarkGfmVendored from "../src/gfm.mjs";
+import { repoRoot } from "./helpers/repo-root.mjs";
 
 const ours = unified().use(remarkParse).use(remarkGfmVendored);
 const upstream = unified().use(remarkParse).use(remarkGfmUpstream);
@@ -108,6 +110,11 @@ describe("src/gfm.mjs parses what remark-gfm parses", () => {
 // The unpatched line and the patched marker are the two halves of one claim:
 // checking only the marker passes on a file that kept the slow walk beside
 // it, and checking only the absence passes on an empty one.
+// A plain literal, not `PATCH_PATH`: guard-pairs resolves a string it can read,
+// so spelling the path whole is what puts the patch into the scan and pairs it
+// with this suite (the generator's own module-relative join is invisible to it).
+const PATCH =
+  "scripts/patches/micromark-extension-gfm-autolink-literal@2.1.0.patch";
 const UNPATCHED = "if (events.length > 0 && !result) {";
 const PATCHED = "_gfmAutolinkLiteralSkipTo";
 
@@ -143,7 +150,8 @@ describe("scripts/gen-gfm-autolink.mjs builds src/vendor/gfm-autolink-literal.mj
   });
 
   it("fails loudly when a hunk does not apply", () => {
-    const patch = readFileSync(PATCH_PATH, "utf8");
+    assert.equal(join(repoRoot, PATCH), PATCH_PATH);
+    const patch = readFileSync(join(repoRoot, PATCH), "utf8");
     assert.throws(
       () =>
         applyPatch(

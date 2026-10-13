@@ -8,6 +8,60 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.64.1] - 2026-10-13
+
+### Fixed
+
+- HTML layer detection now produces consistent results regardless of nesting depth, withholding analysis beyond 4096 levels.
+- Inherited style hides are now preserved through `calc()`, `revert`, `-webkit-text-fill-color`, and `display:contents`.
+- URL extraction from `url()` functions with CSS-escaped names now works correctly.
+- Layer 3 URLs are now read through a unified attribute table and URL parser for consistency.
+- Inline style cascading is now resolved correctly, including handling of invalid declarations and `!important` flags.
+- Hide detection in element context (inline boxes and inherited overrides) now works as intended.
+
+### Changed
+
+- HTML URL table rows are now stated by their defaults, and `srcset` handling uses two regexes for improved clarity.
+
+## [2.64.0] - 2026-10-13
+
+### Changed
+- Unicode tables are now generated at install and pack time instead of being committed to the repository.
+- StandardizedVariants.txt is now fetched from unicode.org instead of being vendored in the repository.
+- StandardizedVariants.txt pinning now uses a single SHA-256 constant for verification.
+
+### Fixed
+- Fixed invisible charset data directory creation to ensure it exists before writing the JSON file.
+
+### Performance
+- Ported the SessionStart-scan latency fix and re-derived ceilings from #445 to the invisible module.
+
+## [2.63.1] - 2026-10-13
+
+### Added
+- Unicode properties dataset and utilities for character analysis.
+- Key collision detection test for claude-hooks exports.
+- New test suite for confusable host detection.
+- Confusables test coverage and extended confusable hosts data.
+- Deadline test for layer 2-3 performance constraints.
+- Redactor client path coverage and pyz stub tests.
+- Severity tier classification tests.
+
+### Changed
+- Refactored output module to inline span-delete re-runs and reduce table overhead.
+- Refactored redactor tests to compress socket/extraction-dir trust test suite.
+- Refactored output module helpers to fold single-use walk/import utilities inline.
+- Optimized HTML processing and gates logic.
+- Improved test coverage with table-driven test cases for output validation.
+- Updated hook-latency ceiling derivation based on CI runner performance.
+
+### Fixed
+- Fixed output processing to ensure NOTE messages reach the model alongside warnings.
+- Fixed test growth calculation to prevent rope flatten from charging to largest sizes.
+- Fixed ReDoS test coverage for literal-range DISPLAY_UNSAFE with proper guards.
+- Optimized SessionStart scan latency to stay within performance budget.
+- Corrected copy control evidence scope in test documentation (translate vs memmove).
+
 ## [2.63.0] - 2026-10-13
 
 ### Fixed

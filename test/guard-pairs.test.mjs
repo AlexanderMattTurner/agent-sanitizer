@@ -202,8 +202,6 @@ const RESIDUE_PENDING = {
 
 /** Inputs with no commit-time suite by design, each with the gate it has. */
 const CI_ONLY = {
-  "plugin/scripts/build-redactor-pyz.mjs":
-    "installs from PyPI, so no offline commit-time suite can run it; node-tests and plugin-dist-autofix rebuild the zipapp in CI",
   "scripts/bundle-python-cli.mjs":
     "a release-time build run by auto-version and publish-python; its output is git-ignored",
   "src/vendor/gfm-autolink-literal.d.ts":

@@ -11,12 +11,22 @@
  * content — so they are pinned by name below and then swept over randomized tag
  * soup, which is what caught the first version of this adapter leaving a
  * detached node in its old parent's array.
+ *
+ * The conversion to hast is chunked the same way (`fromParse5Bounded`), and is
+ * held to one `fromParse5` call over the same corpus. Its depth ceiling is the
+ * one deliberate difference, pinned at the end.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { defaultTreeAdapter, parseFragment, serialize } from "parse5";
+import { fromParse5 } from "hast-util-from-parse5";
+import { VFile } from "vfile";
 
-import { createTreeAdapter } from "../src/html-tree-adapter.mjs";
+import {
+  MAX_HTML_DEPTH,
+  createTreeAdapter,
+  fromParse5Bounded,
+} from "../src/html-tree-adapter.mjs";
 
 const OPTIONS = {
   sourceCodeLocationInfo: true,
@@ -81,6 +91,62 @@ const ORDINARY = {
   empty: "",
 };
 
+/**
+ * Randomized tag soup, the same 400 inputs on every run: a failure here has to
+ * name a case somebody can reproduce.
+ * @returns {string[]}
+ */
+function tagSoup() {
+  const pieces = [
+    "<p>",
+    "</p>",
+    "<b>",
+    "</b>",
+    "<table>",
+    "<tr>",
+    "<td>",
+    "</table>",
+    "<!--",
+    "-->",
+    "<div style='display:none'>",
+    "</div>",
+    "<template>",
+    "</template>",
+    "<script>",
+    "</script>",
+    "<style>",
+    "</style>",
+    "<form>",
+    "</form>",
+    "<li>",
+    "<select>",
+    "<option>",
+    "<svg>",
+    "</svg>",
+    "<math>",
+    "</math>",
+    "<textarea>",
+    "</textarea>",
+    "<tbody>",
+    "<input>",
+    "text ",
+    "\n",
+    "&amp;",
+    "<!DOCTYPE html>",
+  ];
+  let seed = 20260826;
+  const next = () =>
+    (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const inputs = [];
+  for (let i = 0; i < 400; i++) {
+    let html = "";
+    for (let j = 0, n = 1 + Math.floor(next() * 30); j < n; j++)
+      html += pieces[Math.floor(next() * pieces.length)];
+    inputs.push(html);
+  }
+  return inputs;
+}
+
 describe("html tree adapter matches the default adapter", () => {
   for (const [label, html] of Object.entries(MID_PARSE_DETACH))
     it(`mid-parse detach: ${label}`, () => assertSameTree(html));
@@ -108,53 +174,75 @@ describe("html tree adapter matches the default adapter", () => {
   });
 
   it("agrees on randomized tag soup", () => {
-    const pieces = [
-      "<p>",
-      "</p>",
-      "<b>",
-      "</b>",
-      "<table>",
-      "<tr>",
-      "<td>",
-      "</table>",
-      "<!--",
-      "-->",
-      "<div style='display:none'>",
-      "</div>",
-      "<template>",
-      "</template>",
-      "<script>",
-      "</script>",
-      "<style>",
-      "</style>",
-      "<form>",
-      "</form>",
-      "<li>",
-      "<select>",
-      "<option>",
-      "<svg>",
-      "</svg>",
-      "<math>",
-      "</math>",
-      "<textarea>",
-      "</textarea>",
-      "<tbody>",
-      "<input>",
-      "text ",
-      "\n",
-      "&amp;",
-      "<!DOCTYPE html>",
-    ];
-    // A fixed seed: the sweep must be the same set of inputs on every run, or a
-    // failure here names a case nobody can reproduce.
-    let seed = 20260826;
-    const next = () =>
-      (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
-    for (let i = 0; i < 400; i++) {
-      let html = "";
-      for (let j = 0, n = 1 + Math.floor(next() * 30); j < n; j++)
-        html += pieces[Math.floor(next() * pieces.length)];
-      assertSameTree(html);
+    for (const html of tagSoup()) assertSameTree(html);
+  });
+});
+
+/**
+ * `fromParse5` and {@link fromParse5Bounded} over the same input, each on its
+ * own parse (the bounded one rewrites the tree it converts). A throw is part of
+ * the answer: `hast-util-from-parse5` throws on a template in foreign content,
+ * and the bounded conversion must throw the same.
+ * @param {string} html
+ * @param {number} chunkDepth
+ */
+function bothConversions(html, chunkDepth) {
+  const outcome = (convert) => {
+    try {
+      return { tree: convert(parseFragment(html, OPTIONS), new VFile(html)) };
+    } catch (error) {
+      return { error: String(error) };
     }
+  };
+  return [
+    outcome((tree, file) => fromParse5Bounded(tree, file, chunkDepth)),
+    outcome((tree, file) => fromParse5(tree, { file })),
+  ];
+}
+
+describe("bounded conversion matches one fromParse5 call", () => {
+  // Chunks of one, two and three levels put a cut under every shape the corpus
+  // has: an unclosed element whose end comes from a cut child, a template whose
+  // content is cut, foreign content, recovery-synthesized nodes with no
+  // position.
+  const corpus = [
+    ...Object.values(MID_PARSE_DETACH),
+    ...Object.values(ORDINARY),
+    ...tagSoup(),
+  ];
+  for (const chunkDepth of [1, 2, 3])
+    it(`in chunks of ${chunkDepth}`, () => {
+      let trees = 0;
+      for (const html of corpus) {
+        const [ours, theirs] = bothConversions(html, chunkDepth);
+        assert.deepEqual(ours, theirs, html);
+        if (theirs.tree) trees++;
+      }
+      // Non-vacuity: two throws compare equal, so most of the corpus must have
+      // converted for the agreement to say anything.
+      assert.ok(trees > corpus.length * 0.8, `${trees}/${corpus.length}`);
+    });
+
+  it("converts a cut subtree separately (non-vacuity for the sweep)", () => {
+    // A chunk of one cuts every child of the root, so the `<p>` stands in the
+    // parse5 tree as a placeholder by the time the root is converted.
+    const tree = parseFragment("<p>x</p>", OPTIONS);
+    const converted = fromParse5Bounded(tree, new VFile("<p>x</p>"), 1);
+    assert.equal(tree.childNodes[0].nodeName, "#text");
+    assert.equal(typeof tree.childNodes[0].value, "object");
+    assert.equal(converted.children[0].tagName, "p");
+  });
+
+  it(`refuses a node more than MAX_HTML_DEPTH (${MAX_HTML_DEPTH}) levels down, and only that`, () => {
+    const nested = (depth) => {
+      const html = "<div>".repeat(depth);
+      return () =>
+        fromParse5Bounded(parseFragment(html, OPTIONS), new VFile(html));
+    };
+    assert.equal(nested(MAX_HTML_DEPTH)().children.length, 1);
+    assert.throws(nested(MAX_HTML_DEPTH + 1), {
+      name: "RangeError",
+      message: `HTML nested deeper than ${MAX_HTML_DEPTH} levels`,
+    });
   });
 });

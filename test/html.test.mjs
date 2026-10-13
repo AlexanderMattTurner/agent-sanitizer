@@ -5,6 +5,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,6 +39,7 @@ import {
   DATA_URI_LENGTH_THRESHOLD,
 } from "../src/html.mjs";
 import { sanitize } from "../src/index.mjs";
+import { MAX_HTML_DEPTH } from "../src/html-tree-adapter.mjs";
 import { HTML_UNPARSEABLE_WARNING } from "../src/warnings.mjs";
 import { SEVERITY } from "../src/severity.mjs";
 
@@ -159,10 +161,15 @@ const HIDDEN_STYLE_CASES = [
   // ~zero AREA (width right-left or height bottom-top near zero) — parsing all
   // four edges, not just the first (bug: `rect(0,…)` spliced a visible window).
   ["clip:rect(0px,100px,100px,0px);position:absolute", false], // 100x100 visible window
-  ["position:absolute;clip:rect(1,1,1,1)", true], // degenerate 0x0 window (the sr-only clip hack)
+  ["position:absolute;clip:rect(1px,1px,1px,1px)", true], // degenerate 0x0 window (the sr-only clip hack)
+  // A unitless non-zero edge is not a <length>: a standards-mode browser drops
+  // the declaration and the element renders (it pinned `true` while the
+  // cascade read invalid declarations as applied).
+  ["position:absolute;clip:rect(1,1,1,1)", false],
   ["position:absolute;clip:rect(10px,10px,20px,10px)", true], // right==left → zero width
   ["position:absolute;clip:rect(0px,50px,0px,0px)", true], // bottom==top → zero height
-  ["position:absolute;clip:rect(10%,20%,10%,20%)", true], // percentage edges: top==bottom → zero height (same as legacy string parser)
+  ["position:absolute;clip:rect(10px,20px,10px,20px)", true], // top==bottom → zero height
+  ["position:absolute;clip:rect(10%,20%,10%,20%)", false], // rect() edges are <length> | auto; a % edge is invalid and dropped
   ["position:absolute;clip:rect(auto,auto,auto,auto)", false], // auto edges unresolvable — fail open
   ["position:absolute;clip:rect(0px,5em,1em,0px)", false], // mismatched-unit pairs — fail open
   ["position:absolute;clip:rect(0,0,0)", false], // only 3 edges — malformed, fail open
@@ -188,6 +195,8 @@ const HIDDEN_STYLE_CASES = [
   ["position:absolute;left:-1000", false], // unitless nonzero length is INVALID CSS; browser drops it, fails open
   ["position:absolute;left:-9999", false], // same, larger magnitude
   ["position:absolute;left:-9999deg", false], // a non-length unit (deg) is invalid for an offset; browser drops it, fails open
+  ["position:absolute;left:-9999svh", false], // a valid length unit outside the absolute and viewport sets cannot be resolved — fails open
+  ["position:absolute;left:-9999cqw", false], // container-query units likewise
   // ── text-indent offscreen ──
   ["text-indent:-9999px", true],
   ["text-indent:-100vw", true],
@@ -209,6 +218,8 @@ const HIDDEN_STYLE_CASES = [
   ["clip-path:inset(100%)", true],
   ["clip-path:inset(99.9%)", true], // fractional (bug: regex missed it)
   ["clip-path:circle(0)", true],
+  ["clip-path:circle(0px)", true], // a Dimension radius hides like a bare zero
+  ["clip-path:circle(0%)", false], // not a <shape-radius> in the grammar table: the cascade drops it, the element renders
   ["clip-path:none", false],
   ["clip-path:circle(50%)", false],
   ["clip-path:inset(10%)", false], // partial inset still shows content
@@ -267,6 +278,8 @@ const HIDDEN_STYLE_CASES = [
   ["transform:translate(0,-9999px)", true], // Y axis offscreen, X=0 (second arg was ignored)
   ["transform:translate(-9999px,0)", true], // X axis offscreen
   ["transform:translate(0,0)", false], // neither axis shifts
+  ["transform:none", false], // a keyword is not a transform function
+  ["transform:translate(-9999svw)", false], // a unit outside the absolute and viewport sets fails open
   ["transform:translate(5px,-10px)", false], // small two-axis shift stays on screen
   ["transform:translatex(-50vw)", false], // half-shift stays partly visible (precision)
   // A `%` translate is relative to the element's OWN size, not the viewport, so
@@ -347,6 +360,15 @@ const HIDDEN_STYLE_CASES = [
   ["color:hsl(nope 100% 50%)", false], // unresolvable hue — fail open
   ["color:rgb(1 2 3 / 4 / 5)", false], // two slashes — malformed, fail open
   ["color:rgb(1 2)", false], // wrong channel count — fail open
+  // The two above never reach the color parser: the cascade drops them as
+  // invalid. A value past the lexer's token limit is not validated, so these
+  // are the malformed colors the parser itself must fail open on — identical on
+  // both sides, they must still not read as a same-color hide.
+  [`color:rgb(${"1 ".repeat(70)});background:rgb(${"1 ".repeat(70)})`, false], // wrong channel count
+  [
+    `color:rgb(${"1 / ".repeat(40)}1);background:rgb(${"1 / ".repeat(40)}1)`,
+    false,
+  ], // two or more slashes
   ["color:red", false],
   ["color:white", false], // color alone, no background — never infer the page bg
   ["color:white;background:#fefefe", false], // near-white but not equal
@@ -543,16 +565,18 @@ describe("unit: isHiddenStyle exact verdicts", () => {
 });
 
 // One row per numeric token, with the verdict it earns in each of the three
-// channel positions: an rgb() channel, an hsl() hue, an hsl() saturation.
+// channel positions: an rgb() channel, an hsl() hue, an hsl() saturation. The
+// hsl() rows use the LEGACY comma form, whose saturation is a <percentage>
+// only: a bare number there is invalid CSS the cascade drops, so it fails open.
 // `true` means the token RESOLVED (both sides canonicalize to the same concrete
 // color, so the text is hidden); `false` means the parser rejected it and the
 // declaration failed open.
 const COLOR_TOKEN_CASES = [
-  ["0", true, true, true],
-  ["255", true, true, true],
-  ["128.5", true, true, true],
-  [".5", true, true, true],
-  ["+5", true, true, true],
+  ["0", true, true, false],
+  ["255", true, true, false],
+  ["128.5", true, true, false],
+  [".5", true, true, false],
+  ["+5", true, true, false],
   // A hue is an <angle> or a <number>; `%` is neither.
   ["+5%", true, false, true],
   ["50%", true, false, true],
@@ -561,10 +585,8 @@ const COLOR_TOKEN_CASES = [
   // A fraction needs a digit on both sides of the dot.
   ["1.", false, false, false],
   [".", false, false, false],
-  // css-tree re-serializes this as the two numbers `1.2 .3`, so no channel
-  // parser ever receives it whole: rgb() then counts six channels and fails
-  // open, while hsl() reads four components and takes the last as an alpha.
-  ["1.2.3", false, true, true],
+  // Tokenized as the two numbers `1.2 .3`: one channel too many anywhere.
+  ["1.2.3", false, false, false],
   ["", false, false, false],
   ["abc", false, false, false],
   // Angle units belong to the hue alone; a signed value is a hue-only shape too.
@@ -1898,14 +1920,16 @@ describe("unit: sanitizeHtml exact result shapes", () => {
     assert.equal(sanitizeHtml("plain prose, nothing to do"), null));
 });
 
-// R1: a pathologically nested fragment overflows the recursive remark/rehype
-// tree walk with a RangeError. The HTML layer is the only seam the top-level
-// `sanitize`/`sanitizeText` callers own, so it must fail CLOSED here rather than
-// let the exception escape and break their never-throw contract.
-describe("R1: parser stack overflow fails closed (never throws)", () => {
+// R1: a fragment nested past MAX_HTML_DEPTH makes the parse throw a RangeError
+// (it once did by overflowing the stack, at a depth that moved with the JIT
+// tier). The HTML layer is the only seam the top-level `sanitize`/`sanitizeText`
+// callers own, so it must fail CLOSED here rather than let the exception escape
+// and break their never-throw contract.
+describe("R1: pathological nesting fails closed (never throws)", () => {
   const deeplyNested = (depth) =>
     "<div>".repeat(depth) + "x" + "</div>".repeat(depth);
-  const OVERFLOW = deeplyNested(3000);
+  // The `x` sits one level past the bound.
+  const OVERFLOW = deeplyNested(MAX_HTML_DEPTH);
 
   it("sanitizeHtml withholds the input behind a placeholder instead of throwing", () => {
     const result = sanitizeHtml(OVERFLOW);
@@ -1961,6 +1985,21 @@ describe("R1: parser stack overflow fails closed (never throws)", () => {
     assert.match(threats[0].description, /too deeply nested/);
   });
 
+  it("a throw that is not a stack overflow propagates instead of becoming the sentinel", () => {
+    // The sentinel is for input too nested to walk; a bug in the scan itself
+    // must surface, not read as "unscannable". A throwing option reaches the
+    // one rethrow both detectors share.
+    const options = {
+      get flagDigestValues() {
+        throw new TypeError("scan bug");
+      },
+    };
+    assert.throws(() => detectExfil("see https://x.example/?d=1", options), {
+      name: "TypeError",
+      message: "scan bug",
+    });
+  });
+
   it("top-level sanitize(html:true) never throws and returns a warned string", async () => {
     const { cleaned, found, warnings } = await sanitize(OVERFLOW, {
       html: true,
@@ -1968,7 +2007,9 @@ describe("R1: parser stack overflow fails closed (never throws)", () => {
     assert.equal(typeof cleaned, "string");
     assert.equal(cleaned, UNPARSEABLE_PLACEHOLDER);
     assert.ok(found.includes("hidden-html"));
-    assert.ok(found.includes("exfil-urls"));
+    // An unread document is reported as unscannable, not as a URL it never saw.
+    assert.ok(found.includes("unscannable"));
+    assert.ok(!found.includes("exfil-urls"));
     // The warning names the whole-output withhold, not a routine splice.
     assert.ok(warnings.includes(HTML_UNPARSEABLE_WARNING));
     assert.ok(!warnings.some((w) => w.includes("hidden element(s)")));
@@ -1979,7 +2020,11 @@ describe("R1: parser stack overflow fails closed (never throws)", () => {
       fc.property(
         fc.tuple(
           fc.constantFrom("div", "span", "p", "section", "b"),
-          fc.integer({ min: 2000, max: 4000 }),
+          // Straddles the bound, so both answers are drawn.
+          fc.integer({
+            min: MAX_HTML_DEPTH - 1000,
+            max: MAX_HTML_DEPTH + 1000,
+          }),
         ),
         ([tag, depth]) => {
           const nested =
@@ -1997,6 +2042,43 @@ describe("R1: parser stack overflow fails closed (never throws)", () => {
       // A few deep runs are enough; each parse is expensive, so keep numRuns low.
       fcRunOptions({ numRuns: 15 }),
     );
+  });
+});
+
+// Depth up to MAX_HTML_DEPTH is judged, not withheld, on the first call in a
+// process and on a small stack. Conversion to hast used to recurse three frames
+// per level, so ~2500 levels overflowed while the code was still interpreted
+// and converted once it was optimized: the same document was sanitized or
+// withheld depending on what had run before it. A fresh process is the only
+// cold call a test can make, and a quarter of the default stack leaves the
+// bound no room to be passing on headroom alone.
+describe("deep nesting is judged the same on a cold, small stack", () => {
+  it("splits every inherited region of a document nested to the bound", () => {
+    const html = new URL("../src/html.mjs", import.meta.url).href;
+    // Two elements per level, and the `v` text one level under the second.
+    const levels = Math.floor((MAX_HTML_DEPTH - 1) / 2);
+    const runner = `
+      import { sanitizeHtml } from ${JSON.stringify(html)};
+      const level = '<div style="font-size:0">s<b style="font-size:9px">v';
+      const result = sanitizeHtml(
+        level.repeat(${levels}) + "</b></div>".repeat(${levels}),
+      );
+      process.stdout.write(JSON.stringify({
+        unparseable: result.unparseable ?? false,
+        hiddenLeft: result.text.includes(">s<"),
+        visibleKept: result.text.split(">v<").length - 1,
+      }));
+    `;
+    const out = execFileSync(
+      process.execPath,
+      ["--stack-size=250", "--input-type=module", "-e", runner],
+      { encoding: "utf8" },
+    );
+    assert.deepEqual(JSON.parse(out), {
+      unparseable: false,
+      hiddenLeft: false,
+      visibleKept: levels,
+    });
   });
 });
 
@@ -2163,7 +2245,7 @@ describe("unit: detectExfil HTML-attr + node types", () => {
       ).reason,
       "suspicious query parameter",
     ));
-  it("ignores a meta-refresh with no url= target (metaRefreshUrl null)", () =>
+  it("ignores a meta-refresh with no URL after its delay", () =>
     assert.equal(detectExfil(`<meta http-equiv="refresh" content="5">`), null));
   it("ignores a meta-refresh tag with no content attribute", () =>
     assert.equal(detectExfil(`<meta http-equiv="refresh">`), null));

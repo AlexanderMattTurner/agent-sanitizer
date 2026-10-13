@@ -15,18 +15,20 @@
  * Here the URL stays byte-identical and the finding names the deception.
  *
  * THE RULE, per DNS label: a label is a pretender when it holds a non-ASCII code
- * point and its TR39 skeleton is pure ASCII — it claims to be an ASCII word it
- * is not. That is the same argument the fold gate makes ("folds to pure ASCII"),
- * so it inherits the same precision story: a label keeping an unmapped glyph
- * after skeletoning (`россия` → `poccия`) is a real word in its own script, not
- * a disguise, and passes untouched. A weaker second tier, reported quietly,
- * covers the label that keeps an unmapped glyph but mixes scripts — see
+ * point, its TR39 skeleton is pure ASCII, and some glyph in it is not a letter
+ * of a real Latin orthography (isAsciiPretender) — it claims to be an ASCII word
+ * it is not. That is the same argument the fold gate makes ("folds to pure
+ * ASCII"), so it inherits the same precision story: a label keeping an unmapped
+ * glyph after skeletoning (`россия` → `poccия`) is a real word in its own
+ * script, not a disguise, and passes untouched. A weaker tier, reported quietly,
+ * covers the ASCII-skeleton label spelled only in orthographic Latin letters and
+ * the label that keeps an unmapped glyph but mixes scripts — see
  * {@link confusableLabel}.
  */
 
 import { domainToUnicode } from "node:url";
 import { scan, skeleton } from "namespace-guard";
-import { hasNonAscii } from "./confusables.mjs";
+import { hasNonAscii, isAsciiPretender } from "./confusables.mjs";
 import { SEVERITY } from "./severity.mjs";
 
 /**
@@ -37,18 +39,20 @@ import { SEVERITY } from "./severity.mjs";
  * The two tiers are evidential strength, not attack class:
  *
  * WARNING — the WHOLE label skeletons to ASCII, so it reads as an ASCII name
- * outright, and no glyph in it survives as evidence of a real foreign word.
- * NOTE — the label carries a cross-script confusable but keeps an unmapped
- * glyph, so it does not read as any ASCII name. That is the "unmapped glyph
- * spliced in to suppress the strong rule" shape, and it is also what an ordinary
- * word with one look-alike letter produces, so the evidence is thin and the
- * finding stays quiet.
+ * outright, no glyph in it survives as evidence of a real foreign word, and at
+ * least one glyph is a genuine pretender (see isAsciiPretender).
+ * NOTE — the label skeletons to ASCII only through letters of a real Latin
+ * orthography (Turkish `altın` is a word, not a disguise), or it carries a
+ * cross-script confusable but keeps an unmapped glyph, so it reads as no ASCII
+ * name — the "unmapped glyph spliced in" shape, and also what an ordinary word
+ * with one look-alike letter produces. Thin evidence, so the finding is quiet.
  * @param {string} label a single DNS label, already decoded from punycode
  * @returns {string | null} the label's severity, or null when it is not pretending
  */
 export function confusableLabel(label) {
   if (!hasNonAscii(label)) return null;
-  if (!hasNonAscii(skeleton(label))) return SEVERITY.WARNING;
+  if (!hasNonAscii(skeleton(label)))
+    return isAsciiPretender(label) ? SEVERITY.WARNING : SEVERITY.NOTE;
   // `mixedScript` is namespace-guard's own judgement that this glyph sits in a
   // token holding Latin letters too; deriving it here from a hand-listed set of
   // "lookalike scripts" would be a second, drifting copy of its script data.

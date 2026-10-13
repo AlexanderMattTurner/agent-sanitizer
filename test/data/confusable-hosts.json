@@ -1,5 +1,5 @@
 {
-  "_comment": "Corpus for the confusable-host rule (src/confusable-host.mjs). SINGLE SOURCE: every test that scores the rule, and any external benchmark harness, reads this file rather than restating cases. `benign` is the half that decides whether the rule is honest — real internationalized domain labels across many scripts, every one of which must produce ZERO findings; a rule that flags one of these is trading a real false positive for recall. `attacks` carries the expected severity per label, and the two tiers are evidential strength rather than attack class: `warning` for a label whose whole TR39 skeleton is pure ASCII, so it reads as an ASCII name outright, and `note` for a label that carries a cross-script confusable but keeps an unmapped glyph, so it reads as no ASCII name — thin evidence, since an ordinary word with one look-alike letter produces the same shape. `misses` are vectors the rule does NOT catch, kept here so the residual is a tested fact rather than a claim in a doc.",
+  "_comment": "Corpus for the confusable-host rule (src/confusable-host.mjs). SINGLE SOURCE: every test that scores the rule, and any external benchmark harness, reads this file rather than restating cases. `benign` is the half that decides whether the rule is honest — real internationalized domain labels across many scripts, every one of which must produce ZERO findings; a rule that flags one of these is trading a real false positive for recall. `attacks` carries the expected severity per label, and the two tiers are evidential strength rather than attack class: `warning` for a label whose whole TR39 skeleton is pure ASCII and which holds at least one ASCII-pretender glyph (isAsciiPretender in src/confusables.mjs), so it reads as an ASCII name outright, and `note` for a label that carries a cross-script confusable but keeps an unmapped glyph, so it reads as no ASCII name — thin evidence, since an ordinary word with one look-alike letter produces the same shape. `sameScript` are real words of Latin-script orthographies whose skeleton is ASCII only because a native letter (the Turkish/Azerbaijani dotless ı) maps to an ASCII one: each must stay at the quiet `note` tier, never `warning`, and the input fold must leave every one untouched. `misses` are vectors the rule does NOT catch, kept here so the residual is a tested fact rather than a claim in a doc.",
 
   "benign": [
     { "label": "münchen", "script": "Latin", "note": "German umlaut" },
@@ -65,6 +65,20 @@
     { "label": "हिन्दी", "script": "Devanagari" },
     { "label": "ไทย", "script": "Thai" },
     { "label": "กรุงเทพ", "script": "Thai" },
+    { "label": "kılıç", "script": "Latin" },
+    { "label": "ışık", "script": "Latin" },
+    { "label": "iğdır", "script": "Latin" },
+    { "label": "şırnak", "script": "Latin" },
+    { "label": "çanakkale", "script": "Latin" },
+    { "label": "gəncə", "script": "Latin" },
+    { "label": "azərbaycan", "script": "Latin" },
+    { "label": "mingəçevir", "script": "Latin" },
+    { "label": "việt", "script": "Latin" },
+    { "label": "nguyễn", "script": "Latin" },
+    { "label": "đà", "script": "Latin" },
+    { "label": "phở", "script": "Latin" },
+    { "label": "tiếng", "script": "Latin" },
+    { "label": "đức", "script": "Latin" },
     {
       "label": "istanbul",
       "script": "ASCII",
@@ -140,7 +154,33 @@
       "reads": "googleж",
       "severity": "note",
       "script": "Cyrillic+Latin"
+    },
+    {
+      "label": "ɡithub",
+      "reads": "github",
+      "severity": "warning",
+      "script": "Latin (IPA)",
+      "note": "IPA script g is Latin-script but no orthography's letter, so it stays a pretender"
+    },
+    {
+      "label": "ᴀpple",
+      "reads": "apple",
+      "severity": "warning",
+      "script": "Latin (small capital)",
+      "note": "a phonetic small capital, no orthography's letter"
     }
+  ],
+
+  "sameScript": [
+    { "label": "altın", "reads": "altin" },
+    { "label": "kadın", "reads": "kadin" },
+    { "label": "yazılım", "reads": "yazilim" },
+    { "label": "kırmızı", "reads": "kirmizi" },
+    { "label": "diyarbakır", "reads": "diyarbakir" },
+    { "label": "ılık", "reads": "ilik" },
+    { "label": "bakı", "reads": "baki" },
+    { "label": "sumqayıt", "reads": "sumqayit" },
+    { "label": "gıthub", "reads": "github" }
   ],
 
   "misses": [
