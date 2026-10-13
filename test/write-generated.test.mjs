@@ -95,6 +95,15 @@ describe("writeGenerated", () => {
     assert.equal(readFileSync(path, "utf8"), "\uFFFD\uFFFD");
   });
 
+  it("swaps by rename without fsync, which Windows rejects on a directory", () => {
+    const source = readFileSync(
+      join(ROOT, "scripts/lib/write-generated.mjs"),
+      "utf8",
+    );
+    assert.match(source, /\brenameSync\(tmp, path\)/);
+    assert.doesNotMatch(source, /\bfsyncSync\b|from "[^"]*atomic-replace/);
+  });
+
   it("throws when the directory is missing instead of creating it", () => {
     assert.throws(() => writeGenerated(join(dir, "nope", "x.json"), "{}"), {
       code: "ENOENT",

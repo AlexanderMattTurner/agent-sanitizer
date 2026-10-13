@@ -14,10 +14,19 @@
  * touched at all (the normal case, since the generators are deterministic), and
  * a changed one is swapped in by rename, so a reader sees the whole old file or
  * the whole new one, never a prefix.
+ *
+ * Deliberately not `src/atomic-replace.mjs`: that primitive fsyncs the
+ * directory for crash durability, which Windows rejects with EPERM and which a
+ * regenerable build artifact does not need. Nothing here fsyncs.
  */
-import { readFileSync, statSync } from "node:fs";
-
-import { atomicReplaceFile } from "../../src/atomic-replace.mjs";
+import { randomBytes } from "node:crypto";
+import {
+  chmodSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 
 /** Mode for a file this call creates; an existing file keeps its own. */
 const NEW_FILE_MODE = 0o644;
@@ -31,10 +40,11 @@ const NEW_FILE_MODE = 0o644;
 export function writeGenerated(path, text) {
   const existing = statSync(path, { throwIfNoEntry: false });
   if (existing && readFileSync(path).equals(Buffer.from(text))) return false;
-  atomicReplaceFile(
-    path,
-    text,
-    existing ? existing.mode & 0o7777 : NEW_FILE_MODE,
-  );
+  const tmp = `${path}.${randomBytes(6).toString("hex")}.tmp`;
+  // `flag: "wx"` never follows or reuses a path someone else left behind.
+  writeFileSync(tmp, text, { flag: "wx" });
+  // The create mode is umask-masked; chmod sets the exact bits.
+  chmodSync(tmp, existing ? existing.mode & 0o7777 : NEW_FILE_MODE);
+  renameSync(tmp, path);
   return true;
 }

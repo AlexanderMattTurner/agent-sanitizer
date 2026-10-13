@@ -1,10 +1,8 @@
 /**
  * The one primitive that rewrites an instruction file, private to the package
- * (not in `exports`): `cleanFile` (./instructions.mjs) is its only caller in
- * the shipped code. It writes the path as given, so the realpath containment
- * lives in cleanFile and `test/instruction-paths.test.mjs` partitions every fs
- * write to hold that. The build-time generators (`scripts/lib/write-generated.mjs`)
- * also reuse it, for trusted repo paths that are never instruction files.
+ * (not in `exports`): `cleanFile` (./instructions.mjs) is its only caller. It
+ * writes the path as given, so the realpath containment lives in cleanFile and
+ * `test/instruction-paths.test.mjs` partitions every fs write to hold that.
  */
 import { randomBytes } from "node:crypto";
 import {
