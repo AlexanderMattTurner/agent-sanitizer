@@ -50772,6 +50772,30 @@ import { createConnection } from "node:net";
 import { tmpdir as tmpdir2 } from "node:os";
 import { dirname as dirname6, join as join7 } from "node:path";
 import { fileURLToPath as fileURLToPath4 } from "node:url";
+function isPrivateRoot(root2, uid) {
+  let st;
+  try {
+    st = lstatSync4(root2);
+  } catch {
+    return false;
+  }
+  return isPrivateDir(st, { uid });
+}
+function resolveSocketPath(env, uid) {
+  const override = readKnob("_AGENT_SANITIZER_REDACTOR_SOCKET", env);
+  if (override) return override;
+  for (const root2 of [env.XDG_RUNTIME_DIR, env.CLAUDE_PLUGIN_DATA]) {
+    if (!root2 || !isPrivateRoot(root2, uid)) continue;
+    const dir = join7(root2, "agent-sanitizer-redactor");
+    if (Buffer.byteLength(dir) + 1 + TEMP_BIND_NAME_LENGTH <= SOCKET_PATH_MAX)
+      return join7(dir, "redactor.sock");
+  }
+  return join7(
+    tmpdir2(),
+    `agent-sanitizer-redactor-${uid ?? "nouid"}`,
+    "redactor.sock"
+  );
+}
 function daemonCommand() {
   const configured = readKnob("_AGENT_SANITIZER_REDACTOR_DAEMON");
   if (configured) return [configured];
@@ -51030,7 +51054,7 @@ async function redactViaDaemon(text6, opts) {
     }
   }
 }
-var DAEMON_REASON, DEFAULT_SOCKET_PATH, WAIT_DEADLINE_MS, sleep, STDERR_TAIL_CHARS;
+var DAEMON_REASON, SOCKET_PATH_MAX, TEMP_BIND_NAME_LENGTH, DEFAULT_SOCKET_PATH, WAIT_DEADLINE_MS, sleep, STDERR_TAIL_CHARS;
 var init_redactor_client = __esm({
   "claude-hooks/lib/redactor-client.mjs"() {
     "use strict";
@@ -51041,7 +51065,9 @@ var init_redactor_client = __esm({
     init_knobs();
     init_knobs();
     DAEMON_REASON = /^[\x20-\x7e]{1,200}$/u;
-    DEFAULT_SOCKET_PATH = readKnob("_AGENT_SANITIZER_REDACTOR_SOCKET") ?? join7(tmpdir2(), "agent-sanitizer-redactor", "redactor.sock");
+    SOCKET_PATH_MAX = 103;
+    TEMP_BIND_NAME_LENGTH = 17;
+    DEFAULT_SOCKET_PATH = resolveSocketPath(process.env, currentUid());
     WAIT_DEADLINE_MS = readKnob("_AGENT_SANITIZER_REDACTOR_WAIT_MS");
     sleep = (ms) => new Promise((resolve6) => {
       setTimeout(resolve6, ms);
