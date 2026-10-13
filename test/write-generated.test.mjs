@@ -22,10 +22,7 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
 import { writeGenerated } from "../scripts/lib/write-generated.mjs";
-
-const ROOT = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-  encoding: "utf8",
-}).trim();
+import { repoRoot as ROOT } from "./helpers/repo-root.mjs";
 
 describe("writeGenerated", () => {
   /** @type {string} */
@@ -112,27 +109,36 @@ describe("writeGenerated", () => {
 });
 
 describe("generator output writes", () => {
-  const generators = execFileSync("git", ["ls-files", "scripts/gen-*.mjs"], {
+  const allGenerators = execFileSync("git", ["ls-files", "scripts/gen-*.mjs"], {
     cwd: ROOT,
     encoding: "utf8",
   })
     .split("\n")
-    .filter((f) => f && f !== "scripts/gen-unicode.mjs");
+    .filter(Boolean);
+  // gen-unicode.mjs only spawns the others, so it has no writeGenerated call of
+  // its own; the raw-write ban still binds on it.
+  const generators = allGenerators.filter(
+    (f) => f !== "scripts/gen-unicode.mjs",
+  );
 
   it("enumerates the generators (guards against a vacuous pass)", () => {
     assert.ok(generators.length >= 9, generators.join(", "));
     assert.ok(generators.includes("scripts/gen-cf-charset.mjs"));
     assert.ok(generators.includes("scripts/gen-unicode-properties.mjs"));
+    assert.ok(allGenerators.includes("scripts/gen-unicode.mjs"));
   });
+
+  for (const rel of allGenerators)
+    it(`${rel} never writes through a bare fs call`, () =>
+      assert.doesNotMatch(
+        readFileSync(join(ROOT, rel), "utf8"),
+        /\bwrite(?:File)?Sync\b|\bwriteFile\b|\bcreateWriteStream\b|\bappendFile/,
+        "a bare fs write truncates the output in place; use writeGenerated",
+      ));
 
   for (const rel of generators) {
     it(`${rel} writes only through writeGenerated`, () => {
       const source = readFileSync(join(ROOT, rel), "utf8");
-      assert.doesNotMatch(
-        source,
-        /\bwrite(?:File)?Sync\b|\bwriteFile\b|\bcreateWriteStream\b|\bappendFile/,
-        "a bare fs write truncates the output in place; use writeGenerated",
-      );
       assert.match(source, /\bwriteGenerated\(/, "no writeGenerated call");
       assert.match(
         source,
