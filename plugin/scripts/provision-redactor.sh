@@ -35,12 +35,14 @@ fi
 # The trap covers every exit, including the idempotent early return (which is
 # fast, so it prints nothing) and the failure arms.
 provision_begin "secret-redaction engine install"
-trap 'provision_release_lock; provision_report_elapsed' EXIT
+# $build names a venv under construction until the swap below hands it over.
+build=""
+trap '[[ -z "$build" ]] || rm -rf -- "$build"; provision_release_lock; provision_report_elapsed' EXIT
 
 # Held across the up-to-date CHECK and the install below, not just the install:
 # without it a second session that reads the check before this one finishes goes
-# on to `uv venv` the same path, recreating the venv under a daemon already
-# running out of it.
+# on to build and swap in a second venv, replacing the first under a daemon
+# already running out of it.
 provision_hold_lock "$plugin_data/.redactor-provision.lock"
 
 req="$plugin_root/requirements.txt"
@@ -65,16 +67,32 @@ if [[ -x "$venv/bin/agent-secret-redactor-daemon" ]] && cmp -s "$req" "$stamp" &
   exit 0
 fi
 
+# Built beside the live venv and swapped in once installed, verified and
+# stamped: `uv venv` refuses an existing venv, and building in place would hand
+# the launcher a half-installed daemon. Leftovers of a killed provisioner are
+# ours to clear: the lock is held.
+for leftover in "$plugin_data"/venv.new.* "$plugin_data"/venv.old.*; do
+  if [[ -e "$leftover" || -L "$leftover" ]]; then
+    rm -rf -- "$leftover"
+  fi
+done
+build="$plugin_data/venv.new.$$"
+retired="$plugin_data/venv.old.$$"
+
+# --require-hashes is explicit, as in build-redactor-pyz.mjs, so an unhashed
+# lock line fails the install rather than turning hash checking off. Unlike
+# that build, prebuilt platform wheels are fine: this venv runs only on the host
+# that built it.
 if command -v uv >/dev/null 2>&1; then
-  uv venv --quiet "$venv"
-  uv pip install --quiet --python "$venv/bin/python" -r "$req"
+  uv venv --quiet "$build"
+  uv pip install --quiet --python "$build/bin/python" --require-hashes -r "$req"
   # --no-deps: the wheel's dependencies just came from the hashed lock, and
   # letting it re-resolve them would pull unpinned versions in beside them.
-  uv pip install --quiet --python "$venv/bin/python" --no-deps -- "$wheel"
+  uv pip install --quiet --python "$build/bin/python" --no-deps -- "$wheel"
 elif command -v python3 >/dev/null 2>&1; then
-  python3 -m venv "$venv"
-  "$venv/bin/pip" install --quiet -r "$req"
-  "$venv/bin/pip" install --quiet --no-deps -- "$wheel"
+  python3 -m venv "$build"
+  "$build/bin/pip" install --quiet --require-hashes -r "$req"
+  "$build/bin/pip" install --quiet --no-deps -- "$wheel"
 else
   echo "agent-sanitizer: python3 not found — the secret-redaction engine (Layer 4)" \
     "cannot be provisioned. Tool output will reach the model UNREDACTED (the hooks" \
@@ -83,8 +101,52 @@ else
   exit 1
 fi
 
-provision_require_executable "$venv/bin/agent-secret-redactor-daemon" \
-  "agent-sanitizer: install finished but $venv/bin/agent-secret-redactor-daemon is not an executable file"
-cp -- "$req" "$stamp"
-cp -- "$wheel" "$wheel_stamp"
+daemon="$build/bin/agent-secret-redactor-daemon"
+provision_require_executable "$daemon" \
+  "agent-sanitizer: install finished but $daemon is not an executable file"
+
+# The daemon's interpreter path points inside $build, which stops existing at
+# the swap: re-point every occurrence at $venv. Prefix/suffix removal with a
+# quoted pattern is literal in every bash; ${x//a/b} is not (5.2 expands `&`).
+script="$(cat -- "$daemon" && printf x)"
+script="${script%x}"
+relocated=""
+while [[ "$script" == *"$build/"* ]]; do
+  relocated+="${script%%"$build/"*}$venv/"
+  script="${script#*"$build/"}"
+done
+relocated+="$script"
+printf '%s' "$relocated" >"$daemon.relocated"
+chmod 755 -- "$daemon.relocated"
+mv -f -- "$daemon.relocated" "$daemon"
+
+# The launcher refuses a venv another uid could write into (trusted_dir in
+# safe-launch.sh). Recursive: it vets only the root and bin/, but the daemon
+# imports from site-packages, where a group-editable module runs with every
+# secret-bearing payload. Done after the last write into $build.
+chmod -R go-w -- "$build"
+cp -- "$req" "$build/.requirements-installed"
+cp -- "$wheel" "$build/.engine-wheel-installed"
+
+# Two renames: a rename cannot replace a non-empty directory. Between them the
+# client redacts through the zipapp.
+if [[ -e "$venv" || -L "$venv" ]]; then
+  mv -- "$venv" "$retired"
+fi
+if ! mv -- "$build" "$venv"; then
+  # Every arm sits in a condition: a bare `mv` would abort under `set -e`
+  # before the message naming where the only surviving copy lives.
+  if [[ ! -e "$retired" ]]; then
+    echo "agent-sanitizer: could not move the newly built secret-redaction engine into $venv — this session redacts through the committed zipapp" >&2
+  elif mv -- "$retired" "$venv"; then
+    echo "agent-sanitizer: could not move the new secret-redaction engine into $venv — the previous one stays in place" >&2
+  else
+    echo "agent-sanitizer: could not move the new secret-redaction engine into $venv, and the previous one could not be restored from $retired — this session redacts through the committed zipapp; move $retired back by hand, or start a new session to re-provision" >&2
+  fi
+  exit 1
+fi
+build=""
+if [[ -e "$retired" ]]; then
+  rm -rf -- "$retired"
+fi
 echo "agent-sanitizer: secret-redaction engine provisioned into $venv" >&2

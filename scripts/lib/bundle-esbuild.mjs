@@ -26,11 +26,12 @@
  * automatically.
  */
 import { readFileSync } from "node:fs";
+import { isBuiltin } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { parse } from "acorn";
-import { simple } from "acorn-walk";
+import { ancestor } from "acorn-walk";
 import { build } from "esbuild";
 
 import { nodeMajorFloor } from "../gen-node-floor-lib.mjs";
@@ -76,9 +77,11 @@ const inlineRuntimeJsonRequires = {
 
 /**
  * Reported in place of a specifier whose value the bundle decides at runtime.
- * No allowlist may contain it, so such a call always fails the build: a
- * specifier the build cannot read is a specifier the build cannot prove
- * resolvable in a deployment that has no node_modules.
+ * An allowlist may not contain it bare, so such a call outside a named function
+ * always fails the build: a specifier the build cannot read is one it cannot
+ * prove resolvable in a deployment with no node_modules. Inside a named
+ * function it is reported as `<computed> in <name>`, which an allowlist may
+ * name: a reviewed statement about ONE call site, never a blanket pass.
  */
 export const COMPUTED_SPECIFIER = "<computed>";
 
@@ -90,10 +93,16 @@ export const COMPUTED_SPECIFIER = "<computed>";
  * @param {readonly string[]} allowedRuntimeRequires
  */
 export function assertNoRuntimeRequires(text, allowedRuntimeRequires) {
+  if (allowedRuntimeRequires.includes(COMPUTED_SPECIFIER))
+    throw new Error(
+      `an allowlist may not contain a bare ${COMPUTED_SPECIFIER}: it would pass ` +
+        "every computed load outside a named function. Name the one site as " +
+        `"${COMPUTED_SPECIFIER} in <function>".`,
+    );
   const allowed = new Set(allowedRuntimeRequires);
   const survivors = runtimeRequires(text).filter((spec) => !allowed.has(spec));
   if (survivors.length === 0) return;
-  const computed = survivors.includes(COMPUTED_SPECIFIER)
+  const computed = survivors.some((spec) => spec.startsWith(COMPUTED_SPECIFIER))
     ? ` ${COMPUTED_SPECIFIER} means the call's argument is not a string literal, so the build cannot prove what it resolves to.`
     : "";
   throw new Error(
@@ -104,29 +113,62 @@ export function assertNoRuntimeRequires(text, allowedRuntimeRequires) {
   );
 }
 
-/** esbuild renames the require shim (`require2(…)`), hence the digit suffix. */
-const RUNTIME_REQUIRE_CALLEE = /^require\d*$/;
+/**
+ * A callee that loads a module by name at runtime: the `require` binding
+ * (esbuild renames it `require2`, and names its shim `__require`), or a
+ * `createRequire(…)` (renamed `createRequire2`) result called immediately.
+ */
+const RUNTIME_REQUIRE_CALLEE = /^(?:__)?require\d*$/;
+const CREATE_REQUIRE = /^createRequire\d*$/;
 
 /**
- * The specifier a `require()` call names, or `COMPUTED_SPECIFIER` when the
- * argument is anything other than a single string literal — a variable, a
- * template literal, a concatenation, or no argument at all.
- * @param {import("acorn").CallExpression} node
+ * Whether `callee` is a `createRequire(…)` call, bare or as `module.createRequire(…)`.
+ * @param {import("acorn").Node} callee
+ */
+function isCreateRequireCall(callee) {
+  if (callee.type !== "CallExpression") return false;
+  const fn = /** @type {import("acorn").CallExpression} */ (callee).callee;
+  if (fn.type === "Identifier") return CREATE_REQUIRE.test(fn.name);
+  return (
+    fn.type === "MemberExpression" &&
+    !fn.computed &&
+    fn.property.type === "Identifier" &&
+    fn.property.name === "createRequire"
+  );
+}
+
+/**
+ * What one module-loading site reports: its string-literal specifier, else
+ * `COMPUTED_SPECIFIER` (a variable, template, concatenation, or no argument)
+ * qualified by the innermost named function it sits in.
+ * @param {readonly import("acorn").Node[]} args
+ * @param {readonly import("acorn").Node[]} ancestors outermost first, the node last
  * @returns {string}
  */
-function requireSpecifier(node) {
-  const [arg, ...rest] = node.arguments;
+function reportedSpecifier(args, ancestors) {
+  const [arg, ...rest] = args;
+  const literal = /** @type {import("acorn").Literal | undefined} */ (arg);
   if (
     rest.length === 0 &&
-    arg?.type === "Literal" &&
-    typeof arg.value === "string"
+    literal?.type === "Literal" &&
+    typeof literal.value === "string"
   )
-    return arg.value;
+    return literal.value;
+  for (let i = ancestors.length - 2; i >= 0; i--) {
+    const fn = /** @type {import("acorn").Function} */ (ancestors[i]);
+    if (
+      (fn.type === "FunctionDeclaration" || fn.type === "FunctionExpression") &&
+      fn.id
+    )
+      return `${COMPUTED_SPECIFIER} in ${fn.id.name}`;
+  }
   return COMPUTED_SPECIFIER;
 }
 
 /**
- * The distinct specifiers the artifact still hands to a runtime `require()`.
+ * The distinct specifiers the artifact still loads by name at runtime: through
+ * `require()`, through a `createRequire(…)(…)` loader, or through a dynamic
+ * `import()`. A literal Node builtin is left out — every target runtime has it.
  *
  * Parses the bundle rather than scanning it, because "is this a call" is a
  * question about JavaScript structure. A text scan answers it wrong in both
@@ -145,13 +187,22 @@ function requireSpecifier(node) {
 export function runtimeRequires(text) {
   /** @type {Set<string>} */
   const found = new Set();
-  simple(parse(text, { sourceType: "module", ecmaVersion: "latest" }), {
-    CallExpression(node) {
+  /** @param {string} spec */
+  const record = (spec) => {
+    if (!isBuiltin(spec)) found.add(spec);
+  };
+  ancestor(parse(text, { sourceType: "module", ecmaVersion: "latest" }), {
+    CallExpression(node, _state, ancestors) {
+      const { callee } = node;
       if (
-        node.callee.type === "Identifier" &&
-        RUNTIME_REQUIRE_CALLEE.test(node.callee.name)
+        (callee.type === "Identifier" &&
+          RUNTIME_REQUIRE_CALLEE.test(callee.name)) ||
+        isCreateRequireCall(callee)
       )
-        found.add(requireSpecifier(node));
+        record(reportedSpecifier(node.arguments, ancestors));
+    },
+    ImportExpression(node, _state, ancestors) {
+      record(reportedSpecifier([node.source], ancestors));
     },
   });
   return [...found];
@@ -240,10 +291,17 @@ export const BUNDLE_TARGETS = [
     // generated without license comments; keeping them out also keeps the
     // shipped bytes reviewable.
     legalComments: "none",
-    // The one runtime require this artifact may keep: confusableScan resolves
-    // namespace-guard from the lazy-module registry first and only falls back to
-    // require() on a host that has a node_modules.
-    allowedRuntimeRequires: ["namespace-guard"],
+    // The two runtime loads this artifact may keep, each a registry-first
+    // fallback that only runs on a host whose node_modules has the module:
+    //   - "namespace-guard": confusableScan's require2() and src/confusables'
+    //     createRequire(import.meta.url)(…) in resolveScan, both reached only
+    //     when the lazy-module registry has no inlined copy.
+    //   - "<computed> in lazyImport": hook-io's lazyImport(specifier), whose
+    //     import() runs only for a specifier registerLazyModules never named.
+    allowedRuntimeRequires: [
+      "namespace-guard",
+      `${COMPUTED_SPECIFIER} in lazyImport`,
+    ],
   },
   {
     name: "python-cli",

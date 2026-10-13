@@ -264,12 +264,88 @@ const REQUIRE_SHAPES = [
     [],
   ],
   ["inside a comment", '// TODO: require("left-pad") here\n', []],
+  // Loaders that are not a `require` binding, as the shipped bundle carries
+  // them (resolveScan, lazyImport) or esbuild emits them (`__require`).
+  [
+    "via createRequire(...)(...)",
+    'createRequire(import.meta.url)("ng");',
+    ["ng"],
+  ],
+  [
+    "via renamed createRequire2",
+    'createRequire2(import.meta.url)("./p.json");',
+    ["./p.json"],
+  ],
+  [
+    "via module.createRequire",
+    'module.createRequire(import.meta.url)("lp");',
+    ["lp"],
+  ],
+  ["via esbuild's __require shim", '__require("left-pad");', ["left-pad"]],
+  ["as a literal dynamic import()", 'await import("left-pad");', ["left-pad"]],
+  [
+    "as a computed import() outside a function",
+    "await import(s);",
+    [COMPUTED_SPECIFIER],
+  ],
+  // Qualified by its function, so an allowlist can name this ONE site.
+  [
+    "as a computed import() in a named function",
+    "async function lazyImport(s) { return await import(s); }",
+    [`${COMPUTED_SPECIFIER} in lazyImport`],
+  ],
+  [
+    "computed, in an arrow nested in a named function",
+    "function outer() { return (s) => require2(s); }",
+    [`${COMPUTED_SPECIFIER} in outer`],
+  ],
+  // Negative corpus: shapes the shipped bundles carry that are NOT a runtime
+  // load of a missing module.
+  [
+    "only as a JSDoc type import",
+    '/** @type {typeof import("agent-sanitizer")} */ (x);',
+    [],
+  ],
+  ["of a node: builtin via import()", 'await import("node:fs");', []],
+  ["of a bare builtin via require", 'require2("fs");', []],
+  [
+    "only as the createRequire factory call",
+    "require2 = createRequire2(import.meta.url);",
+    [],
+  ],
+  ["as an unrelated call returning a function", 'makeLoader()("x");', []],
+  ["as an unrelated method named require", 'obj.require("left-pad");', []],
+  [
+    "as esbuild's __commonJS wrapper definition",
+    "var __commonJS = (cb, mod) => function __require() { return mod; };",
+    [],
+  ],
 ];
 
 for (const [shape, source, expected] of REQUIRE_SHAPES)
   test(`runtimeRequires reads a require ${shape}`, () => {
     assert.deepEqual(runtimeRequires(source), [...expected]);
   });
+
+test("an allowlist cannot pass every computed load with a bare <computed>", () => {
+  assert.throws(
+    () => assertNoRuntimeRequires("import(x);", [COMPUTED_SPECIFIER]),
+    /may not contain a bare <computed>/,
+  );
+  const lazy = [`${COMPUTED_SPECIFIER} in lazyImport`];
+  assert.doesNotThrow(() =>
+    assertNoRuntimeRequires(
+      "function lazyImport(s) { return import(s); }",
+      lazy,
+    ),
+  );
+  // The qualifier is the site, not a prefix match.
+  assert.throws(
+    () =>
+      assertNoRuntimeRequires("function other(s) { return import(s); }", lazy),
+    /<computed> in other.*not a string literal/s,
+  );
+});
 
 test("a computed specifier fails the build", () => {
   // The whole point of reporting `<computed>`: an allowlist cannot contain it,

@@ -179,7 +179,8 @@ class NpmDetector(RegexBasedDetector):
 
 # detect-secrets' OpenAIDetector opens `sk-[A-Za-z0-9-_]*` with no boundary, so
 # every `sk-` in a long hyphen run restarts the unbounded body scan. The JSON
-# row keeps its body and adds token-boundary lookbehinds, which make it linear.
+# row adds token-boundary lookbehinds and caps the name run, which make it linear
+# per line and in cross-line discovery, where the lookbehinds are stripped.
 class OpenAiTokenDetector(RegexBasedDetector):
     """OpenAI API keys (``sk-…T3BlbkFJ…``). Linear replacement for detect-secrets'
     bundled ``OpenAIDetector``, under the same secret_type."""
@@ -245,22 +246,19 @@ class JwtFullTokenDetector(_jwt.JwtTokenDetector):
     Subclasses ``JwtTokenDetector`` to keep its base64/JSON validation; only the
     signature quantifier changes from lazy to greedy. gitleaks rule: ``jwt``."""
 
-    # Per-segment quantifiers are BOUNDED ({1,65536}) rather than ``+``: an
-    # unbounded run retried at every ``eyJ`` start makes an unanchored search
-    # polynomial, and a finite bound is provably linear. The bound must clear a
-    # full RFC 7515 header carrying an ``x5c`` certificate CHAIN — several base64
-    # DER certs run well past 8192 chars, and a header that overflowed the bound
-    # matched NOTHING and leaked the whole JWT in cleartext. 65536 base64
-    # chars/segment dwarfs even a multi-cert chain while staying linear. The
-    # third segment is optional so unsigned (``header.payload.``) and two-part
-    # JWTs still match, exactly as the bundled detector did.
+    # Each segment is bounded at 65536, past a header carrying an ``x5c`` cert
+    # chain. A failed attempt can still read that far, so each starts on its own
+    # run: the lookbehind refuses a start after a body char (`eyJ-eyJ-…`), and `=`
+    # is only a segment's trailing padding, so `eyJ=eyJ=…` fails each start at
+    # once. The optional third segment keeps unsigned and two-part JWTs.
     # noqa rationale: detect-secrets' RegexBasedDetector declares `denylist` as an
     # instance attribute, so a ClassVar annotation errors pyright; the subclass sets it
     # as a class attribute by framework contract, which is the shared-state RUF012 flags.
     denylist = [  # noqa: RUF012
         re.compile(
-            r"eyJ[A-Za-z0-9_=-]{1,65536}\.[A-Za-z0-9_=-]{1,65536}"
-            r"(?:\.[A-Za-z0-9_=-]{0,65536})?"
+            r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{1,65536}={0,2}"
+            r"\.[A-Za-z0-9_-]{1,65536}={0,2}"
+            r"(?:\.[A-Za-z0-9_-]{0,65536}={0,2})?"
         ),
     ]
 

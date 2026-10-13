@@ -35,8 +35,10 @@ A quadratic that lives entirely in a dependency (detect-secrets calls
 """
 
 import hashlib
+import re
 
 import pytest
+from detect_secrets.settings import get_plugins
 
 import agent_sanitizer.secrets as pkg
 from agent_sanitizer.secrets import (
@@ -52,7 +54,14 @@ from agent_sanitizer.secrets import (
     strip_invisible,
 )
 from agent_sanitizer.secrets.placeholders import PLACEHOLDER_RE
+from agent_sanitizer.secrets.prefilter import (
+    _c as _sre_constants,
+    _parser as _sre_parser,
+    denylist_patterns,
+    required_literals,
+)
 from tests._growth import (
+    LINEAR_MAX_EXPONENT,
     assert_linear,
     assert_superlinear,
     cpu_growth,
@@ -331,4 +340,141 @@ def test_the_measure_catches_a_quadratic():
     assert_superlinear(
         "a token-dedup quadratic (opcodes)",
         _opcode_curve(lambda text: lambda: quadratic(text)),
+    )
+
+
+# ─── Adversarial repetition of a pattern's own opening ───────────────────────
+# The quadratic shape a regex gate cannot see from the pattern alone: a pattern
+# whose attempts can start inside a run another attempt already read, repeated
+# until the run is long. `"sk-" * n` against the bundled OpenAI pattern measured
+# 35.8s at 96KB; `"eyJ-" * n` against an unanchored JWT pattern measured 64x CPU
+# for 8x input. Sizes are BYTES of payload, so every unit is read over the same
+# volume, and the verdict is a CPU growth exponent like the copy gate's.
+_SHAPE_SEPARATORS = ("", "-", "=", "_", ".", " ", "/")
+_SHAPE_SIZES = geometric_sizes(16 * 1024, 64 * 1024, 3)
+# A scan that finishes in tens of microseconds crosses a cache boundary inside
+# this range and reads a step that is the memory system's, not the pattern's
+# (a literal PEM header read exponent 1.4-1.6 once in ~130 combinations, never
+# twice). A quadratic reads ~2 at EVERY size, so a curve is reported only when a
+# second fit over sizes four times larger agrees.
+_SHAPE_CONFIRM_SIZES = geometric_sizes(64 * 1024, 256 * 1024, 3)
+# The control is genuinely quadratic, so it is read at sizes a quarter as large:
+# its exponent is unmistakable there and the fit does not spend seconds on it.
+_SHAPE_CONTROL_SIZES = geometric_sizes(4 * 1024, 16 * 1024, 3)
+
+
+def _leading_literal(pattern: re.Pattern[str]) -> str:
+    """The literal a match of ``pattern`` opens with (after a leading lookbehind),
+    or, when it opens on a class or an alternation, its rarest required literal."""
+    out = []
+    for op, arg in _sre_parser.parse(pattern.pattern, pattern.flags):
+        if op is _sre_constants.ASSERT_NOT and not out:
+            continue
+        if op is not _sre_constants.LITERAL:
+            break
+        out.append(chr(arg))
+    if out:
+        return "".join(out)
+    literals = required_literals(pattern.pattern, pattern.flags)
+    return min(literals, key=lambda lit: (len(lit), lit)) if literals else "a"
+
+
+def _live_denylist_patterns() -> list[re.Pattern[str]]:
+    with configure_plugins():
+        return denylist_patterns(get_plugins())
+
+
+def _shape_curve(call_for, sizes=_SHAPE_SIZES):
+    """CPU growth across ``sizes`` bytes of an adversarial payload.
+    ``call_for(nbytes)`` builds the zero-arg call; the sampler's per-call attempt
+    index is added to the byte count so no two inputs are identical."""
+    return cpu_growth(lambda n, k: call_for(n + k), sizes)
+
+
+def _repeat_to(unit: str, nbytes: int) -> str:
+    return unit * (nbytes // len(unit))
+
+
+def _scan(pattern: re.Pattern[str], text: str):
+    """The call to measure, with ``text`` already built: the repetition is an
+    allocation whose page-fault cost steps with size and is not the pattern's."""
+    return lambda: list(pattern.finditer(text))
+
+
+def test_no_live_pattern_is_quadratic_on_its_own_opening_repeated():
+    """Every live denylist pattern, fed its own opening literal repeated with
+    each separator a token body may admit."""
+    patterns = _live_denylist_patterns()
+    assert len(patterns) >= 40, len(patterns)
+    slow = []
+    for pattern in patterns:
+        literal = _leading_literal(pattern)
+        for sep in _SHAPE_SEPARATORS:
+            unit = literal + sep
+
+            def call_for(n, unit=unit, pattern=pattern):
+                return _scan(pattern, _repeat_to(unit, n))
+
+            growth = _shape_curve(call_for)
+            if growth.exponent < LINEAR_MAX_EXPONENT:
+                continue
+            confirm = _shape_curve(call_for, _SHAPE_CONFIRM_SIZES)
+            if confirm.exponent >= LINEAR_MAX_EXPONENT:
+                slow.append((pattern.pattern[:60], unit, str(growth), str(confirm)))
+    assert slow == [], slow
+
+
+def test_the_shape_measure_catches_an_unanchored_quadratic():
+    """Non-vacuity: the bundled OpenAI shape, unanchored and unbounded, must
+    classify as super-linear."""
+    quadratic = re.compile(r"sk-[A-Za-z0-9_-]*[A-Za-z0-9]{20}T3BlbkFJ")
+    assert_superlinear(
+        "an unanchored OpenAI-shaped pattern (CPU)",
+        _shape_curve(
+            lambda n: _scan(quadratic, _repeat_to("sk-", n)),
+            _SHAPE_CONTROL_SIZES,
+        ),
+    )
+
+
+# Whole-engine payloads for the field-value and PEM passes, which run patterns
+# the denylist sweep above never sees. Each unit repeats the pass's own opening.
+# Sizes here are repetitions of the unit, not bytes: the shapes differ in unit
+# length and several divide `n` themselves.
+_ENGINE_SIZES = geometric_sizes(2000, 8000, 3)
+_ENGINE_SHAPES = {
+    "identifier segments": lambda n: "token" + "_token" * n + "!",
+    "segment then junk": lambda n: "password_" + "a_" * n + "!",
+    "noun then whitespace": lambda n: ("password" + " " * 50) * (n // 8),
+    "nested benign url": lambda n: "token_url=" + "https://a/token=" * n,
+    "nested benign metadata": lambda n: "token_type=" + "xtoken_type=" * n,
+    "pem headers": lambda n: "-----BEGIN PRIVATE KEY-----" * (n // 4),
+    "pem body lines": lambda n: "-----BEGIN PRIVATE KEY-----\n" + "QUFB\n" * n,
+    "pem json body": lambda n: "-----BEGIN PRIVATE KEY-----" + "\\nQUFB" * n,
+    "pem deep json body": lambda n: "-----BEGIN PRIVATE KEY-----" + "\\\\nQUFB" * n,
+    "pem field dashes": lambda n: (
+        "-----BEGIN PRIVATE KEY-----\nProc-Type: " + "----a" * n
+    ),
+    "pem blocks": lambda n: "-----BEGIN PRIVATE KEY-----\nQUFB QUFB\n" * (n // 4),
+    "pem markers in prose": lambda n: (
+        "-----BEGIN PRIVATE KEY----- a " * (n // 4) + "-----END PRIVATE KEY-----"
+    ),
+}
+
+
+def _redact_text(text: str, config: RedactorConfig):
+    return lambda: redact(text, config)
+
+
+@pytest.mark.parametrize("shape", sorted(_ENGINE_SHAPES))
+@pytest.mark.parametrize("web_ingress", [False, True])
+def test_engine_pass_is_linear_on_its_own_opening_repeated(shape, web_ingress):
+    """The field-value pass is tried at every credential noun and the PEM pass
+    at every header, so each must bound one attempt — `token` + `_token` * n
+    measured 87s at 96KB before the field key's segment run was bounded."""
+    config = RedactorConfig(web_ingress=web_ingress)
+    make = _ENGINE_SHAPES[shape]
+    assert_linear(
+        f"{shape} (CPU per unit)",
+        _shape_curve(lambda n: _redact_text(make(n), config), _ENGINE_SIZES),
     )
