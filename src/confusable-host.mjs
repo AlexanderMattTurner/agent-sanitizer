@@ -15,12 +15,14 @@
  * Here the URL stays byte-identical and the finding names the deception.
  *
  * THE RULE, per DNS label: a label is a pretender when it holds a non-ASCII code
- * point and its TR39 skeleton is pure ASCII — it claims to be an ASCII word it
- * is not. That is the same argument the fold gate makes ("folds to pure ASCII"),
- * so it inherits the same precision story: a label keeping an unmapped glyph
- * after skeletoning (`россия` → `poccия`) is a real word in its own script, not
- * a disguise, and passes untouched. A weaker second tier, reported quietly,
- * covers the label that keeps an unmapped glyph but mixes scripts — see
+ * point, its TR39 skeleton is pure ASCII, and some glyph in it is not a letter
+ * of a real Latin orthography (isAsciiPretender) — it claims to be an ASCII word
+ * it is not. That is the same argument the fold gate makes ("folds to pure
+ * ASCII"), so it inherits the same precision story: a label keeping an unmapped
+ * glyph after skeletoning (`россия` → `poccия`) is a real word in its own
+ * script, not a disguise, and passes untouched. A weaker tier, reported quietly,
+ * covers the ASCII-skeleton label spelled only in orthographic Latin letters and
+ * the label that keeps an unmapped glyph but mixes scripts — see
  * {@link confusableLabel}.
  */
 

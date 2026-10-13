@@ -1635,6 +1635,25 @@ describe("composeContext", () => {
       composeContext(true, ["w"]),
       "WARNING: Tool output sanitized. w.",
     ));
+  it("appends deduped notes after the warnings and alert", () =>
+    assert.equal(
+      composeContext(false, ["w"], {
+        injectionAlert: " ALERT",
+        notes: ["n1", "n1", "n2"],
+      }),
+      "WARNING: Tool output flagged (content not modified). w. ALERT n1 n2",
+    ));
+  it("drops only the inert-ANSI note beside a warning", () =>
+    assert.equal(
+      composeContext(true, ["w"], { notes: [INERT_ANSI_NOTE, "n"] }),
+      "WARNING: Tool output sanitized. w. n",
+    ));
+  it("keeps the inert-ANSI note when no warning would replace it", () =>
+    assert.ok(
+      composeContext(true, [], { notes: [INERT_ANSI_NOTE] }).endsWith(
+        ` ${INERT_ANSI_NOTE}`,
+      ),
+    ));
 });
 
 // ─── suppressToolOutput ──────────────────────────────────────────────────────

@@ -1262,20 +1262,34 @@ function defineOwn(out, key, value) {
  * Compose the model-facing context line for a sanitized/flagged tool output.
  * `injectionAlert` is the caller's optional trailing alert (e.g. appended only
  * for untrusted-ingress tools where a semantic-injection filter actually ran).
+ *
+ * `notes` follow the WARNING text, because a note can carry the instruction a
+ * detect-only finding rests on ("do not fetch them"), and a co-occurring
+ * warning about an unrelated leaf does not make that instruction redundant.
+ * {@link INERT_ANSI_NOTE} is the one exception, dropped beside a warning: it
+ * says "these were colour codes", which a reader with a warning to act on does
+ * not need. It is matched by the constant, not by wording, so no other note can
+ * be silenced by resembling it.
  * @param {boolean} modified  output bytes were changed (vs. flagged only)
  * @param {string[]} warnings
- * @param {{ injectionAlert?: string }} [options]
+ * @param {{ injectionAlert?: string, notes?: string[] }} [options]
  * @returns {string}
  */
 export function composeContext(
   modified,
   warnings,
-  { injectionAlert = "" } = {},
+  { injectionAlert = "", notes = [] } = {},
 ) {
   const prefix = modified
     ? "WARNING: Tool output sanitized. "
     : "WARNING: Tool output flagged (content not modified). ";
-  return prefix + [...new Set(warnings)].join(". ") + "." + injectionAlert;
+  const kept = [...new Set(notes)].filter(
+    (text) => warnings.length === 0 || text !== INERT_ANSI_NOTE,
+  );
+  return [
+    prefix + [...new Set(warnings)].join(". ") + "." + injectionAlert,
+    ...kept,
+  ].join(" ");
 }
 
 /**

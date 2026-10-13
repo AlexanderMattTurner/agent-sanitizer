@@ -125,7 +125,8 @@ const FUZZ_EXEMPT = Object.freeze({
   // ── operator-facing prose built from an already-classified finding ───────
   collisionWarning:
     "formats one field name and path into the collision sentence",
-  composeContext: "assembles the context block from a computed warning list",
+  composeContext:
+    "assembles the context block from computed warning and note lists",
   describeExfil: "formats Layer 3's classified threats into prose",
   describeRemoved: "formats Layer 2's removal counts into prose",
   describeStripped: "formats Layer 1's CATEGORY codes into prose",
