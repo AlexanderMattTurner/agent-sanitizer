@@ -130,11 +130,15 @@ instructions placed there reach a model reading the source and no human reading
 the page. It is also where web components and client-side renderers keep their
 UI markup, so the template is reported rather than spliced, and its content is
 scanned like any other markup: a hidden element or comment inside it is
-spliced, a `<script>` inside it reported, a URL inside it read by Layer 3. Two
-`template`s are not reported: a declarative shadow root
-(`shadowrootmode="open"`/`"closed"`), whose content the browser does render, and
-a `template` inside SVG or MathML (or an HTML `template.x`), which has no
-template content — its children are ordinary children and are scanned as such.
+spliced, a `<script>` inside it reported, a URL inside it read by Layer 3. A
+declarative shadow root (`shadowrootmode="open"`/`"closed"`) is reported too,
+since one the parser fails to attach (a second root on one host, say) is an
+ordinary inert template; its content is laid out in its host's box, so a flex
+host blockifies it as it would a light-DOM child. Slot assignment is not
+modelled: a hidden `<slot>` splices only itself, not the light-DOM children
+the browser renders through it. A `template` inside SVG or MathML (or an HTML
+`template.x`) is not reported: it has no template content, so its children are
+ordinary children and are scanned as such.
 
 HTML comments (`<!--…-->`, and the bogus `<!…>`/`<?…?>` forms) are spliced
 like hidden elements — a human viewing the rendered page never sees them. But

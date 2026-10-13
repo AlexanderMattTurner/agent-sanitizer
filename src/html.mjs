@@ -1502,11 +1502,13 @@ export function isHiddenStyle(styleStr) {
 // Scripting / resource-loading tags whose PRESENCE is reported to the model
 // but whose content is preserved: their bodies are page source the model may
 // legitimately need to inspect (how a page's scripts work, its styles, its
-// SVGs), so unlike hidden elements they are never removed. An inert
-// `template` (see {@link isInertTemplate}) is here because the browser parses
-// its content into a fragment it never renders — a reader of the source sees
-// it, a reader of the page does not — while that content is also where a
-// component's UI markup legitimately lives.
+// SVGs), so unlike hidden elements they are never removed. An HTML `template`
+// is here because the browser parses its content into a fragment it never
+// renders — a reader of the source sees it, a reader of the page does not —
+// while that content is also where a component's UI markup legitimately lives.
+// A declarative shadow root is reported too: whether the parser attaches one
+// depends on its host's name and on the host having no earlier root, and a
+// root that fails to attach is an ordinary inert template.
 export const REPORTED_TAGS = new Set([
   "script",
   "style",
@@ -1536,12 +1538,14 @@ function isInertTemplate(node) {
 
 /**
  * True when Layer 2 reports `node`'s presence (see {@link REPORTED_TAGS}).
+ * Only an HTML `template` has template content; one inside SVG or MathML, or a
+ * `template.x`, is an ordinary element whose children are scanned as children.
  * @param {any} node a hast element
  * @returns {boolean}
  */
 function isReportedElement(node) {
   return node.tagName === "template"
-    ? isInertTemplate(node)
+    ? node.content !== undefined
     : REPORTED_TAGS.has(node.tagName);
 }
 
@@ -1661,8 +1665,27 @@ function elementCascade(node) {
   return cascade;
 }
 
-// True when `node` lays out as a non-replaced INLINE box. A flex/grid `parent`
-// blockifies it; a `display:contents` parent defers to its own parent.
+// The template whose content each hast `content` root is, recorded by `walk`.
+const contentOwners = new WeakMap();
+
+// The box `parent`'s children are laid out in: a `display:contents` parent
+// defers to its own parent, and a declarative shadow root's content to the
+// template's parent, the shadow host whose box its children render in.
+/** @param {any} parent @returns {any} */
+function layoutContainer(parent) {
+  let container = parent;
+  for (;;) {
+    const template = contentOwners.get(container);
+    if (template && !isInertTemplate(template))
+      container = parents.get(template);
+    else if (elementCascade(container).textOf("display") === "contents")
+      container = parents.get(container);
+    else return container;
+  }
+}
+
+// True when `node` lays out as a non-replaced INLINE box. A flex/grid layout
+// container (see {@link layoutContainer}) blockifies it.
 /** @param {any} node @param {any} [parent] @returns {boolean} */
 function isInlineBox(node, parent) {
   if (!INLINE_ELEMENTS.has(node.tagName)) return false;
@@ -1674,10 +1697,7 @@ function isInlineBox(node, parent) {
     BLOCKIFYING_VALUES.has(textOf("float"))
   )
     return false;
-  let container = parent;
-  while (elementCascade(container).textOf("display") === "contents")
-    container = parents.get(container);
-  return !elementCascade(container)
+  return !elementCascade(layoutContainer(parent))
     .textOf("display")
     .split(" ")
     .some((token) => ITEM_BLOCKIFYING_DISPLAYS.has(token));
@@ -1961,6 +1981,7 @@ function walk(tree, test, visitor, treeParent = undefined) {
     if (result === EXIT) return;
     if (result === SKIP) continue;
     if (node.type === "element" && node.content !== undefined) {
+      contentOwners.set(node.content, node);
       nodes.push(node.content);
       indices.push(undefined);
       parents.push(node);
