@@ -276,8 +276,8 @@ describe("guarded-data scan (the map is derived from the tests)", () => {
         "module-relative join",
       ],
       [
-        "plugin/dist/hooks/hook-binaries.sha256",
-        "plugin/test/plugin-bundle.test.mjs",
+        "plugin/requirements.txt",
+        "plugin/test/lock-redactor-deps.test.mjs",
         "generator-exported path",
       ],
       [
