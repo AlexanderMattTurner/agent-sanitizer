@@ -125,7 +125,14 @@ describe("regex safety (runtime recheck)", () => {
     t.diagnostic(
       `${compiled.size} patterns from ${[...files].sort().join(", ")}`,
     );
-    assert.ok(compiled.size >= 15, `only ${compiled.size} patterns collected`);
+    // Exact, not a floor: the set is deterministic for a tree, and a refactor
+    // that stops a pattern being compiled during the sweep is the silent
+    // coverage loss this check exists to catch.
+    assert.equal(
+      compiled.size,
+      26,
+      "the set of patterns shipped modules compile changed",
+    );
     for (const file of ["src/invisible.mjs", "src/ansi.mjs", "src/html.mjs"])
       assert.ok(files.has(file), `nothing collected from ${file}`);
     assert.ok(

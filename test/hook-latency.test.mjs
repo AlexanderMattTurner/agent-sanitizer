@@ -228,7 +228,7 @@ describe("hook-path latency", () => {
       const ceiling = cheap.includes(shape)
         ? cheapMs
         : shape === "html-prose"
-          ? (markupMs ?? heavyMs)
+          ? markupMs
           : heavyMs;
       await assertUnderBudget(
         t,
