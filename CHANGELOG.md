@@ -8,6 +8,18 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.66.1] - 2026-10-14
+
+### Changed
+
+- Replaced adaptive growth-fit calibration with absolute CPU budgets for more deterministic performance testing.
+- Regex safety verification now operates without runtime clock dependency, deciding safety based on literal patterns and static analysis.
+
+### Removed
+
+- Removed cost harness and associated young-generation heap flags from CI configuration.
+- Removed adaptive cpu-timing helper module in favor of budget-based approach.
+
 ## [2.66.0] - 2026-10-13
 
 ### Changed
