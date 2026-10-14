@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.66.2] - 2026-10-14
+
+### Fixed
+
+- Improved shadow DOM host detection to only consider the shadow root explicitly attached by the parser.
+- Fixed inheritance of hidden elements through declarative shadow roots' content.
+
 ## [2.66.1] - 2026-10-14
 
 ### Changed
