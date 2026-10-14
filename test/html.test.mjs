@@ -3200,7 +3200,7 @@ describe("an HTML template's content is scanned, and the template reported", () 
     const html = `<div style="visibility:hidden">a${root(`b${shown("kept")}`)}c</div>`;
     let text = html;
     for (const run of ["a", "b", "c"])
-      text = text.replace(`>${run}<`, `>${hid(run)}<`);
+      text = text.replace(`>${run}<`, () => `>${hid(run)}<`);
     // Each splice's start is its offset in the sanitized text.
     const splice = (/** @type {string} */ run) => ({
       placeholder: hid(run),
