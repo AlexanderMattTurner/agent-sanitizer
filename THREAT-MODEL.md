@@ -134,9 +134,13 @@ spliced, a `<script>` inside it reported, a URL inside it read by Layer 3. A
 declarative shadow root (`shadowrootmode="open"`/`"closed"`) is reported too,
 since one the parser fails to attach (a second root on one host, say) is an
 ordinary inert template; its content is laid out in its host's box, so a flex
-host blockifies it as it would a light-DOM child. Slot assignment is not
-modelled: a hidden `<slot>` splices only itself, not the light-DOM children
-the browser renders through it. A `template` inside SVG or MathML (or an HTML
+host blockifies it as it would a light-DOM child. An inherited hide on the host
+(`visibility:hidden`, say) is judged through the root the parser attaches (the
+first one, on a host `attachShadow` accepts), whose content inherits from the
+host and never from the template's own attributes; a slot given light-DOM
+children there renders them, so its fallback content is spliced. Slot
+assignment is otherwise not modelled: a hidden `<slot>` splices only itself,
+not the light-DOM children the browser renders through it. A `template` inside SVG or MathML (or an HTML
 `template.x`) is not reported: it has no template content, so its children are
 ordinary children and are scanned as such.
 

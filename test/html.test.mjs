@@ -3093,6 +3093,133 @@ describe("an HTML template's content is scanned, and the template reported", () 
     assert.deepEqual(sanitizeHtml(inert), reported(inert, { template: 1 }));
   });
 
+  // A shadow child inherits its host's `visibility:hidden` and can override
+  // it, so only the shadow text left hidden is spliced, never the shown span.
+  it("judges an inherited hide through a declarative root's content", () => {
+    const shown = '<span style="visibility:visible">shown</span>';
+    const host = (content, mode = ' shadowrootmode="open"') =>
+      `<div style="visibility:hidden"><template${mode}>${content}</template></div>`;
+    const kept = host(shown);
+    assert.deepEqual(sanitizeHtml(kept), reported(kept, { template: 1 }));
+    const mixed = host(`${shown}gone`);
+    assert.deepEqual(
+      sanitizeHtml(mixed),
+      reported(
+        mixed.replace("gone", hid("gone")),
+        { template: 1 },
+        {
+          removed: { comments: 0, hidden: 1 },
+          splices: [
+            {
+              placeholder: hid("gone"),
+              original: "gone",
+              start: mixed.indexOf("gone"),
+            },
+          ],
+        },
+      ),
+    );
+    // An inert template's content renders nowhere, so the hidden host goes,
+    // and the spliced template is no longer there to report.
+    const inert = host(shown, "");
+    assert.deepEqual(
+      sanitizeHtml(inert),
+      reported(
+        hid(inert),
+        {},
+        {
+          removed: { comments: 0, hidden: 1 },
+          splices: [{ placeholder: hid(inert), original: inert, start: 0 }],
+        },
+      ),
+    );
+  });
+
+  // Only a root the parser attaches renders, inheriting from its host past the
+  // template it removes; a slot given light children drops its fallback.
+  const shown = (text) => `<span style="visibility:visible">${text}</span>`;
+  const root = (content, attrs = "") =>
+    `<template shadowrootmode="open"${attrs}>${content}</template>`;
+  for (const [name, html] of [
+    [
+      "the template's own style",
+      `<div style="visibility:hidden">${root("secret", ' style="visibility:visible"')}</div>`,
+    ],
+    [
+      "a host attachShadow refuses",
+      `<button style="visibility:hidden">${root(shown("secret"))}</button>`,
+    ],
+    [
+      "a reserved custom element name",
+      `<font-face style="visibility:hidden">${root(shown("secret"))}</font-face>`,
+    ],
+    [
+      "a non-ASCII custom element name",
+      `<x-h\u00f6st style="visibility:hidden">${root(shown("secret"))}</x-h\u00f6st>`,
+    ],
+    [
+      "a second root on one host",
+      `<div style="visibility:hidden">${root("")}${root(shown("secret"))}</div>`,
+    ],
+    [
+      "an assigned slot's fallback",
+      `<div style="visibility:hidden">${root(`<slot>${shown("secret")}</slot>`)}<!--c-->x</div>`,
+    ],
+  ])
+    it(`splices a hidden host whole past ${name}`, () =>
+      assert.deepEqual(
+        sanitizeHtml(html),
+        reported(
+          hid(html),
+          {},
+          {
+            removed: { comments: 0, hidden: 1 },
+            splices: [{ placeholder: hid(html), original: html, start: 0 }],
+          },
+        ),
+      ));
+  for (const [name, html] of [
+    [
+      "a custom element host",
+      `<x-host style="visibility:hidden">${root(shown("kept"))}</x-host>`,
+    ],
+    [
+      "an unassigned slot's fallback",
+      `<div style="visibility:hidden">${root(`<slot>${shown("kept")}</slot>`)}</div>`,
+    ],
+    [
+      "a flex host's blockified child",
+      `<div style="display:flex;text-indent:-999px">${root('<span style="text-indent:0">kept</span>')}</div>`,
+    ],
+  ])
+    it(`keeps a shadow override under ${name}`, () =>
+      assert.deepEqual(sanitizeHtml(html), reported(html, { template: 1 })));
+
+  // A splice never spans the template's tags, so light and shadow runs split.
+  it("splices a host's light and shadow runs apart", () => {
+    const html = `<div style="visibility:hidden">a${root(`b${shown("kept")}`)}c</div>`;
+    let text = html;
+    for (const run of ["a", "b", "c"])
+      text = text.replace(`>${run}<`, () => `>${hid(run)}<`);
+    // Each splice's start is its offset in the sanitized text.
+    const splice = (/** @type {string} */ run) => ({
+      placeholder: hid(run),
+      original: run,
+      start: text.indexOf(hid(run)),
+    });
+    assert.deepEqual(
+      sanitizeHtml(html),
+      reported(
+        text,
+        { template: 1 },
+        {
+          removed: { comments: 0, hidden: 3 },
+          splices: ["a", "b", "c"].map(splice),
+        },
+      ),
+    );
+  });
+
   it("treats an unknown shadowrootmode as an inert template", () =>
     assert.deepEqual(
       sanitizeHtml('<template shadowrootmode="opened"><p>x</p></template>'),
