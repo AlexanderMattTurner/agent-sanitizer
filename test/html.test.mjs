@@ -3093,6 +3093,48 @@ describe("an HTML template's content is scanned, and the template reported", () 
     assert.deepEqual(sanitizeHtml(inert), reported(inert, { template: 1 }));
   });
 
+  // A shadow child inherits its host's `visibility:hidden` and can override
+  // it, so only the shadow text left hidden is spliced, never the shown span.
+  it("judges an inherited hide through a declarative root's content", () => {
+    const shown = '<span style="visibility:visible">shown</span>';
+    const host = (content, mode = ' shadowrootmode="open"') =>
+      `<div style="visibility:hidden"><template${mode}>${content}</template></div>`;
+    const kept = host(shown);
+    assert.deepEqual(sanitizeHtml(kept), reported(kept, { template: 1 }));
+    const mixed = host(`${shown}gone`);
+    assert.deepEqual(
+      sanitizeHtml(mixed),
+      reported(
+        mixed.replace("gone", hid("gone")),
+        { template: 1 },
+        {
+          removed: { comments: 0, hidden: 1 },
+          splices: [
+            {
+              placeholder: hid("gone"),
+              original: "gone",
+              start: mixed.indexOf("gone"),
+            },
+          ],
+        },
+      ),
+    );
+    // An inert template's content renders nowhere, so the hidden host goes,
+    // and the spliced template is no longer there to report.
+    const inert = host(shown, "");
+    assert.deepEqual(
+      sanitizeHtml(inert),
+      reported(
+        hid(inert),
+        {},
+        {
+          removed: { comments: 0, hidden: 1 },
+          splices: [{ placeholder: hid(inert), original: inert, start: 0 }],
+        },
+      ),
+    );
+  });
+
   it("treats an unknown shadowrootmode as an inert template", () =>
     assert.deepEqual(
       sanitizeHtml('<template shadowrootmode="opened"><p>x</p></template>'),

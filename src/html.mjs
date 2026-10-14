@@ -1680,6 +1680,17 @@ function layoutContainer(parent) {
   }
 }
 
+// The nodes that render beneath `node`, and the parent they are visited under:
+// a declarative shadow root's content renders in the host its template sits in,
+// so that template contributes its content root's children. Only an HTML
+// `template` has `content` (see {@link isReportedElement}).
+/** @param {any} node @returns {[any[], any]} */
+function renderedChildren(node) {
+  return node.content !== undefined && !isInertTemplate(node)
+    ? [node.content.children, node.content]
+    : [node.children, node];
+}
+
 // True when `node` lays out as a non-replaced INLINE box. A flex/grid layout
 // container (see {@link layoutContainer}) blockifies it.
 /** @param {any} node @param {any} [parent] @returns {boolean} */
@@ -1795,7 +1806,8 @@ function regionVerdicts(root, kinds) {
   const stack = [];
   /** @param {any} node @param {RegionState} state */
   const pushChildren = (node, state) => {
-    for (const child of node.children) stack.push([child, node, state]);
+    const [children, parent] = renderedChildren(node);
+    for (const child of children) stack.push([child, parent, state]);
   };
   pushChildren(root, {
     kinds,
@@ -1842,7 +1854,7 @@ function regionVerdicts(root, kinds) {
     if (verdicts.has(node)) continue;
     let hidden = false;
     let shown = false;
-    for (const child of node.children) {
+    for (const child of renderedChildren(node)[0]) {
       const verdict = verdicts.get(child);
       if (verdict === "hidden") hidden = true;
       else if (verdict === "visible" || verdict === "mixed") shown = true;
@@ -1888,7 +1900,8 @@ function inheritedRegionSplice(root, kinds) {
       trailingComments = [];
       trailingElements = [];
     };
-    for (const child of node.children) {
+    const [children, parent] = renderedChildren(node);
+    for (const child of children) {
       const position = child.position;
       if (
         !position ||
@@ -1911,7 +1924,7 @@ function inheritedRegionSplice(root, kinds) {
         stack.push(child);
       } else if (verdict === "visible") {
         closeRun();
-        rescan.push([child, node]);
+        rescan.push([child, parent]);
       } else if (child.type === "comment") {
         trailingComments.push({
           start: position.start.offset,
@@ -1919,7 +1932,7 @@ function inheritedRegionSplice(root, kinds) {
           kind: "comment",
         });
       } else if (child.type === "element") {
-        trailingElements.push([child, node]);
+        trailingElements.push([child, parent]);
       }
     }
     closeRun();
