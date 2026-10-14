@@ -18,7 +18,7 @@
 import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { check } from "recheck";
 
@@ -66,7 +66,10 @@ function constructingFile(shipped) {
     if (!match) continue;
     const path = fileURLToPath(match[1] ?? match[2]);
     if (path === fileURLToPath(import.meta.url)) continue;
-    const rel = path.startsWith(ROOT) ? path.slice(ROOT.length) : null;
+    // The manifest is POSIX; a Windows stack path uses backslashes.
+    const rel = path.startsWith(ROOT)
+      ? path.slice(ROOT.length).split(sep).join("/")
+      : null;
     return rel !== null && shipped.has(rel) ? rel : null;
   }
   return null;
@@ -102,6 +105,13 @@ before(async () => {
       html: true,
       exfilScan: true,
     });
+    // The env-value matcher's source depends on the configured secret: one
+    // plain value, one carrying its own invisible (the shared-literal case the
+    // splice drops), one astral, and one made only of invisibles.
+    const { envValueRegex } =
+      await import("../claude-hooks/lib/secret-annotate.mjs");
+    for (const value of ["ab1", "a\u200Ba", "x\u{1F600}y", "\u200B\u200C"])
+      envValueRegex(value);
   } finally {
     globalThis.RegExp = Native;
   }
@@ -121,6 +131,12 @@ describe("regex safety (runtime recheck)", () => {
     assert.ok(
       [...compiled.values()].some((p) => p.source.startsWith("<\\/style")),
       "the sample never reached the raw-text close-tag construction",
+    );
+    assert.ok(
+      [...compiled.values()].some(
+        (p) => p.file === "claude-hooks/lib/secret-annotate.mjs",
+      ),
+      "the samples never reached envValueRegex",
     );
   });
 
