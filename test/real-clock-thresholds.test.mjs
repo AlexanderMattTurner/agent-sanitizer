@@ -1,21 +1,21 @@
 /**
- * No test outside the cost-gate harness passes or fails on a real-clock reading.
+ * A clock reading may decide a verdict only through the budget helper.
  *
- * A wall-clock threshold reports on the machine as much as on the code: it
+ * A tight timing threshold reports on the machine as much as on the code: it
  * passes locally and goes red on a loaded runner, and every such flake this
  * repo has had was "fixed" by widening one number until the next load spike.
  * The class is closed at the root instead. A test of a deadline, a budget or a
  * timer drives an injected clock (`now`, `cpuNow`, a stubbed `remainingMs`);
- * a test of COST goes through `test/helpers/cpu-timing.mjs`, whose estimator
- * fits a growth exponent from interleaved CPU samples and is the one module
- * here allowed to read a clock for a verdict.
+ * a test of COST calls `assertUnderBudget` in `test/helpers/budget.mjs` — one
+ * warm run against an absolute ceiling ten times or more above the linear
+ * cost — which is the one module here allowed to read a clock for a verdict.
  *
  * What counts as a threshold: an assertion whose argument compares a real-clock
  * reading — directly, through a variable or property assigned from one, or
  * through a helper returning one — against something that is not itself a
  * clock reading. A reading also arrives through an ACCESSOR imported from a
- * module that reads the clock for the test (`timer.wallMs()`, `measure(...)`,
- * `clockResolutionMs()`; see {@link CLOCK_ACCESSORS}), because the taint is
+ * module that reads the clock for the test (`timer.wallMs()`; see
+ * {@link CLOCK_ACCESSORS}), because the taint is
  * per-file and the clock itself is not in sight. Reading a clock is fine
  * everywhere else: a polling deadline (`while (Date.now() < deadline)`), a
  * busy-wait standing in for slow work, a timestamp for an mtime, or a real clock
@@ -35,13 +35,13 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "acorn";
 import { full, fullAncestor } from "acorn-walk";
-import * as cpuTiming from "./helpers/cpu-timing.mjs";
+import * as budget from "./helpers/budget.mjs";
 import { startHookTimer } from "../claude-hooks/lib/hook-timing.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
-/** The cost-gate harness: the one place a clock reading may decide a verdict. */
-const HARNESS = new Set(["test/helpers/cpu-timing.mjs"]);
+/** The budget helper: the one place a clock reading may decide a verdict. */
+const HARNESS = new Set(["test/helpers/budget.mjs"]);
 
 /**
  * Every real-clock read the scan recognizes, as `object.method` paths. The list
@@ -60,13 +60,14 @@ const CLOCK_READS = [
  * matched by the last segment of the callee (`timer.wallMs()` and `wallMs()`
  * alike). The scan is per-file, so a reading surfaced by an imported accessor
  * would otherwise be invisible and every threshold on it would survive.
- * - the harness's: `measure` returns `{cpu, wall}`, `growth` the fitted curve,
- *   `clockResolutionMs` the clock's granularity;
+ * - the harness's: none. `assertUnderBudget` decides inside the harness and
+ *   returns nothing, and a test below holds every other export to the same;
  * - the hook timer's readers, the four methods `startHookTimer()` returns. They
  *   are exact under an injected clock and a real reading otherwise, and a test
  *   cannot tell which from the call site, so any threshold on one is flagged.
  */
-const HARNESS_ACCESSORS = ["measure", "growth", "clockResolutionMs"];
+/** @type {string[]} */
+const HARNESS_ACCESSORS = [];
 const TIMER_ACCESSORS = ["wallMs", "cpuMs", "redactorMs", "hostMs"];
 const CLOCK_ACCESSORS = [...HARNESS_ACCESSORS, ...TIMER_ACCESSORS];
 
@@ -262,9 +263,10 @@ export function scan(source) {
 /**
  * The functions `source` exports that reach a real clock, through any chain of
  * the module's own functions, AND hand a value back. By call graph rather than
- * by data flow: a pure helper (`fitExponent`) shares parameter names with the
- * readings beside it and would be swept in, while an `assert*` that probes a
- * clock and returns nothing gives a test no reading to compare.
+ * by data flow: a pure helper (say, one fitting a curve to readings) shares
+ * parameter names with the readings beside it and would be swept in, while an
+ * `assert*` that probes a clock and returns nothing gives a test no reading to
+ * compare.
  * @param {string} source
  * @returns {string[]}
  */
@@ -343,7 +345,7 @@ describe("real-clock thresholds", () => {
     assert.deepEqual(
       offenders,
       [],
-      "drive an injected clock for a deadline/budget/timer test, or measure cost through test/helpers/cpu-timing.mjs",
+      "drive an injected clock for a deadline/budget/timer test, or bound cost with assertUnderBudget from test/helpers/budget.mjs",
     );
   });
 
@@ -358,14 +360,33 @@ describe("real-clock thresholds", () => {
     for (const file of HARNESS) {
       assert.ok(file in results, `${file} is exempt but no longer exists`);
       assert.ok(results[file].reads > 0, `${file} no longer reads a clock`);
+      // Positive marker for the invariant itself: the harness holds exactly
+      // one clock-against-ceiling verdict, and the scan sees it. A helper that
+      // stopped deciding — or a scan that stopped recognizing its idiom —
+      // would leave every budget in the tree checking nothing.
+      assert.equal(
+        results[file].thresholds.length,
+        1,
+        `${file} should decide in exactly one assertion: ${results[file].thresholds}`,
+      );
     }
+    // ...and that verdict is reached from the tests: a helper nothing calls
+    // exempts a file for no reason.
+    const callers = files.filter((file) =>
+      /\bassertUnderBudget\(/u.test(readFileSync(join(ROOT, file), "utf8")),
+    );
+    assert.ok(
+      callers.filter((file) => !HARNESS.has(file)).length >= 4,
+      `assertUnderBudget is called from only: ${callers}`,
+    );
   });
 
   it("every listed accessor exists in the module it names", () => {
     // A vocabulary entry for a function that was renamed away detects nothing
     // and says nothing, so each one is checked against the live module.
     for (const name of HARNESS_ACCESSORS)
-      assert.equal(typeof cpuTiming[name], "function", name);
+      assert.equal(typeof budget[name], "function", name);
+    assert.equal(typeof budget.assertUnderBudget, "function");
     const timer = startHookTimer(
       () => 0,
       () => 0,
@@ -387,6 +408,19 @@ describe("real-clock thresholds", () => {
       readFileSync(join(ROOT, [...HARNESS][0]), "utf8"),
     );
     assert.deepEqual(returning.sort(), [...HARNESS_ACCESSORS].sort());
+  });
+
+  it("the accessor scan finds an export that returns a reading, and only that", () => {
+    // Non-vacuity for the check above, which now expects the harness to
+    // return no reading at all: an empty answer must come from the source,
+    // not from a scan that finds nothing anywhere.
+    const source = [
+      "const cpuSince = (m) => process.cpuUsage(m).user;",
+      "export function measure(fn) { const m = process.cpuUsage(); fn(); return cpuSince(m); }",
+      "export function assertFast(fn) { const m = process.cpuUsage(); fn(); assert.ok(cpuSince(m) < 5); }",
+      "export const pure = (x) => x * 2;",
+    ].join("\n");
+    assert.deepEqual(clockReadingExports(source), ["measure"]);
   });
 
   // Each idiom the guard must catch, built around every clock read in the
@@ -424,24 +458,28 @@ describe("real-clock thresholds", () => {
       "const timer = startHookTimer(); await sleep(50);\nassert.ok(timer.wallMs() >= 45); assert.ok(timer.cpuMs() < 40);",
     "a timer reader's delta":
       "const before = timer.cpuMs(); run();\nassert.ok(timer.cpuMs() - before < 40);",
-    "a measure() field":
-      "const cost = await measure(input, fn);\nassert.ok(cost.cpu <= BUDGET);",
-    "a destructured measure() field":
-      "const { cpu } = await measure(input, fn);\nassert.ok(cpu <= BUDGET);",
-    "a measure() field through a local wrapper":
-      "const calibrate = async () => (await measure(() => TEXT, pass)).cpu;\nconst timing = {};\ntiming.unit = await calibrate();\nassert.ok(timing.unit > 0.1);",
-    "a measure() field stored under a computed key":
-      "const timing = { realistic: {} };\ntiming.realistic[entry] = (await measure(input, fn)).wall;\nassert.ok(timing.realistic[entry] <= CEILING);",
-    "an object returned with a stored reading":
-      "async function sample() { const best = { cpu: Infinity }; best.cpu = (await measure(i, f)).cpu; return best; }\nconst s = await sample();\nassert.ok(s.cpu < LIMIT);",
-    "the clock's resolution":
-      "assert.ok(clockResolutionMs() <= RESOLUTION_CEILING_MS);",
-    "a growth() exponent":
-      "const curve = await growth(i, f, sizes);\nassert.ok(curve.exponent < 1.35);",
   };
   for (const [idiom, source] of Object.entries(IMPORTED))
     it(`flags ${idiom}`, () => {
       assert.ok(scan(source).thresholds.length >= 1);
+    });
+
+  // The hops a reading takes to an assertion inside one file, each of which
+  // the taint has to follow — the shapes the cost gates themselves used before
+  // every clock verdict moved into the budget helper.
+  const HOPS = {
+    "a field through a local wrapper":
+      "const calibrate = async () => { const m = process.cpuUsage(); await pass(); return process.cpuUsage(m).user; };\nconst timing = {};\ntiming.unit = await calibrate();\nassert.ok(timing.unit > 0.1);",
+    "a reading stored under a computed key":
+      "const timing = { realistic: {} };\nconst s = performance.now(); run();\ntiming.realistic[entry] = performance.now() - s;\nassert.ok(timing.realistic[entry] <= CEILING);",
+    "an object returned with a stored reading":
+      "function sample() { const best = { cpu: Infinity }; best.cpu = performance.now(); return best; }\nconst s = sample();\nassert.ok(s.cpu < LIMIT);",
+    "a destructured field of a returned reading":
+      "function sample() { const s = performance.now(); run(); return { cpu: performance.now() - s }; }\nconst { cpu } = sample();\nassert.ok(cpu <= BUDGET);",
+  };
+  for (const [idiom, source] of Object.entries(HOPS))
+    it(`flags ${idiom}`, () => {
+      assert.equal(scan(source).thresholds.length, 1);
     });
 
   // The uses that decide how long a test waits, never whether it passes.
@@ -463,7 +501,7 @@ describe("real-clock thresholds", () => {
     "an exact equality on a driven timer":
       "const timer = startHookTimer(now, cpuNow); assert.equal(timer.wallMs(), 250);",
     "a harness verdict":
-      "const curve = await growth(i, f, sizes); assertLinear('x', curve);",
+      "await assertUnderBudget(t, 'x', 500, (attempt) => input(attempt), run);",
     "an untainted member beside a tainted one":
       "const timing = {}; timing.elapsed = Date.now() - Date.now(); timing.count = 3; assert.ok(timing.count < LIMIT); assert.ok(other.elapsed < LIMIT);",
   };

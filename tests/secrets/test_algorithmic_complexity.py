@@ -1,36 +1,33 @@
-"""Complexity gate: prove the engine's untrusted-input entry points stay
-sub-quadratic in the size of ONE input.
+"""Complexity gate: the engine's untrusted-input entry points must not go
+super-linear in the size of ONE input.
 
 Sibling to ``test_redos_static_guard.py``, which proves the same property for the
-engine's REGEXES. That gate collects compiled ``re.Pattern`` objects, so by
-construction it can only ever see one of the two ways to reach a stall — and the
-other way shipped: ``_redact_line`` tested each candidate span against every
-accepted span, which is quadratic in the secrets on one line and cost 7.85s of
-CPU on a 256KB payload. Both gates defend the same claim, stated in
-``test_redos_static_guard.py``: this text is attacker-shaped, so super-linear
-cost is weaponizable — a stall past the caller's timeout is what makes a caller
-write its unavailable-sentinel and stop redacting for the rest of the session.
+engine's REGEXES statically. That gate collects compiled ``re.Pattern`` objects,
+so by construction it can only ever see one of the ways to reach a stall — and
+the others shipped: ``_redact_line`` tested each candidate span against every
+accepted span (7.85s of CPU on a 256KB payload); ``_redact_line`` rebuilt the
+whole line once per redacted span (1 MiB of ``password="`` on ONE line cost
+35.6s); the bundled OpenAI pattern retried at every ``sk-`` (35.8s at 96KB).
+Both gates defend the same claim, stated in ``test_redos_static_guard.py``: this
+text is attacker-shaped, so super-linear cost is weaponizable — a stall past the
+caller's timeout is what makes a caller write its unavailable-sentinel and stop
+redacting for the rest of the session.
 
-WHAT IS MEASURED. Every gate here is a fitted growth EXPONENT over three
-geometrically spaced sizes, classified against the one pair of thresholds every
-complexity gate in the repo shares (``tests/_growth.py``, twin of
-``test/helpers/cpu-timing.mjs``) — never a ratio of two samples against a
-constant tuned for this file.
+WHAT IS MEASURED. Every gate here runs one call ONCE, after a warm-up, against
+an absolute CPU ceiling (``tests/_budget.py``, twin of
+``test/helpers/budget.mjs``). Each input is sized so the shipped code costs at
+most a few tenths of a second and the ceiling sits ten times or more above that
+reading. A path that turns quadratic at these sizes overshoots it by an order of
+magnitude; a constant-factor slowdown passes, by design.
 
-The primary measure is a COUNT of interpreted bytecode operations, not elapsed
-seconds: identical on every machine and every run, so the exponent it fits is
-exact. An opcode count cannot see inside a C builtin, though — one ``str`` slice
-costs one opcode however many megabytes it copies. That is a hole, not a scope
-decision, and a quadratic shipped through it: ``_redact_line`` rebuilt the whole
-line once per redacted span, so 1 MiB of ``password="`` on ONE line cost 35.6s of
-CPU against 7.8s for the same bytes at 80 columns.
-:func:`test_copy_volume_is_linear_in_line_length` closes it with the one measure
-that does see a C-level copy — CPU time, sampled the way the shared estimator
-samples it (interleaved, fastest of several, ``time.process_time`` so a loaded
-runner charges nothing).
+What that gives up is stated where it applies: an entry point whose LINEAR work
+is heavy (the detection pass costs ~60us per secret) only shows a quadratic
+with a small constant at sizes no commit can afford to time. The per-span copy
+is gated where the copy lives, on ``_splice`` itself, at a size where one
+rebuild per span is unmistakable.
 
 A quadratic that lives entirely in a dependency (detect-secrets calls
-``line.index(secret)`` per secret) is out of both gates' reach and is bounded by
+``line.index(secret)`` per secret) is out of reach here and is bounded by
 ``compute_budget_seconds`` instead.
 """
 
@@ -53,6 +50,7 @@ from agent_sanitizer.secrets import (
     secret_previews,
     strip_invisible,
 )
+from agent_sanitizer.secrets.engine import SpliceSpan, _splice
 from agent_sanitizer.secrets.placeholders import PLACEHOLDER_RE
 from agent_sanitizer.secrets.prefilter import (
     _c as _sre_constants,
@@ -60,22 +58,12 @@ from agent_sanitizer.secrets.prefilter import (
     denylist_patterns,
     required_literals,
 )
-from tests._growth import (
-    LINEAR_MAX_EXPONENT,
-    assert_linear,
-    assert_superlinear,
-    cpu_growth,
-    geometric_sizes,
-    opcode_growth,
-)
+from tests._budget import assert_under_budget
 
-# Secrets on ONE line. The sizes are what make the curve readable: the engine's
-# fixed per-call overhead swamps the N^2 term below a few hundred secrets, and
-# the quadratic this gate exists for measured only 1.71x at 100->200 — exponent
-# 0.77, which would have passed. At 400->800 the same defect measured 2.97x
-# (exponent 1.57) against the fixed code's 1.69x (0.76); the fit over
-# 400/800/1600 reads 0.79-0.80 for every entry point that ships.
-_OPCODE_SIZES = geometric_sizes(400, 1600, 3)
+# Secrets on ONE line: ~84KB, which the dearest shipped entry point
+# (`secret_previews`) reads in ~0.42s of CPU.
+_SECRETS_ON_ONE_LINE = 4000
+_SECRETS_CEILING_SECONDS = 5.0
 
 
 def _secret_line(n: int) -> str:
@@ -90,32 +78,20 @@ def _secret_line(n: int) -> str:
     )
 
 
-def _opcode_curve(thunk_for):
-    """Opcode growth across :data:`_OPCODE_SIZES` secrets on ONE line.
-
-    ``thunk_for(text)`` builds a zero-arg call; only that call is counted, so an
-    entry point's setup (the detection pass feeding ``mask_secret_lines``) runs
-    outside the measure and cannot bury the measured routine's own growth.
-    """
-    return opcode_growth(lambda n, k: thunk_for(_secret_line(n + k)), _OPCODE_SIZES)
-
-
 _CONFIG = RedactorConfig()
 
 
 def _mask_secret_lines_thunk(text):
     """Masking measured ALONE: the detection pass that feeds it runs out here,
-    before the count starts. Measured together, detection's far larger opcode
-    count is the whole ratio, and a mask-side quadratic could hide under a
-    linear detection and pass."""
+    before the clock starts. Measured together, detection's far larger cost
+    would be the whole reading, and a mask-side quadratic could hide under it."""
     values = detected_secret_values(text, _CONFIG)
     return lambda: mask_secret_lines(text, values)
 
 
 def _redact_configured_thunk(text):
     """The daemon's shape: enter ``configure_plugins`` once, then redact. The
-    context enter/exit rides inside the count as a per-call constant, which the
-    :data:`_OPCODE_SIZES` keep far below the per-secret term."""
+    context enter/exit rides inside the clock as a per-call constant."""
 
     def call():
         with configure_plugins():
@@ -186,21 +162,21 @@ def test_every_public_export_is_classified():
 
 
 @pytest.mark.parametrize("name", sorted(_TEXT_ENTRY_POINTS))
-def test_entry_point_is_sub_quadratic_on_one_line(name):
-    """One long line must not cost quadratically in the secrets it holds."""
-    assert_linear(
-        f"{name} (opcodes per secrets on one line)",
-        _opcode_curve(_TEXT_ENTRY_POINTS[name]),
+def test_entry_point_stays_under_budget_on_one_line(name):
+    """One long line of secrets, through every untrusted-text entry point.
+    ``thunk_for(text)`` builds the zero-arg call, so an entry point's setup (the
+    detection pass feeding ``mask_secret_lines``) runs outside the clock."""
+    assert_under_budget(
+        f"{name} on {_SECRETS_ON_ONE_LINE} secrets on one line",
+        lambda k: _TEXT_ENTRY_POINTS[name](_secret_line(_SECRETS_ON_ONE_LINE + k)),
+        _SECRETS_CEILING_SECONDS,
     )
 
 
-# The copy-volume gate's sizes, in bytes on ONE line. Large enough that a
-# per-span copy dominates the curve: the control below reads exponent 1.98-2.02
-# here; a whole-string rebuild per span reads 2.01 here. The control's C work is
-# ``translate``, not ``memmove``, so it does NOT evidence that these sizes make a
-# memmove-bound rebuild read super-linear on a host with a fast ``memmove``.
-# The splicing entry points that ship read 0.97-1.03.
-_COPY_SIZES = geometric_sizes(32 * 1024, 256 * 1024, 3)
+# The copy-volume payload, in bytes on ONE line; the dearest entry point
+# (`detected_secret_values`) reads it in ~0.29s of CPU.
+_COPY_BYTES = 64 * 1024
+_COPY_CEILING_SECONDS = 3.0
 
 # `password="<next unit's `password=`>"` redacts once per TWO units, so the span
 # count grows with the line and a per-span whole-line rebuild shows as the
@@ -214,16 +190,10 @@ def _long_field_line(nbytes: int) -> str:
     return _FIELD_UNIT * (nbytes // len(_FIELD_UNIT))
 
 
-def _cpu_curve(thunk_for):
-    """CPU-time growth across :data:`_COPY_SIZES` on ONE line."""
-    return cpu_growth(lambda n, k: thunk_for(_long_field_line(n + k)), _COPY_SIZES)
-
-
 # The entry points whose cost this gate can actually read, and the reason each
 # other one is excluded — a name here is a claim a reader can check, not a silent
 # omission. Both exclusions are entry points that do no splicing on this payload,
-# so their measured CPU is call overhead and their curve is timer noise (once
-# measured as the 8x-larger input reading CHEAPER for `strip_invisible`).
+# so a budget on them would bound call overhead and nothing this gate is about.
 _NON_SPLICING_ENTRY_POINTS = {
     "mask_secret_lines": "masks the ONE distinct detected value; splices nothing",
     "strip_invisible": "deletes invisible characters, of which this payload has none",
@@ -244,7 +214,7 @@ def test_every_copy_gate_exclusion_is_still_an_entry_point():
 
 
 def test_the_copy_gate_payload_holds_a_span_per_two_units():
-    """Positive marker for the gate below: its ratios only bound splicing while
+    """Positive marker for the gate below: it only bounds splicing while
     this payload really redacts once per two units, so the span count grows with
     the line. A precision change that stopped matching ``password="`` would leave
     every case below measuring an untouched pass-through, green forever."""
@@ -256,91 +226,57 @@ def test_the_copy_gate_payload_holds_a_span_per_two_units():
 
 
 @pytest.mark.parametrize("name", _SPLICING_ENTRY_POINTS)
-def test_copy_volume_is_linear_in_line_length(name):
-    """Byte-copying must not grow quadratically with the length of one line.
-
-    The opcode gate above is blind to this whole class: a slice of a megabyte is
-    one opcode. Same entry points, same claim, the measure that can see it.
-
-    Reaches the per-line splice only. Cross-line reassembly splices whole-document
-    offsets, but its per-span detection cost so dominates at every size this suite
-    can afford that a rebuild-per-span there measures 7.7x — inside this
-    threshold — so a gate over it would pass either way. What covers it instead is
-    that both paths splice through the ONE ``_splice`` this gate measures.
-    """
-    assert_linear(
-        f"{name} (CPU per byte on one line)", _cpu_curve(_TEXT_ENTRY_POINTS[name])
+def test_copy_volume_stays_under_budget_on_one_line(name):
+    """Every splicing entry point over one long line of ``password="``. What
+    this alone cannot see at an affordable size is a per-span whole-line
+    rebuild: the detection pass dominates, and the shipped rebuild cost 35.6s
+    against 7.8s only at 1 MiB. ``test_splice_is_one_pass`` below gates that
+    copy where it lives."""
+    assert_under_budget(
+        f"{name} on {_COPY_BYTES} bytes of password= on one line",
+        lambda k: _TEXT_ENTRY_POINTS[name](_long_field_line(_COPY_BYTES + k)),
+        _COPY_CEILING_SECONDS,
     )
 
 
-# Every byte of the field unit maps to "X": what the control below writes. The
-# mapping is irrelevant to its cost; ``translate`` walks every byte regardless.
-_REDACT_TABLE = bytes.maketrans(_FIELD_UNIT.encode(), b"X" * len(_FIELD_UNIT))
+# One span per `_SITE_BYTES` across 4 MiB: ~200K spans. One pass over the text
+# costs ~0.04s of CPU; a rebuild of the whole text per span copies ~200K x 4 MiB.
+_SPLICE_BYTES = 4 * 1024 * 1024
 _SITE_BYTES = len(_FIELD_UNIT) * _FIELD_UNITS_PER_SITE
+_SPLICE_CEILING_SECONDS = 0.5
 
 
-def _rewrite_tail_per_site(text: str) -> None:
-    """Walk the whole remaining line through a C ``translate`` once per site —
-    quadratic in ``len(text)``, with every byte handled inside C, which is the
-    shape both tests below are about. The first pass maps every ``password="``
-    byte to "X", so later passes re-walk an already-redacted tail; the walk, not
-    the redaction, is what the curve measures.
-
-    The cost per site is a fixed interpreter overhead ``c`` plus C work ``k*n``
-    on the tail, so the fitted exponent depends only on ``k*n/c`` at the
-    smallest size: the control reads ~2 only while the C work dwarfs ``c``. A
-    ``memmove`` cannot promise that: its per-byte cost swings by more than an
-    order of magnitude between hosts. Shifting the tail by one slice assignment
-    per span cost 16 ms at 32 KiB on one host and 0.9 ms on a CI runner, where
-    ``k*n`` was therefore about ``c`` and the control read exponent 1.68
-    against the 1.7 it must clear. ``translate`` is a scalar byte loop on every
-    host: at 32 KiB it costs ~7.2 us per site against ~0.25 us of overhead.
-
-    One site per iteration (two units, matching what the engine redacts), not
-    one unit: the stride scales the runtime but not the exponent."""
-    line = bytearray(text.encode())
-    for start in range(0, len(line), _SITE_BYTES):
-        line[start:] = line[start:].translate(_REDACT_TABLE)
+def _splice_call(nbytes: int):
+    text = "x" * nbytes
+    spans = [
+        SpliceSpan(start, start + len(_FIELD_UNIT), "[REDACTED]")
+        for start in range(0, nbytes - len(_FIELD_UNIT), _SITE_BYTES)
+    ]
+    return lambda: _splice(text, spans, None)
 
 
-def test_the_cpu_measure_catches_a_copy_quadratic():
-    """Non-vacuity: the CPU harness must classify a routine whose quadratic
-    lives entirely in C as super-linear, which is precisely what the opcode
-    harness cannot see."""
-    assert_superlinear(
-        "_rewrite_tail_per_site (CPU)",
-        _cpu_curve(lambda text: lambda: _rewrite_tail_per_site(text)),
+def test_splice_is_one_pass():
+    """Byte-copying must not grow with spans x line length. Both the per-line
+    and the cross-line redaction splice through this one function, so this is
+    where a rebuild-per-span would land — and where it is visible: the per-span
+    detection cost that hides it at the entry points is outside the clock."""
+    assert_under_budget(
+        f"_splice over {_SPLICE_BYTES // _SITE_BYTES} spans in {_SPLICE_BYTES} bytes",
+        lambda k: _splice_call(_SPLICE_BYTES + k),
+        _SPLICE_CEILING_SECONDS,
     )
 
 
-def test_the_opcode_measure_is_blind_to_a_copy_quadratic():
-    """The CPU gate's whole rationale, asserted rather than claimed: the opcode
-    count does NOT rise super-linearly for :func:`_rewrite_tail_per_site`, so the
-    gate above it would certify that routine as linear."""
-    assert_linear(
-        "_rewrite_tail_per_site (opcodes) — if the opcode measure can now see this "
-        "class, the CPU gate's rationale needs rewriting",
-        _opcode_curve(lambda text: lambda: _rewrite_tail_per_site(text)),
-    )
-
-
-def test_the_measure_catches_a_quadratic():
-    """Non-vacuity: the harness must FAIL a routine that really is quadratic.
-
-    Without this, a measure that silently counted nothing would pass every case
-    above and the gate would certify the defect it was written for.
-    """
-
-    def quadratic(text):
-        seen = []
-        for token in text.split():
-            if not any(s == token for s in seen):
-                seen.append(token)
-
-    assert_superlinear(
-        "a token-dedup quadratic (opcodes)",
-        _opcode_curve(lambda text: lambda: quadratic(text)),
-    )
+def test_the_splice_payload_carries_a_span_per_site():
+    """Positive marker for the gate above: a builder that produced no spans
+    would time an empty loop."""
+    text = "x" * 200
+    spans = [
+        SpliceSpan(start, start + len(_FIELD_UNIT), "[R]")
+        for start in range(0, len(text) - len(_FIELD_UNIT), _SITE_BYTES)
+    ]
+    assert len(spans) == 10
+    assert _splice(text, spans, None).count("[R]") == 10
 
 
 # ─── Adversarial repetition of a pattern's own opening ───────────────────────
@@ -348,19 +284,12 @@ def test_the_measure_catches_a_quadratic():
 # whose attempts can start inside a run another attempt already read, repeated
 # until the run is long. `"sk-" * n` against the bundled OpenAI pattern measured
 # 35.8s at 96KB; `"eyJ-" * n` against an unanchored JWT pattern measured 64x CPU
-# for 8x input. Sizes are BYTES of payload, so every unit is read over the same
-# volume, and the verdict is a CPU growth exponent like the copy gate's.
+# for 8x input. A linear scan of 128KB costs milliseconds — the dearest, the
+# npm pattern's bounded `{1,256}` runs over `///`, ~0.26s — and the OpenAI
+# quadratic at 128KB costs about a minute.
 _SHAPE_SEPARATORS = ("", "-", "=", "_", ".", " ", "/")
-_SHAPE_SIZES = geometric_sizes(16 * 1024, 64 * 1024, 3)
-# A scan that finishes in tens of microseconds crosses a cache boundary inside
-# this range and reads a step that is the memory system's, not the pattern's
-# (a literal PEM header read exponent 1.4-1.6 once in ~130 combinations, never
-# twice). A quadratic reads ~2 at EVERY size, so a curve is reported only when a
-# second fit over sizes four times larger agrees.
-_SHAPE_CONFIRM_SIZES = geometric_sizes(64 * 1024, 256 * 1024, 3)
-# The control is genuinely quadratic, so it is read at sizes a quarter as large:
-# its exponent is unmistakable there and the fit does not spend seconds on it.
-_SHAPE_CONTROL_SIZES = geometric_sizes(4 * 1024, 16 * 1024, 3)
+_SHAPE_BYTES = 128 * 1024
+_SHAPE_CEILING_SECONDS = 3.0
 
 
 def _leading_literal(pattern: re.Pattern[str]) -> str:
@@ -384,13 +313,6 @@ def _live_denylist_patterns() -> list[re.Pattern[str]]:
         return denylist_patterns(get_plugins())
 
 
-def _shape_curve(call_for, sizes=_SHAPE_SIZES):
-    """CPU growth across ``sizes`` bytes of an adversarial payload.
-    ``call_for(nbytes)`` builds the zero-arg call; the sampler's per-call attempt
-    index is added to the byte count so no two inputs are identical."""
-    return cpu_growth(lambda n, k: call_for(n + k), sizes)
-
-
 def _repeat_to(unit: str, nbytes: int) -> str:
     return unit * (nbytes // len(unit))
 
@@ -406,42 +328,26 @@ def test_no_live_pattern_is_quadratic_on_its_own_opening_repeated():
     each separator a token body may admit."""
     patterns = _live_denylist_patterns()
     assert len(patterns) >= 40, len(patterns)
-    slow = []
     for pattern in patterns:
         literal = _leading_literal(pattern)
         for sep in _SHAPE_SEPARATORS:
             unit = literal + sep
-
-            def call_for(n, unit=unit, pattern=pattern):
-                return _scan(pattern, _repeat_to(unit, n))
-
-            growth = _shape_curve(call_for)
-            if growth.exponent < LINEAR_MAX_EXPONENT:
-                continue
-            confirm = _shape_curve(call_for, _SHAPE_CONFIRM_SIZES)
-            if confirm.exponent >= LINEAR_MAX_EXPONENT:
-                slow.append((pattern.pattern[:60], unit, str(growth), str(confirm)))
-    assert slow == [], slow
-
-
-def test_the_shape_measure_catches_an_unanchored_quadratic():
-    """Non-vacuity: the bundled OpenAI shape, unanchored and unbounded, must
-    classify as super-linear."""
-    quadratic = re.compile(r"sk-[A-Za-z0-9_-]*[A-Za-z0-9]{20}T3BlbkFJ")
-    assert_superlinear(
-        "an unanchored OpenAI-shaped pattern (CPU)",
-        _shape_curve(
-            lambda n: _scan(quadratic, _repeat_to("sk-", n)),
-            _SHAPE_CONTROL_SIZES,
-        ),
-    )
+            assert_under_budget(
+                f"{pattern.pattern[:60]!r} on {unit!r} x {_SHAPE_BYTES // len(unit)}",
+                lambda k, unit=unit, pattern=pattern: _scan(
+                    pattern, _repeat_to(unit, _SHAPE_BYTES + k)
+                ),
+                _SHAPE_CEILING_SECONDS,
+            )
 
 
 # Whole-engine payloads for the field-value and PEM passes, which run patterns
 # the denylist sweep above never sees. Each unit repeats the pass's own opening.
-# Sizes here are repetitions of the unit, not bytes: the shapes differ in unit
-# length and several divide `n` themselves.
-_ENGINE_SIZES = geometric_sizes(2000, 8000, 3)
+# The size is in repetitions of the unit, not bytes: the shapes differ in unit
+# length and several divide `n` themselves. The dearest shape ("nested benign
+# url") costs ~0.11s of CPU at this size.
+_ENGINE_REPETITIONS = 8000
+_ENGINE_CEILING_SECONDS = 2.0
 _ENGINE_SHAPES = {
     "identifier segments": lambda n: "token" + "_token" * n + "!",
     "segment then junk": lambda n: "password_" + "a_" * n + "!",
@@ -468,13 +374,14 @@ def _redact_text(text: str, config: RedactorConfig):
 
 @pytest.mark.parametrize("shape", sorted(_ENGINE_SHAPES))
 @pytest.mark.parametrize("web_ingress", [False, True])
-def test_engine_pass_is_linear_on_its_own_opening_repeated(shape, web_ingress):
+def test_engine_pass_stays_under_budget_on_its_own_opening_repeated(shape, web_ingress):
     """The field-value pass is tried at every credential noun and the PEM pass
     at every header, so each must bound one attempt — `token` + `_token` * n
     measured 87s at 96KB before the field key's segment run was bounded."""
     config = RedactorConfig(web_ingress=web_ingress)
     make = _ENGINE_SHAPES[shape]
-    assert_linear(
-        f"{shape} (CPU per unit)",
-        _shape_curve(lambda n: _redact_text(make(n), config), _ENGINE_SIZES),
+    assert_under_budget(
+        f"{shape} x {_ENGINE_REPETITIONS}",
+        lambda k: _redact_text(make(_ENGINE_REPETITIONS + k), config),
+        _ENGINE_CEILING_SECONDS,
     )

@@ -131,9 +131,7 @@ const RUNNERS = [
   {
     match: (file) => file.endsWith(".test.mjs"),
     command: "node",
-    // The heap flags pin the young generation the cost gates measure on; they
-    // throw without them (PINNED_HEAP_FLAGS in test/helpers/cpu-timing.mjs).
-    leading: ["--test", "--min-semi-space-size=16", "--max-semi-space-size=16"],
+    leading: ["--test"],
     install: "install Node",
   },
   {

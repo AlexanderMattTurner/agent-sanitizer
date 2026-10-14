@@ -1020,38 +1020,44 @@ up to the constant factors a parse pays, and one sort where findings or splice
 ranges arrive in an order the caller does not promise (`foldConfusables`,
 `mergeRanges`). The bound that matters is that nothing is _quadratic_ — a sort
 of the findings in a 1 MB paste is milliseconds, a quadratic rescan of it is
-minutes — and quadratic is what the two gates below are calibrated to catch,
+minutes — and quadratic is what the two tiers below are built to catch,
 because neither can see what the other does.
 
-**Static — every pattern.** `tests/test_redos_js_static_guard.py` drives
-regexploit over an inventory that `scripts/extract-js-regexes.mjs` extracts by
-walking the TypeScript AST of every shipped `.mjs` (not by matching regex source
-with a regex), and fails on any pattern with super-linear backtracking. A
-`RegExp(…)` built at runtime must be statically resolvable or carry a written
-exemption, so a new dynamic pattern is a red build rather than a hole.
-`tests/secrets/test_redos_static_guard.py` is the twin over the Python engine,
-and `eslint-plugin-redos` reports the same class in the editor, before CI.
+**Deterministic — every pattern, no clock.** `tests/test_redos_js_static_guard.py`
+drives regexploit over an inventory that `scripts/extract-js-regexes.mjs`
+extracts by walking the TypeScript AST of every shipped `.mjs` (not by matching
+regex source with a regex), and fails on any pattern with super-linear
+backtracking. A `RegExp(…)` built at runtime must be statically resolvable or
+carry a written exemption, so a new dynamic pattern is a red build rather than a
+hole. `tests/secrets/test_redos_static_guard.py` is the twin over the Python
+engine. In `pnpm lint`, `eslint-plugin-redos` (recheck) and
+`eslint-plugin-regexp`'s `no-super-linear-backtracking` and
+`no-super-linear-move` read every shipped regex literal — the last of them
+reports the shape that carries no backtracking at all, an **unanchored**
+pattern retried at every start offset (`(?=.*[A-Z])(?=.*[0-9])` against a long
+value carrying neither class). `test/regex-recheck.test.mjs` hands every
+pattern a shipped module actually compiles at runtime to recheck. Every recheck
+verdict runs with its wall-clock incubation and attack timeouts off, so it
+rests on step counts alone and no machine's speed can change it.
 
-**Empirical — everything the static gates cannot see.** Two shapes of quadratic
-carry no backtracking at all, so no pattern analyzer will ever report them:
-
-- an **unanchored** pattern retried at every start offset, each attempt linear
-  and none of them backtracking — `(?=.*[A-Z])(?=.*[0-9])` against a long value
-  carrying neither class, or a `[^>]*$` tail rescanned from every `<`;
-- work that is not a pattern at all — a string rebuilt once per finding, a
-  prefix re-sliced inside a loop, a re-walk of an already-walked node.
-
-`test/algorithmic-complexity.test.mjs` runs an entry point over an adversarial
-input at four sizes spanning 8x and fits how its CPU cost grows — an exponent,
-classified against the one pair of thresholds every growth gate shares
-(`test/helpers/cpu-timing.mjs`, twin `tests/_growth.py`) — with a
-known-quadratic specimen as the control that proves the harness can still see
-one. Each case also asserts, at the size it measures, that
-the input still reaches the code the case is about — a length gate answering
-first is how such a case quietly degrades into timing nothing.
-`tests/secrets/test_algorithmic_complexity.py` is the twin over the Python
-engine. `test/hook-latency.test.mjs` covers the three blocking hook paths
-instead, in cost per calibration pass, with one wall-clock ceiling.
+**Budgets — everything that is not a pattern.** Work that is not a regex at
+all — a string rebuilt once per finding, a prefix re-sliced inside a loop, a
+re-walk of an already-walked node, a parser's own look-back — no pattern
+analyzer will ever report. `test/algorithmic-complexity.test.mjs` runs each
+entry point ONCE, after a warm-up, over an adversarial input sized so the
+linear implementation costs tens to hundreds of milliseconds, against an
+absolute CPU ceiling at least ten times that reading (`assertUnderBudget` in
+`test/helpers/budget.mjs`, twin `tests/_budget.py`). A quadratic at that size
+overshoots the ceiling by another order of magnitude, so no runner is slow or
+busy enough to blur the two; a constant-factor slowdown passes, by design. Each
+case also asserts, at the size it measures, that the input still reaches the
+code the case is about — a length gate answering first is how such a case
+quietly degrades into timing nothing. `tests/secrets/test_algorithmic_complexity.py`
+is the twin over the Python engine. `test/hook-latency.test.mjs` holds the
+three blocking hook paths to absolute ceilings per 256 KB call, read
+uninstrumented in CI. Every test verdict in the repo that reads a clock goes
+through that one helper (`test/real-clock-thresholds.test.mjs` and its Python
+twin enforce it).
 
 **Idioms new code is held to.** Each is the fix for a defect one of the gates
 caught:
