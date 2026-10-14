@@ -1,5 +1,6 @@
 import js from "@eslint/js";
 import redos from "eslint-plugin-redos";
+import regexp from "eslint-plugin-regexp";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
@@ -114,8 +115,27 @@ export default tseslint.config(
       "bin/**/*.mjs",
       "plugin/scripts/**/*.mjs",
     ],
-    plugins: { redos },
-    rules: { "redos/no-vulnerable": "error" },
+    plugins: { redos, regexp },
+    rules: {
+      // recheck's fuzz checker counts a wall-clock overrun during incubation or
+      // attack validation as a successful attack, so on a loaded machine a
+      // linear pattern can read "vulnerable" on one run and "safe" on the next.
+      // With both timeouts off the verdict rests on the step-count limits alone
+      // (`incubationLimit`, `attackLimit`; the PRNG seed is fixed by default),
+      // which no machine's speed moves. `timeout` still bounds a runaway
+      // analysis, which reports "unknown" rather than hanging the lint.
+      "redos/no-vulnerable": [
+        "error",
+        { timeout: 60_000, incubationTimeout: null, attackTimeout: null },
+      ],
+      // A second, independent analyzer over the same literals. These two rules
+      // decide from the pattern's structure alone — no timing, no fuzzing — and
+      // `no-super-linear-move` covers the shape recheck is not asked about: an
+      // UNANCHORED pattern retried at every start offset, each attempt linear,
+      // the whole scan quadratic.
+      "regexp/no-super-linear-backtracking": "error",
+      "regexp/no-super-linear-move": "error",
+    },
   },
   {
     // The one module allowed to call esbuild directly — it *is* the guard.

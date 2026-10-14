@@ -24,7 +24,7 @@ from detect_secrets.plugins.softlayer import SoftlayerDetector as _UpstreamSoftl
 from detect_secrets.settings import get_plugins
 from redactor_helpers import LEGITIMATE, SAMPLES, run_plain
 
-from tests._growth import assert_linear, cpu_growth, geometric_sizes
+from tests._budget import assert_under_budget
 
 _DETECTORS_JSON = D.DETECTORS_FILE
 _INLINE_DETECTORS = tuple(E._INLINE_PLUGINS)
@@ -789,12 +789,13 @@ def test_npm_detector_value_stops_at_whitespace_unlike_upstream():
 # quadratic (its leading `.+` restarts at every `//`); this pins the fix at the
 # regex level, cheaper than re-running the whole-corpus benchmark per commit.
 def test_npm_detector_denylist_is_linear_on_whitespace_free_input():
-    assert_linear(
-        "NpmDetector denylist on a whitespace-free line",
-        cpu_growth(
-            lambda n, k: lambda text="//" + "a" * (n + k): _NEW_NPM_RE.search(text),
-            geometric_sizes(25_000, 200_000),
-        ),
+    n = 2_000_000
+    assert_under_budget(
+        f"NpmDetector denylist on a {n}-byte whitespace-free line",
+        lambda k: lambda text="//" + "a" * (n + k): _NEW_NPM_RE.search(text),
+        # Measured at ~1ms; 0.5s is the floor every Python budget keeps, under
+        # which one collector pause could reach it.
+        0.5,
     )
 
 
@@ -880,19 +881,19 @@ def test_linear_detector_corpus_actually_exercises_it(secret_type):
 def test_linear_detector_is_linear_on_a_space_run(secret_type):
     """The defect itself: a run of spaces after a credential noun. Cubic means
     doubling the run costs 8x, so a 4000-space run is the shape that cost
-    seconds; every replacement must scan it linearly."""
+    seconds; every replacement must scan a far longer one linearly."""
     _upstream, replacement = _REPLACED_DETECTORS[secret_type]
+    n = 1_000_000
 
     def scan(text):
         for pattern in replacement.denylist:
             pattern.search(text)
 
-    assert_linear(
-        f"{secret_type} on a space run",
-        cpu_growth(
-            lambda n, k: lambda text="key" + " " * (n + k): scan(text),
-            geometric_sizes(500, 4000),
-        ),
+    assert_under_budget(
+        f"{secret_type} on a {n}-space run",
+        lambda k: lambda text="key" + " " * (n + k): scan(text),
+        # The dearest, IBM Cloud IAM, measured ~0.23s.
+        3.0,
     )
 
 
@@ -937,12 +938,12 @@ def test_redact_is_linear_on_a_repeated_sk_prefix(unit):
     token, so any line another detector sent to the full plugin scan cost
     seconds: a GitHub token beside 60KB of `sk-` took 9s in one redact()."""
     token = "ghp_Zx9qW7rT2pL5mN8bV3cX6zA1sD4fG7hJ2kLm "
-    assert_linear(
-        f"redact() on a run of {unit!r}",
-        cpu_growth(
-            lambda n, k: lambda text=token + unit * (n + k): run_plain(text),
-            geometric_sizes(1000, 8000),
-        ),
+    n = 32_000
+    assert_under_budget(
+        f"redact() on {n} repetitions of {unit!r}",
+        lambda k: lambda text=token + unit * (n + k): run_plain(text),
+        # The dearest, `sk-ant-`, measured ~0.29s.
+        3.0,
     )
 
 
@@ -950,12 +951,12 @@ def test_redact_is_linear_on_the_reported_redos_payload():
     """End-to-end for the whole engine on the audit's own repro: `"key" +
     " "*1200` measured 8.53s of CPU, and 400/800/1600 spaces measured
     0.54s/4.76s/40.1s — exponent 3.1, cubic."""
-    assert_linear(
-        "redact() on the ReDoS payload",
-        cpu_growth(
-            lambda n, k: lambda text="key" + " " * (n + k): run_plain(text),
-            geometric_sizes(150, 1200),
-        ),
+    n = 200_000
+    assert_under_budget(
+        f"redact() on the ReDoS payload with {n} spaces",
+        lambda k: lambda text="key" + " " * (n + k): run_plain(text),
+        # Measured at ~0.19s.
+        2.0,
     )
 
 

@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.66.0] - 2026-10-13
+
+### Changed
+- Plugin dist artifacts are now managed on a separate `plugin-dist` branch rather than committed to the main repository, reducing repository size.
+
+### Removed
+- `plugin/dist` directory is no longer committed to the repository; the marketplace now installs from the dedicated `plugin-dist` branch.
+
 ## [2.65.0] - 2026-10-13
 
 ### Added

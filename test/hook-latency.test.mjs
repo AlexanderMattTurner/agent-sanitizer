@@ -1,25 +1,31 @@
 /**
- * Latency gates for the hook paths a user waits on.
+ * Latency ceilings for the hook paths a user waits on.
  *
  * `classifyPrompt` runs inside the prompt-submit hook and BLOCKS submission;
  * `sanitizeText` runs inside the tool-output hook and blocks the result reaching
- * the model. Whatever either spends is dead wait. A regression there is
- * invisible from the inside — it reads as "the agent is slow" — and the
- * correctness suites are indifferent to it, which is how a per-code-point RegExp
- * scan sat in the carve analysis charging ~250 ms per megabyte.
+ * the model; `scanText` reads every instruction file before a session starts.
+ * Whatever any of them spends is dead wait. A regression there is invisible
+ * from the inside — it reads as "the agent is slow" — and the correctness
+ * suites are indifferent to it, which is how a per-code-point RegExp scan sat in
+ * the carve analysis charging ~250 ms per megabyte, and how the SessionStart
+ * scan once cost 30 seconds.
  *
- * Every budget is a RATIO against a calibration measured in this same process:
- * {@link calibrationPass} over a fixed 256 KB input, the cheapest full read of a
- * text anything here can do. Machine speed and the coverage instrumentation
- * scale both sides, so the ratios survive a slow or instrumented runner in a way
- * milliseconds do not — the calibration lives in this file, rather than reaching
- * for a native builtin, so it pays the same instrumentation tax as the code it
- * normalizes. A ratio does not cancel a BUSY machine, though, so every timed
- * block is charged in CPU time rather than wall clock (see `measure` in
- * {@link ./helpers/cpu-timing.mjs}); {@link REALISTIC_MS} is an absolute ceiling,
- * but is read off that same fastest-of-N CPU figure.
+ * Every gate is an ABSOLUTE ceiling in CPU milliseconds on one 256 KB call —
+ * larger than most pastes — read through `assertUnderBudget`
+ * (`test/helpers/budget.mjs`): one warm-up, one timed run. Each ceiling sits at
+ * least ten times above what the shipped code was measured at on the dearest
+ * shape it covers, so a loaded or slower runner does not reach it and a path
+ * gone super-linear overshoots it at once. A constant-factor slowdown inside
+ * that headroom passes: these ceilings promise the user an upper bound, not a
+ * benchmark.
+ *
+ * Uninstrumented only. c8 multiplies these paths' cost by up to ~7x, which is a
+ * fact about the instrumentation and not about the hook, so every gate here
+ * stands down under coverage — and `pnpm test` runs the whole suite under
+ * coverage. The uninstrumented step in `.github/workflows/node-tests.yaml`
+ * ("Run the hook latency gates uninstrumented") is what makes CI read them.
  */
-import { describe, before } from "node:test";
+import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { classifyPrompt } from "../src/prompt.mjs";
 import { sanitizeText } from "../src/output.mjs";
@@ -28,30 +34,13 @@ import {
   foldConfusables,
   selectFoldableFindings,
 } from "../src/confusables.mjs";
-import {
-  MUTATION_RUN,
-  assertCalibrated,
-  assertClockResolves,
-  assertDearerThan,
-  assertLinear,
-  assertWithinBudget,
-  assertWithinCeiling,
-  describeGrowth,
-  geometricSizes,
-  grow,
-  growth,
-  measure,
-  timed,
-} from "./helpers/cpu-timing.mjs";
-
-/** @typedef {import("./helpers/cpu-timing.mjs").Timing} Timing */
+import { assertUnderBudget, grow } from "./helpers/budget.mjs";
 
 const { claudeAdapter } = await import("agent-control-plane-core/claude");
 const { judgeSanitizeUserPrompt } =
   await import("../claude-hooks/sanitize-user-prompt.mjs");
 
 const KB = 1024;
-const SMALL = 32 * KB;
 const LARGE = 256 * KB;
 const cp = (n) => String.fromCodePoint(n);
 
@@ -77,40 +66,23 @@ const SHAPES = {
 };
 
 /**
- * The ceiling, in calibration units, for a shape an entry has no per-code-point
- * work to do on: past a dozen passes' worth of work, such an input is being
- * analyzed for something it does not contain. Each entry's `cheap` list names
- * its own such shapes, because the entries read different things — a soft hyphen
- * every other character is real work for the prompt classifier's scatter count
- * and almost none for the strip the output path runs.
+ * The blocking entry points, each with the shapes it answers from bulk passes
+ * (`cheap`) and three ceilings, in CPU ms per 256 KB call: `cheapMs` for those
+ * shapes, `heavyMs` for every other shape (per-code-point or per-node work),
+ * and `markupMs` for the `html-prose` shape, which costs an order of magnitude
+ * more than the rest (the HTML parse).
  *
- * This and every `budget` entry below is 1.3x the DEAREST reading across four
- * environments: standalone, under the parallel coverage run, standalone against
- * four workers of competing CPU and allocation load, and the GitHub runner. The
- * instrumented run reads LOWER on every heavy cell, since c8 charges this file's
- * calibration harder than the code under test, so the ceilings come from the
- * uninstrumented ones. Within one machine no case reads more than 1.12x its own
- * median, so 1.3x covers run-to-run variation and nothing more.
- *
- * Between machines the same ratio moves further: `sanitizeText/payload-scattered`
- * costs 9.9ms of CPU on the runner against 6.5ms here for the same ~0.89ms unit,
- * so the ceiling has to be the dearest microarchitecture's, not the developer's.
- * The calibration loop is pure ALU while the cases lean on the regex engine and
- * memory, so a runner whose cores are fast for their memory reads every heavy
- * case dearer: one calibrating at 0.475ms read `scanText/vs-dense` at 18.8 units
- * for 9.1ms of CPU, where a 0.725ms runner read 13.1 units for 9.3ms, and its
- * readings set the heavy `sanitizeText` and `scanText` ceilings.
- * Every ceiling still sits under twice its case's median on the environment that
- * set it, which is the standard: a doubling is red, and anything looser is a
- * ceiling nothing is under. The per-case diagnostic each gate emits is what makes
- * a runner's numbers readable, so this table can be re-derived from CI.
- */
-const CHEAP_BUDGET = 15;
-
-/**
- * The blocking entry points, each with the shapes it must answer cheaply.
+ * Each ceiling is at least ten times the dearest shape it covers, measured
+ * uninstrumented on a 4-core development machine (the readings are in the PR
+ * that introduced these ceilings, and every run prints its own through
+ * `t.diagnostic`), and never under 100 ms, where a single collector pause
+ * could reach it. One ceiling per class of shape rather than one per cell, so
+ * the cheaper cells in a class carry far more than ten times headroom: a
+ * constant-factor slowdown passes, a change of complexity class at 256 KB does
+ * not.
  * @type {Record<string, { run: (text: string, shape: string) => unknown,
- *   cheap: string[], budget: Record<string, number> }>}
+ *   cheap: string[], cheapMs: number, heavyMs: number,
+ *   markupMs?: number }>}
  */
 const ENTRIES = {
   classifyPrompt: {
@@ -118,14 +90,9 @@ const ENTRIES = {
     // Markup is not a prompt-gate concern: the classifier reads invisibles and
     // ANSI, and HTML-shaped text carries neither.
     cheap: ["ascii-prose", "cjk-prose", "emoji-prose", "html-prose"],
-    budget: {
-      "joiner-dense": 31,
-      "vs-dense": 34,
-      "payload-run": 84,
-      "payload-scattered": 29,
-      "emoji-zwj": 31,
-      "run-dense": 48,
-    },
+    // Dearest: cheap 2.5 ms (cjk-prose), heavy 78 ms (vs-dense).
+    cheapMs: 100,
+    heavyMs: 1000,
   },
   sanitizeText: {
     // Layers 2 and 3 run on the HTML-shaped input only, matching the output
@@ -140,43 +107,21 @@ const ENTRIES = {
     // A scattered soft hyphen carries no joiner and no variation selector, so
     // the carve analysis finds nothing to preserve and the strip is a bulk pass.
     cheap: ["ascii-prose", "cjk-prose", "emoji-prose", "payload-scattered"],
-    budget: {
-      // The dearest cell in the table, and the one the ratio is doing the
-      // least for: it is parse5 building a 256 KB fragment, so it moves with
-      // the parser rather than with anything here.
-      "html-prose": 250,
-      "joiner-dense": 45,
-      "vs-dense": 48,
-      "payload-run": 69,
-      "emoji-zwj": 38,
-      "run-dense": 35,
-    },
+    // Dearest: cheap 8.6 ms (payload-scattered), heavy 62 ms (joiner-dense).
+    cheapMs: 100,
+    heavyMs: 1000,
+    // parse5 building a 256 KB fragment, ~460 ms: the dearest cell by far, and
+    // it moves with the parser rather than with anything here.
+    markupMs: 5000,
   },
   scanText: {
-    // The SessionStart scan reads every instruction file before the session can
-    // start, so its cost is startup the user watches — the one hook path where
-    // a regression has already cost 30 seconds once.
     run: (text) => scanText(text),
     cheap: ["ascii-prose", "cjk-prose", "emoji-prose", "html-prose"],
-    budget: {
-      "joiner-dense": 22,
-      "vs-dense": 25,
-      // One 256 KB run decodes as a single payload, so this case is dominated by
-      // one large allocation and swings with the collector — the widest budget
-      // here buys tolerance for that rather than for a slower machine.
-      "payload-run": 84,
-      "payload-scattered": 21,
-      "emoji-zwj": 21,
-      "run-dense": 43,
-    },
+    // Dearest: cheap 3.7 ms (cjk-prose), heavy 36 ms (payload-run).
+    cheapMs: 100,
+    heavyMs: 500,
   },
 };
-
-// The sizes every scaling gate here is fitted over, 32 KB to 256 KB. Growth
-// past linear in the input length is the shape of blow-up that turns a tolerable
-// paste into a hang; it is classified by the exponent the shared estimator fits
-// (`growth` in ./helpers/cpu-timing.mjs), not by a ratio tuned for this file.
-const SCALING_SIZES = geometricSizes(SMALL, LARGE);
 
 /**
  * The confusable fold, which the PreToolUse hook runs over a tool call's path and
@@ -190,30 +135,15 @@ const SCALING_SIZES = geometricSizes(SMALL, LARGE);
  */
 const FOLD_GLYPH = "\u0430";
 const foldText = (n) => grow(FOLD_GLYPH + "bcdefghijklmn ", n);
-const FOLD_BUDGET = 16;
+/** Measured at ~21 ms. */
+const FOLD_CEILING_MS = 500;
 
 /**
- * The one gate that promises a NUMBER rather than a ratio.
- *
- * Every budget above is machine-relative on purpose, and a table of ratios can
- * stay green while each hook takes a second, so the thing a user actually
- * notices \u2014 the wait before a session starts, the wait before a prompt goes \u2014
- * needs a ceiling in milliseconds. It is read as the FASTEST of several runs in
- * CPU time, not as one wall-clock reading: the hook computes synchronously, so
- * its CPU is the time it takes on an idle machine, and a wall-clock ceiling
- * passed locally and went red on a loaded runner without the code changing. The
- * input is ordinary text at 256 KB, larger than most pastes; the adversarial shapes keep their ratio
- * budgets, because a ceiling wide enough for 256 KB of nothing but zero-width
- * space on a slow runner would not be a guarantee about anything.
- *
- * c8 multiplies the cost by roughly seven here, which is a fact about the
- * instrumentation and not about the hook, so this half stands down under
- * coverage \u2014 and `pnpm test` runs the whole suite under coverage. The
- * uninstrumented step in `.github/workflows/node-tests.yaml` ("Run the hook
- * latency gates uninstrumented") is what makes CI read it; without that step
- * this gate would be local-only.
+ * Ordinary text at 256 KB, through each entry's everyday path. The adversarial
+ * shapes above carry their own ceilings; this is the number a user notices on
+ * a plain paste or a plain tool result. The dearest entry reads ~6 ms.
  */
-const REALISTIC_MS = 40;
+const REALISTIC_MS = 100;
 const REALISTIC_SIZE = 256 * KB;
 const REALISTIC_TEXT = grow(
   "The quick brown fox jumps over the lazy dog. " +
@@ -231,28 +161,6 @@ function foldFindings(text) {
   return findings;
 }
 
-const CALIBRATION_TEXT = SHAPES["ascii-prose"](LARGE);
-
-/**
- * One pass over the input, a code point at a time — the unit every budget is
- * quoted in. Deliberately trivial: it must not get faster or slower for any
- * reason except the machine it runs on.
- *
- * Indexing rather than iterating is what keeps that promise. `for (const ch of
- * text)` reads the same code points but materializes a string for each one, so
- * its cost tracks the young generation's size — which the rest of the process
- * sets, not the machine. This loop allocates nothing.
- */
-function calibrationPass(text) {
-  let seen = 0;
-  for (let i = 0; i < text.length;) {
-    const point = text.codePointAt(i);
-    seen += point;
-    i += point > 0xffff ? 2 : 1;
-  }
-  return seen;
-}
-
 /**
  * The document a shape's `attempt`-th timed call reads: `size` units, told
  * apart from every other attempt's by a visible number at the end.
@@ -267,33 +175,13 @@ function calibrationPass(text) {
  * then exactly the next attempt's document. The carve remembers the last text
  * it analysed, the composition's second pass is what carved the stripped text,
  * and so every call after the first was timed as a memo hit: sanitizeText read
- * 2.4 units on a 256 KB page of emoji ZWJ sequences that costs ~20 cold.
+ * an eighth of the cold cost on a 256 KB page of emoji ZWJ sequences.
  * @param {string} shape @param {number} size @param {number} attempt
  * @returns {string}
  */
 function attemptDoc(shape, size, attempt) {
   const tail = ` ${attempt}`;
   return SHAPES[shape](size - tail.length) + tail;
-}
-
-/** The unit, in CPU ms per pass. */
-const calibrate = async () =>
-  (await measure(() => CALIBRATION_TEXT, calibrationPass)).cpu;
-
-/**
- * `fn`'s CPU cost in calibration units, calibrating on BOTH sides of the
- * measurement and taking the larger unit. The test runner runs files in
- * parallel, so the machine's clock speed and cache pressure drift during a run;
- * a single calibration taken up front can be read against a case measured in
- * quite different conditions. Bracketing the measurement keeps the two
- * comparable, and taking the larger unit resolves a drift in the direction that
- * does not manufacture a failure.
- * @returns {Promise<{cost: Timing, units: number}>}
- */
-async function unitsFor(input, fn) {
-  const opening = await calibrate();
-  const cost = await measure(input, fn);
-  return { cost, units: cost.cpu / Math.max(opening, await calibrate()) };
 }
 
 /** Every entry x shape pair the gates below speak about. */
@@ -306,202 +194,117 @@ const CASES = Object.keys(ENTRIES).flatMap((entry) =>
 );
 
 /**
- * Every figure here is CPU ms.
- * @typedef {import("./helpers/cpu-timing.mjs").Growth} Growth
- * @type {{unit: number, large: Record<string, number>,
- *   growth: Record<string, Growth>,
- *   units: Record<string, number>,
- *   realistic: Record<string, number>,
- *   fold: number, foldGrowth: Growth | null, foldUnits: number,
- *   foldChanged: boolean}} */
-const timing = {
-  unit: 0,
-  large: {},
-  growth: {},
-  units: {},
-  realistic: {},
-  fold: 0,
-  foldGrowth: null,
-  foldUnits: 0,
-  foldChanged: false,
-};
-
-// The clock check runs here rather than in a test body: every measurement below
-// is downstream of it.
-before(async () => {
-  if (MUTATION_RUN) return;
-  assertClockResolves("the calibration pass is");
-  timing.unit = await calibrate();
-  for (const { entry, shape, name } of CASES) {
-    const { run } = ENTRIES[entry];
-    const measured = await unitsFor(
-      (attempt) => attemptDoc(shape, LARGE, attempt),
-      (text) => run(text, shape),
-    );
-    timing.large[name] = measured.cost.cpu;
-    timing.units[name] = measured.units;
-    timing.growth[name] = await growth(
-      (size, attempt) => attemptDoc(shape, size, attempt),
-      (text) => run(text, shape),
-      SCALING_SIZES,
-    );
-  }
-  for (const [entry, { run }] of Object.entries(ENTRIES))
-    // Not "html-prose", so `sanitizeText` takes the Layer-1 path the majority of
-    // tool results take rather than the markup path only web ingress reaches.
-    timing.realistic[entry] = (
-      await measure(
-        (attempt) => REALISTIC_TEXT.slice(0, REALISTIC_TEXT.length - attempt),
-        (text) => run(text, "realistic-prose"),
-      )
-    ).cpu;
-  // Built per input: enumerating the offsets is the scanner's job, not the
-  // fold's, and timing it here would charge this gate for the test's own loop.
-  const foldInput = (/** @type {number} */ size) => {
-    const text = foldText(size);
-    return { text, findings: foldFindings(text) };
-  };
-  const fold = (/** @type {{text: string, findings: any[]}} */ input) =>
-    foldConfusables(
-      input.text,
-      selectFoldableFindings(input.text, input.findings),
-    );
-  // The fold takes no parse and holds no memo, so every run may share one
-  // input; the offsets `findings` carries are only valid for this one.
-  const large = foldInput(LARGE);
-  const measured = await unitsFor(() => large, fold);
-  timing.fold = measured.cost.cpu;
-  timing.foldUnits = measured.units;
-  timing.foldChanged = fold(large) !== large.text;
-  timing.foldGrowth = await growth(
-    (size, attempt) => foldInput(size - attempt),
-    fold,
-    SCALING_SIZES,
-  );
-});
-
-describe("hook-path latency", () => {
-  timed("the calibration is a measurement, not timer noise", () => {
-    // Every ratio below divides by this. `process.cpuUsage` accounts in whole
-    // microseconds, so a pass under a tenth of a millisecond is quantized to
-    // within a percent of itself and the ratios stop meaning anything — say so
-    // loudly rather than passing on a division by noise.
-    assertCalibrated(timing.unit);
+ * An `it` whose body is a latency ceiling, standing down under c8 (see the
+ * header). `assertUnderBudget` stands down under Stryker on its own.
+ * @param {string} name
+ * @param {(t: import("node:test").TestContext) => Promise<void>} fn
+ */
+const latency = (name, fn) =>
+  it(name, async (t) => {
+    if (process.env.NODE_V8_COVERAGE) {
+      t.skip(
+        "c8 multiplies the cost several-fold; the uninstrumented CI step reads this gate",
+      );
+      return;
+    }
+    await fn(t);
   });
 
+/** The fold's input at `size` code units: the text and every glyph offset. */
+const foldInput = (/** @type {number} */ size) => {
+  const text = foldText(size);
+  return { text, findings: foldFindings(text) };
+};
+const fold = (/** @type {{text: string, findings: any[]}} */ input) =>
+  foldConfusables(
+    input.text,
+    selectFoldableFindings(input.text, input.findings),
+  );
+
+describe("hook-path latency", () => {
   for (const { entry, shape, name } of CASES)
-    timed(`${name}: 256 KB stays inside its budget`, (t) => {
-      const { cheap, budget: heavy } = ENTRIES[entry];
-      // `cheap` is the only declaration of which shapes an entry answers
-      // cheaply; a shape in neither list yields undefined and fails loud.
-      const budget = cheap.includes(shape) ? CHEAP_BUDGET : heavy[shape];
-      // Emitted on the green path too: the table above is derived from the
-      // dearest reading across machines, and a passing run is the only place a
-      // machine this file has never been measured on reports its numbers.
-      t.diagnostic(
-        `${name}: ${timing.units[name].toFixed(1)}/${budget} units (${timing.large[name].toFixed(1)}ms CPU, unit ${timing.unit.toFixed(3)}ms)`,
+    latency(`${name}: 256 KB stays under its ceiling`, async (t) => {
+      const { run, cheap, cheapMs, heavyMs, markupMs } = ENTRIES[entry];
+      const ceiling = cheap.includes(shape)
+        ? cheapMs
+        : shape === "html-prose"
+          ? markupMs
+          : heavyMs;
+      await assertUnderBudget(
+        t,
+        name,
+        ceiling,
+        (attempt) => attemptDoc(shape, LARGE, attempt),
+        (text) => run(text, shape),
       );
-      assertWithinBudget(name, timing.units[name], budget, timing.large[name]);
     });
 
-  for (const { name } of CASES)
-    timed(`${name}: cost grows with input length, not faster`, (t) => {
-      t.diagnostic(`${name}: ${describeGrowth(timing.growth[name])}`);
-      assertLinear(name, timing.growth[name]);
-    });
+  it("the realistic input is the size the ceilings promise", () => {
+    // Vacuity guard: a ceiling in milliseconds is trivially met by a shorter
+    // input, and REALISTIC_TEXT is built by slicing a repeated unit, so its
+    // length is worth asserting rather than assuming.
+    assert.equal(REALISTIC_TEXT.length, REALISTIC_SIZE);
+  });
 
-  for (const entry of Object.keys(ENTRIES))
-    timed(`${entry}: the shapes really do split into cheap and heavy`, () => {
-      // A positive control on the budget table: if every shape were answered by
-      // the bulk regex passes, the heavy budgets would be gating nothing and
-      // could be tightened to CHEAP_BUDGET. This fails when a shape stops
-      // driving the arm it was written for.
-      const { cheap } = ENTRIES[entry];
-      const dearest = Math.max(
-        ...cheap.map((shape) => timing.large[`${entry}/${shape}`]),
-      );
-      for (const shape of Object.keys(SHAPES).filter((s) => !cheap.includes(s)))
-        assertDearerThan(
-          `${entry}/${shape}`,
-          timing.large[`${entry}/${shape}`],
-          dearest,
-          "it is not exercising the path it was written for",
-        );
-    });
-
-  for (const entry of Object.keys(ENTRIES))
-    timed(
+  for (const [entry, { run }] of Object.entries(ENTRIES))
+    latency(
       `${entry}: 256 KB of ordinary text is answered in under ${REALISTIC_MS}ms`,
-      (t) => {
-        if (process.env.NODE_V8_COVERAGE) {
-          t.skip(
-            "c8 multiplies the cost several-fold; the uninstrumented CI step reads this gate",
-          );
-          return;
-        }
-        // Vacuity guard: a ceiling in milliseconds is trivially met by a shorter
-        // input, and REALISTIC_TEXT is built by slicing a repeated unit, so its
-        // length is worth asserting rather than assuming.
-        assert.equal(REALISTIC_TEXT.length, REALISTIC_SIZE);
-        assertWithinCeiling(
+      async (t) => {
+        // Not "html-prose", so `sanitizeText` takes the Layer-1 path the
+        // majority of tool results take rather than the markup path only web
+        // ingress reaches.
+        await assertUnderBudget(
+          t,
           `${entry} on 256 KB of ordinary text`,
-          timing.realistic[entry],
           REALISTIC_MS,
+          (attempt) => REALISTIC_TEXT.slice(0, REALISTIC_TEXT.length - attempt),
+          (text) => run(text, "realistic-prose"),
         );
       },
     );
 
-  timed(
-    "the hook entry carries the same budget as the classifier it wraps",
-    async () => {
+  latency(
+    "the hook entry stays under the ceiling of the classifier it wraps",
+    async (t) => {
       // The gate the user actually waits on is the hook, not the library
       // function. Judging adds only constant work, so a clean paste through
-      // judgeSanitizeUserPrompt must stay inside the same clean budget — this is
-      // what fails if the cost ever moves into the hook's own wrapper.
-      const prompt = SHAPES["ascii-prose"](LARGE);
-      const event = claudeAdapter.parse({
-        hook_event_name: "UserPromptSubmit",
-        prompt,
-      });
-      const { cost, units } = await unitsFor(
-        () => prompt,
-        () => judgeSanitizeUserPrompt(event),
-      );
-      assertWithinBudget(
+      // judgeSanitizeUserPrompt must stay inside the classifier's own ceiling
+      // for clean text — this is what fails if the cost ever moves into the
+      // hook's own wrapper.
+      await assertUnderBudget(
+        t,
         "the hook judging a clean 256 KB prompt",
-        units,
-        CHEAP_BUDGET,
-        cost.cpu,
+        ENTRIES.classifyPrompt.cheapMs,
+        (attempt) =>
+          claudeAdapter.parse({
+            hook_event_name: "UserPromptSubmit",
+            prompt: attemptDoc("ascii-prose", LARGE, attempt),
+          }),
+        (event) => judgeSanitizeUserPrompt(event),
       );
     },
   );
 
-  timed(
-    "foldConfusables: a glyph-stuffed field stays inside its budget",
-    () => {
-      // The positive control comes first: a fold that matched nothing would time
-      // an empty loop and pass this budget however slow the real fold got.
-      assert.ok(
-        timing.foldChanged,
-        "the fold changed nothing — the gate is timing a no-op, not the fold",
-      );
-      assertWithinBudget(
+  it("the fold input really drives the fold", () => {
+    // A fold that matched nothing would time an empty loop and pass any
+    // ceiling however slow the real fold got.
+    const input = foldInput(LARGE);
+    assert.notEqual(fold(input), input.text);
+  });
+
+  latency(
+    "foldConfusables: a glyph-stuffed field stays under its ceiling",
+    async (t) => {
+      // Built per attempt: enumerating the offsets is the scanner's job, not
+      // the fold's, and building them outside the timed run keeps this gate
+      // from charging the test's own loop.
+      await assertUnderBudget(
+        t,
         "folding 256 KB of look-alikes",
-        timing.foldUnits,
-        FOLD_BUDGET,
-        timing.fold,
+        FOLD_CEILING_MS,
+        (attempt) => foldInput(LARGE - attempt),
+        fold,
       );
-    },
-  );
-
-  timed(
-    "foldConfusables: cost grows with the field length, not faster",
-    (t) => {
-      const curve = /** @type {import("./helpers/cpu-timing.mjs").Growth} */ (
-        timing.foldGrowth
-      );
-      t.diagnostic(`foldConfusables: ${describeGrowth(curve)}`);
-      assertLinear("foldConfusables", curve);
     },
   );
 });

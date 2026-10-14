@@ -91,16 +91,11 @@ jobs:
       - name: Run plugin tests
         run: node --test plugin/test/*.test.mjs
 
-      # `pnpm test` runs this suite under c8, and c8 multiplies wall clock
-      # several-fold — so the one gate that promises the hooks answer a
-      # realistic 256 KB input in a bounded number of milliseconds stands down
-      # there and would be checked nowhere. Uninstrumented it is the only
-      # latency assertion that speaks in wall-clock milliseconds rather than
-      # ratios of CPU time; the ratio gates simply pass twice. The heap flags pin
-      # the young generation every cost gate measures on, and the gates throw
-      # without them (PINNED_HEAP_FLAGS in test/helpers/cpu-timing.mjs).
+      # `pnpm test` runs this suite under c8, which multiplies these paths'
+      # cost up to ~7x, so every latency gate stands down there and would be
+      # checked nowhere without this uninstrumented run.
       - name: Run the hook latency gates uninstrumented
-        run: node --test --min-semi-space-size=16 --max-semi-space-size=16 test/hook-latency.test.mjs
+        run: node --test test/hook-latency.test.mjs
 
       # claude-hooks/ and bin/ DO carry a coverage floor now — a separate, lower
       # ratchet from src/'s 100% (see `SCOPES` in scripts/coverage.mjs), applied

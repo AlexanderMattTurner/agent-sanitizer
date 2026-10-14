@@ -1,36 +1,30 @@
 /**
  * The empirical half of the linear-time guarantee (see THREAT-MODEL.md).
  *
- * The static gates — `tests/test_redos_js_static_guard.py` over every shipped
- * JS pattern, and its Python twin — prove no regex here backtracks
- * super-linearly WITHIN one match attempt. They are structurally blind to two
- * other ways this code can go quadratic, and both have shipped:
+ * The static gates — `redos/no-vulnerable` and `regexp/no-super-linear-*` in
+ * `eslint.config.mjs`, `test/regex-recheck.test.mjs` over every pattern a
+ * shipped module compiles, `tests/test_redos_js_static_guard.py` and its Python
+ * twin — decide from the pattern alone that no regex here backtracks
+ * super-linearly. They are blind to work that is not a regex at all: a string
+ * rebuilt once per finding, a prefix re-sliced inside a loop, a re-walk of an
+ * already-walked tree, a parser's own look-back. All of those have shipped, and
+ * the correctness suites are indifferent to cost, so the only thing that
+ * catches them is measuring.
  *
- *   - an UNANCHORED pattern retried at every start offset, each attempt linear
- *     and none of them backtracking: `(?=.*[A-Z])(?=.*[0-9])` against a long
- *     value carrying neither class, or a `[^>]*$` tail rescanned from every `<`;
- *   - work that is not a regex at all: a string rebuilt once per finding, a
- *     prefix re-sliced inside a loop, a re-walk of an already-walked tree.
+ * Each case runs one entry point ONCE over an adversarial input, after a
+ * warm-up, against an absolute CPU ceiling (`assertUnderBudget` in
+ * `test/helpers/budget.mjs`). The size is chosen so the linear implementation
+ * costs tens to hundreds of milliseconds and the defect each case was written
+ * for costs seconds to minutes: the ceiling sits ten times or more above the
+ * first and an order of magnitude or more below the second, so no runner moves
+ * a reading across it. A constant-factor slowdown passes, by design.
  *
- * Neither is visible to a pattern analyzer, and the correctness suites are
- * indifferent to cost, so the only thing that catches them is measuring. Each
- * case below runs one entry point over an adversarial input at four sizes from
- * 8 KB to 64 KB and fits how its cost grows — an EXPONENT, classified against
- * the one pair of thresholds every growth gate here shares, rather than a ratio
- * of two samples against a constant tuned for this file (see `growth` in
- * `test/helpers/cpu-timing.mjs`).
- *
- * Every shape here reads 0.74-1.13 on the implementations that ship (on a
- * loaded 4-core machine), and four read 70.4x, 64.0x, 61.1x and 27.1x for 8x
- * the input against the ones they were written for — exponents 2.04, 2.00,
- * 1.98 and 1.59, all over the shared linear ceiling of 1.35.
- * `sanitizeHtml/unterminated-openers` is the exception: its `[^>]*$` tail read
- * 10.2x against 8.8x (1.12 against 1.05), because the document parse costs as
- * much again as the rescan at every size and pulls the blended curve back
- * toward linear. It is a growth gate on the Layer-2 entry point, not evidence
- * of a defect caught.
+ * The defects measured against these cases, at their sizes: the unanchored
+ * `(?=.*[A-Z])(?=.*[0-9])` blob-mix test (a full rescan from every start offset
+ * of the lowercase path), and micromark's unbalanced-label look-back behind one
+ * `[` (#386). Both numbers are in the PR that introduced this file's budgets.
  */
-import { describe, it, before } from "node:test";
+import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import {
@@ -40,24 +34,9 @@ import {
   sanitizeHtml,
 } from "../src/html.mjs";
 import { foldConfusables } from "../src/confusables.mjs";
-import {
-  MUTATION_RUN,
-  assertClockResolves,
-  assertLinear,
-  assertSuperlinear,
-  describeGrowth,
-  geometricSizes,
-  grow,
-  growth,
-  timed,
-} from "./helpers/cpu-timing.mjs";
+import { assertUnderBudget, grow } from "./helpers/budget.mjs";
 
 const KB = 1024;
-const SMALL = 8 * KB;
-const LARGE = 64 * KB;
-
-/** The sizes every real case is fitted over: 8, ~16, ~32 and 64 KB. */
-const SIZES = geometricSizes(SMALL, LARGE);
 
 const CYR_A = "а";
 
@@ -71,7 +50,7 @@ const CYR_A = "а";
  *
  * The PATH, not a query value: a query this long is answered "unusually long
  * query string" before any per-value analysis, so the query route cannot reach
- * the mix test at any size that would show a cost curve.
+ * the mix test at any size worth measuring.
  * @param {number} n
  * @returns {string}
  */
@@ -175,27 +154,24 @@ const unclosedLabelProse = (n) =>
   `[ ${grow("lorem ipsum dolor sit amet consectetur ", n)}${EXFIL_LINK}`;
 
 /**
- * The non-vacuity control for the harness itself: the very pattern this gate was
- * written after, kept here as a specimen. Unanchored with two `.*` lookaheads,
- * so a value carrying neither class costs a full scan at every start offset —
- * quadratic, with no backtracking for a pattern analyzer to find. If this does
- * not read as super-linear, neither would a real regression, and every case
- * above is passing for the wrong reason.
- */
-const QUADRATIC_SPECIMEN_RE = /(?=.*[A-Z])(?=.*[0-9])/;
-
-/**
- * The cases. `run` takes an input built by `input(size, attempt)`; `attempt`
- * varies the input by one unit per call so a memo cannot answer for the work
- * (see `measure`). `marker` runs once at a small size and must return true —
- * it is the proof that the input reaches the code the case is about, so a
+ * The cases. Each runs its entry point once, at `size`, on an input built by
+ * `input(size, attempt)`; `attempt` varies the input by one unit per call so a
+ * memo cannot answer for the work. `ceilingMs` is CPU, at least ten times what
+ * the linear implementation costs at `size` on the dearer of an uninstrumented
+ * run and the c8 run `pnpm test` makes, and never under 500 ms, where a single
+ * collector pause could reach it. `marker` runs once and must return true
+ * — it is the proof that the input reaches the code the case is about, so a
  * refactor that stops routing this shape through that path fails loudly instead
  * of timing a cheap rejection.
- * @type {Record<string, { input: (size: number, attempt: number) => unknown,
- *   run: (input: any) => unknown, marker: () => boolean }>}
+ * @type {Record<string, { size: number, ceilingMs: number,
+ *   input: (size: number, attempt: number) => unknown,
+ *   run: (input: any) => unknown, marker: (size) => boolean }>}
  */
 const CASES = {
   "checkExfilUrl/lowercase-blob-path": {
+    size: 1024 * KB,
+    // Measured at 4.4 ms, 4.9 ms under c8.
+    ceilingMs: 500,
     input: (size, attempt) => lowercaseBlobPath(size - attempt),
     run: (url) => checkExfilUrl(url),
     // Checked at the size the timing is taken at, not at a comfortable one: the
@@ -204,43 +180,57 @@ const CASES = {
     // have seen that. The mixed twin is reported as a blob, so a segment of this
     // length does reach the mix test — where the lowercase twin, correctly,
     // comes back benign.
-    marker: () =>
-      checkExfilUrl(mixedBlobPath(LARGE)) ===
+    marker: (size) =>
+      checkExfilUrl(mixedBlobPath(size)) ===
         "encoded data blob in path segment" &&
-      checkExfilUrl(lowercaseBlobPath(LARGE)) === null,
+      checkExfilUrl(lowercaseBlobPath(size)) === null,
   },
   "sanitizeHtml/unterminated-openers": {
+    size: 64 * KB,
+    // Measured at 289 ms, 425 ms under c8.
+    ceilingMs: 5000,
     input: (size, attempt) => unterminatedOpeners(size - attempt),
     run: (text) => sanitizeHtml(text),
     // The hidden span is removed, which only happens once the walk has reached
     // an inline-html child — and reaching one is what folds the absorb state
     // over the openers before it. A document answered null, or one whose span
     // survived, would be timing a walk that never got there.
-    marker: () =>
-      sanitizeHtml(unterminatedOpeners(LARGE))?.removed.hidden === 1,
+    marker: (size) =>
+      sanitizeHtml(unterminatedOpeners(size))?.removed.hidden === 1,
   },
   "isHiddenStyle/digit-channel": {
+    size: 256 * KB,
+    // Measured at 16 ms, 37 ms under c8.
+    ceilingMs: 500,
     input: (size, attempt) => digitChannel(size - attempt),
     run: (style) => isHiddenStyle(style),
     // On the measured input at the measured size, not a comfortable stand-in: a
     // length cap added to the declaration parser would leave a short marker
     // green while the timing quietly moved to an early bail.
-    marker: () => isHiddenStyle(digitChannel(LARGE)),
+    marker: (size) => isHiddenStyle(digitChannel(size)),
   },
   "isHiddenStyle/repeated-invalid-declarations": {
+    size: 256 * KB,
+    // Measured at 77 ms, 68 ms under c8.
+    ceilingMs: 1000,
     input: (size, attempt) => repeatedInvalidDeclarations(size - attempt),
     run: (style) => isHiddenStyle(style),
     // Hidden only when the cascade read the leading `display:none` past the
     // whole run: a parse that bailed early would answer false.
-    marker: () => isHiddenStyle(repeatedInvalidDeclarations(LARGE)),
+    marker: (size) => isHiddenStyle(repeatedInvalidDeclarations(size)),
   },
   "sanitizeHtml/nested-inherited-regions": {
+    // 64 KB (~1200 levels), not 256: at ~4900 levels the walk no longer splices
+    // every level, which the marker below reports.
+    size: 64 * KB,
+    // Measured at 197 ms, 2.6 s under c8.
+    ceilingMs: 30_000,
     input: (size, attempt) => nestedInheritedRegions(size - attempt),
     run: (text) => sanitizeHtml(text),
     // One hidden `s` per level spliced, every `v` kept: only a scan that split
     // each region at its overriding child gets both.
-    marker: () => {
-      const result = sanitizeHtml(nestedInheritedRegions(LARGE));
+    marker: (size) => {
+      const result = sanitizeHtml(nestedInheritedRegions(size));
       return (
         result !== null &&
         !result.text.includes(">s<") &&
@@ -249,6 +239,9 @@ const CASES = {
     },
   },
   "foldConfusables/overlapping-findings": {
+    size: 256 * KB,
+    // Measured at 56 ms, 102 ms under c8.
+    ceilingMs: 2000,
     input: (size, attempt) => overlappingFolds(size - attempt),
     run: ({ text, findings }) => foldConfusables(text, findings),
     // A fold that changed nothing would time an empty loop, and a fold that
@@ -260,81 +253,37 @@ const CASES = {
     },
   },
   "detectExfil/unclosed-label-prose": {
+    size: 256 * KB,
+    // Measured at 327 ms, 481 ms under c8.
+    ceilingMs: 5000,
     input: (size, attempt) => unclosedLabelProse(size - attempt),
     run: (text) => detectExfil(text),
     // The link at the end is reported, which only happens once the markdown
     // parse has read the whole document. A run that answered null would be
     // timing a gate that declined, not the parse this case is about.
-    marker: () =>
-      detectExfil(unclosedLabelProse(LARGE))?.[0]?.reason ===
+    marker: (size) =>
+      detectExfil(unclosedLabelProse(size))?.[0]?.reason ===
       "suspicious query parameter",
-  },
-  "control/quadratic-specimen": {
-    input: (size, attempt) => grow("abcdefg-", size - attempt),
-    run: (text) => QUADRATIC_SPECIMEN_RE.test(text),
-    // The specimen answers the question it is asked, so what it measures is the
-    // cost of reaching that answer rather than an early bail.
-    marker: () =>
-      QUADRATIC_SPECIMEN_RE.test("aB3") && !QUADRATIC_SPECIMEN_RE.test("abc"),
   },
 };
 
-/** The name of the case that must classify as super-linear; every other case
- * must classify as linear. Kept as a name rather than a flag so the two
- * assertions below read from one declaration. */
-const CONTROL = "control/quadratic-specimen";
-
-/**
- * The specimen runs at an eighth of the size the real cases do: 64 KB of a
- * quadratic scan is nearly two seconds per call, and every size is sampled in
- * every round. The exponent is scale-free, so a smaller range says exactly as
- * much — but only while every size stays clear of timer noise, which the
- * smallest (1 KB, ~0.8 ms) still does and a sixty-fourth (128 bytes) would not.
- */
-const CONTROL_SIZES = geometricSizes(SMALL / 8, LARGE / 8);
-
-/** @type {Record<string, import("./helpers/cpu-timing.mjs").Growth>} */
-const curves = {};
-
-before(
-  async () => {
-    if (MUTATION_RUN) return;
-    assertClockResolves("these blocks are");
-    for (const [name, { input, run }] of Object.entries(CASES))
-      curves[name] = await growth(
-        (size, attempt) => /** @type {any} */ (input(size, attempt)),
-        (built) => run(built),
-        name === CONTROL ? CONTROL_SIZES : SIZES,
-      );
-  },
-  // A quadratic path does not merely classify as one, it takes minutes to
-  // measure — so an unbounded hook would hang rather than report. This is the
-  // ceiling for the whole measured set; a green run is an order of magnitude
-  // under it.
-  { timeout: 300_000 },
-);
-
 describe("algorithmic complexity", () => {
-  for (const [name, { marker }] of Object.entries(CASES))
+  for (const [name, { size, marker }] of Object.entries(CASES))
     it(`${name}: the input reaches the path this case is about`, () => {
       assert.ok(
-        marker(),
-        `${name} no longer drives the code it was written for, so its timing means nothing`,
+        marker(size),
+        `${name} no longer drives the code it was written for at ${size} units, so its timing means nothing`,
       );
     });
 
-  for (const name of Object.keys(CASES).filter((c) => c !== CONTROL))
-    timed(`${name}: cost grows with the input, not with its square`, (t) => {
-      // Emitted on the green path too: this table is the only place a machine
-      // these curves have never been read on reports its own numbers.
-      t.diagnostic(`${name}: ${describeGrowth(curves[name])}`);
-      assertLinear(name, curves[name]);
+  for (const [name, { size, ceilingMs, input, run }] of Object.entries(CASES))
+    it(`${name}: ${size} units stay under ${ceilingMs}ms`, async (t) => {
+      await assertUnderBudget(
+        t,
+        name,
+        ceilingMs,
+        (attempt) => input(size, attempt),
+        run,
+      );
     });
-
-  timed("the gate can see a quadratic at all", (t) => {
-    // Without this the whole file passes on a machine, a Node version, or a
-    // measurement bug that flattens every curve to noise.
-    t.diagnostic(`${CONTROL}: ${describeGrowth(curves[CONTROL])}`);
-    assertSuperlinear(CONTROL, curves[CONTROL]);
-  });
 });

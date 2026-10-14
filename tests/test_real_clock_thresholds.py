@@ -1,23 +1,23 @@
-"""No Python test outside the cost-gate harness passes or fails on a real clock.
+"""A clock reading may decide a Python test's verdict only through the budget
+helper.
 
 Twin of ``test/real-clock-thresholds.test.mjs``, which states the rule: a test of
 a deadline, budget or timer drives an injected clock (``monkeypatch`` on the
-module's ``time``, a stubbed deadline); a test of COST goes through
-``tests/_growth.py``, the one module here allowed to read a clock for a verdict.
+module's ``time``, a stubbed deadline); a test of COST calls
+``assert_under_budget`` in ``tests/_budget.py`` — one warm run against an
+absolute ceiling ten times or more above the linear cost — the one module here
+allowed to read a clock for a verdict.
 
 A threshold is an ``assert`` comparing a real-clock reading — directly, through
 a name assigned from one, or through a function returning one — against
-something that is not itself a clock reading. A reading also arrives through an
-ACCESSOR imported from the harness (``cpu_growth(...)``; see
-:data:`CLOCK_ACCESSORS`), because the taint is per-file and the clock itself is
-not in sight. Reading a clock anywhere else is fine: a polling deadline, a
-socket wait, a timestamp. Those decide how long a test waits, never whether it
-passes. Parsed with :mod:`ast`, not grepped, so a mention in a string or a
+something that is not itself a clock reading. A reading could also arrive
+through an ACCESSOR imported from the harness, because the taint is per-file and
+the clock itself is not in sight; the harness exports none
+(:data:`CLOCK_ACCESSORS`), and a test below fails when a function of it starts
+returning a reading. Reading a clock anywhere else is fine: a polling deadline,
+a socket wait, a timestamp. Those decide how long a test waits, never whether
+it passes. Parsed with :mod:`ast`, not grepped, so a mention in a string or a
 comment is not a reading.
-
-The accessor vocabulary cannot rot silently: a test below fails when a listed
-accessor stops existing, and when a clock-returning function of the harness is
-missing from it.
 """
 
 import ast
@@ -25,11 +25,11 @@ import inspect
 
 import pytest
 
-from tests import _growth
+from tests import _budget
 from tests._helpers import REPO_ROOT
 
-#: The cost-gate harness: the one place a clock reading may decide a verdict.
-HARNESS = {"tests/_growth.py"}
+#: The budget helper: the one place a clock reading may decide a verdict.
+HARNESS = {"tests/_budget.py"}
 
 #: Every real-clock read the scan recognizes, as ``time.<name>()``. The list is
 #: the guard's whole vocabulary; a test below proves each entry is detected.
@@ -45,10 +45,10 @@ CLOCK_READS = (
 )
 
 #: Functions that hand a test a clock reading without the test calling a clock,
-#: matched by name wherever they are called (``cpu_growth(...)`` and
-#: ``_growth.cpu_growth(...)`` alike). ``opcode_growth`` is deliberately absent:
-#: it counts interpreter opcodes, which no machine's load can move.
-CLOCK_ACCESSORS = ("cpu_growth",)
+#: matched by name wherever they are called (``f(...)`` and ``mod.f(...)``
+#: alike). Empty: ``assert_under_budget`` decides inside the harness and returns
+#: nothing, and a test below holds every other function of it to the same.
+CLOCK_ACCESSORS: tuple[str, ...] = ()
 
 _RELATIONAL = (ast.Lt, ast.LtE, ast.Gt, ast.GtE)
 
@@ -192,8 +192,8 @@ def test_no_test_outside_the_harness_asserts_against_a_real_clock():
         for hit in thresholds
     ]
     assert offenders == [], (
-        "drive an injected clock for a deadline/budget/timer test, or measure "
-        "cost through tests/_growth.py"
+        "drive an injected clock for a deadline/budget/timer test, or bound "
+        "cost with assert_under_budget from tests/_budget.py"
     )
 
 
@@ -208,13 +208,27 @@ def test_the_scan_reads_the_real_tree_and_finds_its_clock_reads():
     for path in HARNESS:
         assert path in _RESULTS, f"{path} is exempt but no longer exists"
         assert _RESULTS[path][1] > 0, f"{path} no longer reads a clock"
+        # Positive marker for the invariant itself: the harness holds exactly
+        # one clock-against-ceiling verdict, and the scan sees it. A helper that
+        # stopped deciding — or a scan that stopped recognizing its idiom —
+        # would leave every budget in the tree checking nothing.
+        assert len(_RESULTS[path][0]) == 1, _RESULTS[path][0]
+    # ...and that verdict is reached from the tests: a helper nothing calls
+    # exempts a file for no reason.
+    callers = [
+        path
+        for path in _RESULTS
+        if path not in HARNESS
+        and "assert_under_budget(" in (REPO_ROOT / path).read_text(encoding="utf-8")
+    ]
+    assert len(callers) >= 4, callers
 
 
 def _clock_reading_functions(source: str) -> set[str]:
     """The public functions in ``source`` that reach a real clock, through any
     chain of the module's own functions, AND return a value. By call graph rather
-    than by data flow, so a pure helper (``fit_exponent``) that shares parameter
-    names with the readings beside it is not swept in."""
+    than by data flow, so a pure helper (say, one fitting a curve to readings)
+    that shares parameter names with the readings beside it is not swept in."""
     tree = ast.parse(source)
     functions = {
         node.name: node
@@ -255,47 +269,58 @@ def test_every_listed_accessor_exists_in_the_harness():
     """A vocabulary entry for a function that was renamed away detects nothing
     and says nothing, so each one is checked against the live module."""
     for name in CLOCK_ACCESSORS:
-        assert callable(getattr(_growth, name)), name
+        assert callable(getattr(_budget, name)), name
+    assert callable(_budget.assert_under_budget)
 
 
 def test_no_clock_returning_function_of_the_harness_is_missing_from_the_vocabulary():
     """Enumerated from a call-graph scan of the harness's own source, so a new
     accessor that returns a reading fails here instead of escaping every file
     that imports it."""
-    returning = _clock_reading_functions(inspect.getsource(_growth))
+    returning = _clock_reading_functions(inspect.getsource(_budget))
     assert returning == set(CLOCK_ACCESSORS)
 
 
-# The idioms that carry an imported accessor's reading to an assertion in a file
-# that never names a clock.
-_IMPORTED = {
-    "a growth exponent": (
-        "from tests._growth import cpu_growth\n"
-        "growth = cpu_growth(call_for, SIZES)\nassert growth.exponent < 1.35\n"
+def test_the_accessor_scan_finds_a_function_that_returns_a_reading_and_only_that():
+    """Non-vacuity for the check above, which now expects the harness to return
+    no reading at all: the empty answer must come from the source, not from a
+    scan that finds nothing anywhere."""
+    source = (
+        "import time\n"
+        "def _since(s):\n    return time.process_time() - s\n"
+        "def measure(call):\n    s = time.process_time()\n    call()\n"
+        "    return _since(s)\n"
+        "def assert_fast(call):\n    s = time.process_time()\n    call()\n"
+        "    assert _since(s) < 5\n"
+        "def pure(x):\n    return x * 2\n"
+    )
+    assert _clock_reading_functions(source) == {"measure"}
+
+
+# The hops a reading takes to an assertion inside one file, each of which the
+# taint has to follow — the shapes the cost gates themselves used before every
+# clock verdict moved into the budget helper.
+_HOPS = {
+    "an attribute of a returned reading": (
+        "import time\ndef curve():\n    s = time.process_time()\n    work()\n"
+        "    return Growth(time.process_time() - s)\n"
+        "growth = curve()\nassert growth.exponent < 1.35\n"
     ),
-    "a growth cost": (
-        "from tests._growth import cpu_growth\n"
-        "growth = cpu_growth(call_for, SIZES)\nassert growth.costs[0] < BUDGET\n"
+    "a subscript of a returned reading": (
+        "import time\ndef costs():\n    s = time.process_time()\n    work()\n"
+        "    return [time.process_time() - s]\n"
+        "assert costs()[0] < BUDGET\n"
     ),
-    "a call inline": (
-        "from tests._growth import cpu_growth\n"
-        "assert cpu_growth(call_for, SIZES).exponent < 1.35\n"
-    ),
-    "a module-qualified call": (
-        "from tests import _growth\n"
-        "growth = _growth.cpu_growth(call_for, SIZES)\nassert growth.exponent < 1.35\n"
-    ),
-    "a local wrapper": (
-        "from tests._growth import cpu_growth\n"
-        "def curve():\n    return cpu_growth(call_for, SIZES)\n"
-        "assert curve().exponent < 1.35\n"
+    "a module-qualified clock": (
+        "import time\ns = time.perf_counter()\nwork()\n"
+        "spent = time.perf_counter() - s\nassert spent < 1.0\n"
     ),
 }
 
 
-@pytest.mark.parametrize("idiom", sorted(_IMPORTED))
-def test_flags_an_imported_accessor_in_each_idiom(idiom):
-    thresholds, reads = scan(_IMPORTED[idiom])
+@pytest.mark.parametrize("idiom", sorted(_HOPS))
+def test_flags_a_reading_across_each_hop(idiom):
+    thresholds, reads = scan(_HOPS[idiom])
     assert len(thresholds) == 1, thresholds
     assert reads >= 1
 
@@ -359,12 +384,8 @@ _BENIGN = {
         "timer.count = 3\nassert timer.count < LIMIT\nassert other.elapsed < LIMIT\n"
     ),
     "a harness verdict": (
-        "from tests._growth import assert_linear, cpu_growth\n"
-        "assert_linear('x', cpu_growth(call_for, SIZES))\n"
-    ),
-    "a deterministic opcode count": (
-        "from tests._growth import opcode_growth\n"
-        "assert opcode_growth(call_for, SIZES).exponent < 1.35\n"
+        "from tests._budget import assert_under_budget\n"
+        "assert_under_budget('x', lambda k: lambda: run(k), 2.0)\n"
     ),
     "a mention in a string": "assert 'time.monotonic() - started < 10' in doc\n",
 }
