@@ -1680,15 +1680,98 @@ function layoutContainer(parent) {
   }
 }
 
-// The nodes that render beneath `node`, and the parent they are visited under:
-// a declarative shadow root's content renders in the host its template sits in,
-// so that template contributes its content root's children. Only an HTML
-// `template` has `content` (see {@link isReportedElement}).
-/** @param {any} node @returns {[any[], any]} */
-function renderedChildren(node) {
-  return node.content !== undefined && !isInertTemplate(node)
-    ? [node.content.children, node.content]
-    : [node.children, node];
+// The elements `attachShadow` accepts as a host, besides a custom element.
+const SHADOW_HOST_TAGS = new Set([
+  "article",
+  "aside",
+  "blockquote",
+  "body",
+  "div",
+  "footer",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "header",
+  "main",
+  "nav",
+  "p",
+  "section",
+  "span",
+]);
+// Hyphenated names HTML reserves, so no custom element takes them.
+const RESERVED_CUSTOM_ELEMENT_NAMES = new Set([
+  "annotation-xml",
+  "color-profile",
+  "font-face",
+  "font-face-src",
+  "font-face-uri",
+  "font-face-format",
+  "font-face-name",
+  "missing-glyph",
+]);
+
+// True for an ASCII valid custom element name (the tokenizer only opens a tag
+// on a letter, lowercased). The grammar also admits non-ASCII names; reading
+// one as no host leaves its shadow content inert, which only ever splices more
+// of a hidden host.
+/** @param {string} name @returns {boolean} */
+function isCustomElementName(name) {
+  return (
+    name.includes("-") &&
+    !RESERVED_CUSTOM_ELEMENT_NAMES.has(name) &&
+    [...name].every(
+      (char) =>
+        (char >= "a" && char <= "z") ||
+        (char >= "0" && char <= "9") ||
+        "-._".includes(char),
+    )
+  );
+}
+
+// The declarative shadow root the parser attaches to `host`: its first template
+// child with a valid `shadowrootmode`, when `attachShadow` accepts the host.
+// Every other template stays in the tree as an ordinary, inert one.
+/** @param {any} host a hast element @returns {any} the attached template */
+function attachedShadowTemplate(host) {
+  if (!SHADOW_HOST_TAGS.has(host.tagName) && !isCustomElementName(host.tagName))
+    return undefined;
+  return host.children.find(
+    (/** @type {any} */ child) =>
+      child.content !== undefined && !isInertTemplate(child),
+  );
+}
+
+// The slot names `host`'s light children are assigned to: an element's `slot`
+// attribute, or the default slot for a text node or an element without one.
+/** @param {any} host @param {any} template @returns {Set<string>} */
+function assignedSlotNames(host, template) {
+  const names = new Set();
+  for (const child of host.children) {
+    if (child === template) continue;
+    if (child.type === "text") names.add("");
+    else if (child.type === "element")
+      names.add(String(child.properties.slot ?? ""));
+  }
+  return names;
+}
+
+// `node`'s children in render order, as runs no splice may span. A declarative
+// shadow root attached to `node` replaces its template with the content's
+// children, laid out in `node` and inheriting from it: the parser removes the
+// template, so its own attributes style nothing. That run carries the template.
+/** @param {any} node @returns {Array<[any[], any]>} */
+function renderedRuns(node) {
+  const template = attachedShadowTemplate(node);
+  if (!template) return [[node.children, undefined]];
+  const at = node.children.indexOf(template);
+  return [
+    [node.children.slice(0, at), undefined],
+    [template.content.children, template],
+    [node.children.slice(at + 1), undefined],
+  ];
 }
 
 // True when `node` lays out as a non-replaced INLINE box. A flex/grid layout
@@ -1791,7 +1874,8 @@ function keepsHide(kind, cascade, inlineBox, color) {
   return keeps;
 }
 
-/** @typedef {{ kinds: Set<InheritedHide>, color: ColorState }} RegionState */
+// `slots`: the assigned slot names of the shadow tree a node sits in, if any.
+/** @typedef {{ kinds: Set<InheritedHide>, color: ColorState, slots: Set<string> | undefined }} RegionState */
 // `neutral`: nothing to see either way; `mixed`: hidden and visible content.
 /** @typedef {"hidden" | "neutral" | "visible" | "mixed"} RegionVerdict */
 
@@ -1806,12 +1890,17 @@ function regionVerdicts(root, kinds) {
   const stack = [];
   /** @param {any} node @param {RegionState} state */
   const pushChildren = (node, state) => {
-    const [children, parent] = renderedChildren(node);
-    for (const child of children) stack.push([child, parent, state]);
+    for (const [children, template] of renderedRuns(node)) {
+      const runState = template
+        ? { ...state, slots: assignedSlotNames(node, template) }
+        : state;
+      for (const child of children) stack.push([child, node, runState]);
+    }
   };
   pushChildren(root, {
     kinds,
     color: colorState(elementCascade(root), null),
+    slots: undefined,
   });
   const order = [root];
   while (stack.length > 0) {
@@ -1833,7 +1922,11 @@ function regionVerdicts(root, kinds) {
       // Only an element's own context-free hides are ever added on the way
       // down, so a region never hides more than its elements would alone.
       const own = elementHides(node, parent);
-      if (own.has("box")) {
+      // A slot given light children renders them, never its fallback content.
+      const unrenderedFallback =
+        node.tagName === "slot" &&
+        state.slots?.has(String(node.properties.name ?? ""));
+      if (own.has("box") || unrenderedFallback) {
         verdicts.set(node, "hidden");
         continue;
       }
@@ -1846,7 +1939,7 @@ function regionVerdicts(root, kinds) {
       if (REPLACED_ELEMENTS.has(node.tagName))
         verdicts.set(node, inForce.has("visibility") ? "hidden" : "visible");
       else if (inForce.size === 0) verdicts.set(node, "visible");
-      else pushChildren(node, { kinds: inForce, color });
+      else pushChildren(node, { kinds: inForce, color, slots: state.slots });
     }
   }
   for (let i = order.length - 1; i >= 0; i--) {
@@ -1854,7 +1947,7 @@ function regionVerdicts(root, kinds) {
     if (verdicts.has(node)) continue;
     let hidden = false;
     let shown = false;
-    for (const child of renderedChildren(node)[0]) {
+    for (const child of renderedRuns(node).flatMap(([children]) => children)) {
       const verdict = verdicts.get(child);
       if (verdict === "hidden") hidden = true;
       else if (verdict === "visible" || verdict === "mixed") shown = true;
@@ -1900,39 +1993,43 @@ function inheritedRegionSplice(root, kinds) {
       trailingComments = [];
       trailingElements = [];
     };
-    const [children, parent] = renderedChildren(node);
-    for (const child of children) {
-      const position = child.position;
-      if (
-        !position ||
-        position.start.offset < lastEnd ||
-        position.end.offset > node.position.end.offset
-      )
-        return null;
-      lastEnd = position.end.offset;
-      const verdict = verdicts.get(child);
-      if (verdict === "hidden") {
-        if (runStart === -1) {
-          closeRun(); // what precedes the run stays outside it
-          runStart = position.start.offset;
+    for (const [children, template] of renderedRuns(node)) {
+      closeRun();
+      // The template the parser removed is left standing, not spliced.
+      if (template) mixed.push(template);
+      for (const child of children) {
+        const position = child.position;
+        if (
+          !position ||
+          position.start.offset < lastEnd ||
+          position.end.offset > node.position.end.offset
+        )
+          return null;
+        lastEnd = position.end.offset;
+        const verdict = verdicts.get(child);
+        if (verdict === "hidden") {
+          if (runStart === -1) {
+            closeRun(); // what precedes the run stays outside it
+            runStart = position.start.offset;
+          }
+          runEnd = position.end.offset;
+          trailingComments = [];
+          trailingElements = [];
+        } else if (verdict === "mixed") {
+          closeRun();
+          stack.push(child);
+        } else if (verdict === "visible") {
+          closeRun();
+          rescan.push([child, node]);
+        } else if (child.type === "comment") {
+          trailingComments.push({
+            start: position.start.offset,
+            end: position.end.offset,
+            kind: "comment",
+          });
+        } else if (child.type === "element") {
+          trailingElements.push([child, node]);
         }
-        runEnd = position.end.offset;
-        trailingComments = [];
-        trailingElements = [];
-      } else if (verdict === "mixed") {
-        closeRun();
-        stack.push(child);
-      } else if (verdict === "visible") {
-        closeRun();
-        rescan.push([child, parent]);
-      } else if (child.type === "comment") {
-        trailingComments.push({
-          start: position.start.offset,
-          end: position.end.offset,
-          kind: "comment",
-        });
-      } else if (child.type === "element") {
-        trailingElements.push([child, parent]);
       }
     }
     closeRun();
