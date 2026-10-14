@@ -50956,6 +50956,38 @@ function layoutContainer(parent) {
     else return container;
   }
 }
+function isCustomElementName(name50) {
+  return name50.includes("-") && !RESERVED_CUSTOM_ELEMENT_NAMES.has(name50) && [...name50].every(
+    (char) => char >= "a" && char <= "z" || char >= "0" && char <= "9" || "-._".includes(char)
+  );
+}
+function attachedShadowTemplate(host) {
+  if (!SHADOW_HOST_TAGS.has(host.tagName) && !isCustomElementName(host.tagName))
+    return void 0;
+  return host.children.find(
+    (child) => child.content !== void 0 && !isInertTemplate(child)
+  );
+}
+function assignedSlotNames(host, template) {
+  const names = /* @__PURE__ */ new Set();
+  for (const child of host.children) {
+    if (child === template) continue;
+    if (child.type === "text") names.add("");
+    else if (child.type === "element")
+      names.add(String(child.properties.slot ?? ""));
+  }
+  return names;
+}
+function renderedRuns(node2) {
+  const template = attachedShadowTemplate(node2);
+  if (!template) return [[node2.children, void 0]];
+  const at = node2.children.indexOf(template);
+  return [
+    [node2.children.slice(0, at), void 0],
+    [template.content.children, template],
+    [node2.children.slice(at + 1), void 0]
+  ];
+}
 function isInlineBox(node2, parent) {
   if (!INLINE_ELEMENTS.has(node2.tagName)) return false;
   const { textOf } = elementCascade(node2);
@@ -51010,11 +51042,15 @@ function regionVerdicts(root2, kinds) {
   const verdicts = /* @__PURE__ */ new Map();
   const stack = [];
   const pushChildren = (node2, state) => {
-    for (const child of node2.children) stack.push([child, node2, state]);
+    for (const [children, template] of renderedRuns(node2)) {
+      const runState = template ? { ...state, slots: assignedSlotNames(node2, template) } : state;
+      for (const child of children) stack.push([child, node2, runState]);
+    }
   };
   pushChildren(root2, {
     kinds,
-    color: colorState(elementCascade(root2), null)
+    color: colorState(elementCascade(root2), null),
+    slots: void 0
   });
   const order2 = [root2];
   while (stack.length > 0) {
@@ -51031,7 +51067,8 @@ function regionVerdicts(root2, kinds) {
     else if (node2.type !== "element") verdicts.set(node2, "neutral");
     else {
       const own5 = elementHides(node2, parent);
-      if (own5.has("box")) {
+      const unrenderedFallback = node2.tagName === "slot" && state.slots?.has(String(node2.properties.name ?? ""));
+      if (own5.has("box") || unrenderedFallback) {
         verdicts.set(node2, "hidden");
         continue;
       }
@@ -51047,7 +51084,7 @@ function regionVerdicts(root2, kinds) {
       if (REPLACED_ELEMENTS.has(node2.tagName))
         verdicts.set(node2, inForce.has("visibility") ? "hidden" : "visible");
       else if (inForce.size === 0) verdicts.set(node2, "visible");
-      else pushChildren(node2, { kinds: inForce, color: color2 });
+      else pushChildren(node2, { kinds: inForce, color: color2, slots: state.slots });
     }
   }
   for (let i = order2.length - 1; i >= 0; i--) {
@@ -51055,7 +51092,7 @@ function regionVerdicts(root2, kinds) {
     if (verdicts.has(node2)) continue;
     let hidden = false;
     let shown = false;
-    for (const child of node2.children) {
+    for (const child of renderedRuns(node2).flatMap(([children]) => children)) {
       const verdict = verdicts.get(child);
       if (verdict === "hidden") hidden = true;
       else if (verdict === "visible" || verdict === "mixed") shown = true;
@@ -51088,34 +51125,38 @@ function inheritedRegionSplice(root2, kinds) {
       trailingComments = [];
       trailingElements = [];
     };
-    for (const child of node2.children) {
-      const position3 = child.position;
-      if (!position3 || position3.start.offset < lastEnd || position3.end.offset > node2.position.end.offset)
-        return null;
-      lastEnd = position3.end.offset;
-      const verdict = verdicts.get(child);
-      if (verdict === "hidden") {
-        if (runStart === -1) {
+    for (const [children, template] of renderedRuns(node2)) {
+      closeRun();
+      if (template) mixed.push(template);
+      for (const child of children) {
+        const position3 = child.position;
+        if (!position3 || position3.start.offset < lastEnd || position3.end.offset > node2.position.end.offset)
+          return null;
+        lastEnd = position3.end.offset;
+        const verdict = verdicts.get(child);
+        if (verdict === "hidden") {
+          if (runStart === -1) {
+            closeRun();
+            runStart = position3.start.offset;
+          }
+          runEnd = position3.end.offset;
+          trailingComments = [];
+          trailingElements = [];
+        } else if (verdict === "mixed") {
           closeRun();
-          runStart = position3.start.offset;
+          stack.push(child);
+        } else if (verdict === "visible") {
+          closeRun();
+          rescan.push([child, node2]);
+        } else if (child.type === "comment") {
+          trailingComments.push({
+            start: position3.start.offset,
+            end: position3.end.offset,
+            kind: "comment"
+          });
+        } else if (child.type === "element") {
+          trailingElements.push([child, node2]);
         }
-        runEnd = position3.end.offset;
-        trailingComments = [];
-        trailingElements = [];
-      } else if (verdict === "mixed") {
-        closeRun();
-        stack.push(child);
-      } else if (verdict === "visible") {
-        closeRun();
-        rescan.push([child, node2]);
-      } else if (child.type === "comment") {
-        trailingComments.push({
-          start: position3.start.offset,
-          end: position3.end.offset,
-          kind: "comment"
-        });
-      } else if (child.type === "element") {
-        trailingElements.push([child, node2]);
       }
     }
     closeRun();
@@ -51891,7 +51932,7 @@ function detectConfusableHosts(text6) {
     }
   );
 }
-var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, LEXER_TOKEN_LIMIT, VALIDATION_BUDGET, cssLexer, RESETTING_SHORTHANDS, NO_CASCADE, INHERITED_COLOR_KEYWORDS, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, INHERITING_KEYWORDS, INLINE_ELEMENTS, INLINE_DISPLAYS, BLOCKIFYING_VALUES, ITEM_BLOCKIFYING_DISPLAYS, REPLACED_ELEMENTS, TEXT_ONLY_HIDES, elementCascades, parents, contentOwners, PARENT_RELATIVE_FONT_UNITS, PARENT_RELATIVE_FONT_KEYWORDS, MATH_FUNCTIONS, parseFragment2, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, MARKUP_OPENER_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, MAX_SPLICE_ROUNDS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, ACTIVE_DATA_TYPES, DATA_URI_LENGTH_THRESHOLD, SCRIPT_SCHEMES, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, BENIGN_SHORT_PARAM_RE, BENIGN_SHORT_VALUE_MAX_LEN, BENIGN_SHORT_TOTAL_MAX_LEN, PUBLIC_KEY_ID_PARAM_RE, BLOB_VALUE_MIN_LEN, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, HEX_ONLY_RE, HEX_BLOB_MIN_LEN, DIGEST_HEX_LENGTHS, BLOB_VALUE_B64URL_RE, PATH_BLOB_RE, DIGEST_MAX_LEN, BLOB_SEPARATOR_RE, BLOB_RUN_SPLIT_RE, FLOAT_RE, SRCSET_URL_RE, SRCSET_DESCRIPTORS_RE, STRING_URL_FUNCTIONS, GRAMMAR_READERS, OFF_ORIGIN_REASON, COMMENT_INTERIOR_OPENER_RE;
+var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, LEXER_TOKEN_LIMIT, VALIDATION_BUDGET, cssLexer, RESETTING_SHORTHANDS, NO_CASCADE, INHERITED_COLOR_KEYWORDS, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, INHERITING_KEYWORDS, INLINE_ELEMENTS, INLINE_DISPLAYS, BLOCKIFYING_VALUES, ITEM_BLOCKIFYING_DISPLAYS, REPLACED_ELEMENTS, TEXT_ONLY_HIDES, elementCascades, parents, contentOwners, SHADOW_HOST_TAGS, RESERVED_CUSTOM_ELEMENT_NAMES, PARENT_RELATIVE_FONT_UNITS, PARENT_RELATIVE_FONT_KEYWORDS, MATH_FUNCTIONS, parseFragment2, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, MARKUP_OPENER_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, MAX_SPLICE_ROUNDS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, ACTIVE_DATA_TYPES, DATA_URI_LENGTH_THRESHOLD, SCRIPT_SCHEMES, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, BENIGN_SHORT_PARAM_RE, BENIGN_SHORT_VALUE_MAX_LEN, BENIGN_SHORT_TOTAL_MAX_LEN, PUBLIC_KEY_ID_PARAM_RE, BLOB_VALUE_MIN_LEN, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, HEX_ONLY_RE, HEX_BLOB_MIN_LEN, DIGEST_HEX_LENGTHS, BLOB_VALUE_B64URL_RE, PATH_BLOB_RE, DIGEST_MAX_LEN, BLOB_SEPARATOR_RE, BLOB_RUN_SPLIT_RE, FLOAT_RE, SRCSET_URL_RE, SRCSET_DESCRIPTORS_RE, STRING_URL_FUNCTIONS, GRAMMAR_READERS, OFF_ORIGIN_REASON, COMMENT_INTERIOR_OPENER_RE;
 var init_html4 = __esm({
   "src/html.mjs"() {
     "use strict";
@@ -52213,6 +52254,36 @@ var init_html4 = __esm({
     elementCascades = /* @__PURE__ */ new WeakMap();
     parents = /* @__PURE__ */ new WeakMap();
     contentOwners = /* @__PURE__ */ new WeakMap();
+    SHADOW_HOST_TAGS = /* @__PURE__ */ new Set([
+      "article",
+      "aside",
+      "blockquote",
+      "body",
+      "div",
+      "footer",
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "h5",
+      "h6",
+      "header",
+      "main",
+      "nav",
+      "p",
+      "section",
+      "span"
+    ]);
+    RESERVED_CUSTOM_ELEMENT_NAMES = /* @__PURE__ */ new Set([
+      "annotation-xml",
+      "color-profile",
+      "font-face",
+      "font-face-src",
+      "font-face-uri",
+      "font-face-format",
+      "font-face-name",
+      "missing-glyph"
+    ]);
     PARENT_RELATIVE_FONT_UNITS = /* @__PURE__ */ new Set(["em", "ex", "ch", "cap", "ic"]);
     PARENT_RELATIVE_FONT_KEYWORDS = /* @__PURE__ */ new Set(["smaller", "larger"]);
     MATH_FUNCTIONS = /* @__PURE__ */ new Set(["calc", "min", "max", "clamp"]);
