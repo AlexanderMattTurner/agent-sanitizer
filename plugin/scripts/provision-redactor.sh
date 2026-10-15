@@ -83,16 +83,28 @@ retired="$plugin_data/venv.old.$$"
 # lock line fails the install rather than turning hash checking off. Unlike
 # that build, prebuilt platform wheels are fine: this venv runs only on the host
 # that built it.
+#
+# The installer's own error is terse and unattributed — uv's "Request failed
+# after 3 retries" names neither this plugin nor PyPI — so each step that fails
+# says which one it was and what the session falls back to.
+install_failed() {
+  echo "agent-sanitizer: $2 failed (exit $1) — the secret-redaction engine (Layer 4) was not provisioned; this session redacts through the committed zipapp instead, and the next session retries. A network error here means PyPI was unreachable: check this host's network and proxy access to pypi.org (uv and pip honour HTTPS_PROXY; uv also UV_INDEX_URL and, behind a TLS-intercepting proxy, UV_NATIVE_TLS=1)." >&2
+  exit 1
+}
 if command -v uv >/dev/null 2>&1; then
-  uv venv --quiet "$build"
-  uv pip install --quiet --python "$build/bin/python" --require-hashes -r "$req"
+  uv venv --quiet "$build" || install_failed "$?" "uv venv"
+  uv pip install --quiet --python "$build/bin/python" --require-hashes -r "$req" ||
+    install_failed "$?" "installing the engine's Python dependencies from PyPI (uv pip install -r $req)"
   # --no-deps: the wheel's dependencies just came from the hashed lock, and
   # letting it re-resolve them would pull unpinned versions in beside them.
-  uv pip install --quiet --python "$build/bin/python" --no-deps -- "$wheel"
+  uv pip install --quiet --python "$build/bin/python" --no-deps -- "$wheel" ||
+    install_failed "$?" "installing the engine wheel (uv pip install $wheel)"
 elif command -v python3 >/dev/null 2>&1; then
-  python3 -m venv "$build"
-  "$build/bin/pip" install --quiet --require-hashes -r "$req"
-  "$build/bin/pip" install --quiet --no-deps -- "$wheel"
+  python3 -m venv "$build" || install_failed "$?" "python3 -m venv"
+  "$build/bin/pip" install --quiet --require-hashes -r "$req" ||
+    install_failed "$?" "installing the engine's Python dependencies from PyPI (pip install -r $req)"
+  "$build/bin/pip" install --quiet --no-deps -- "$wheel" ||
+    install_failed "$?" "installing the engine wheel (pip install $wheel)"
 else
   echo "agent-sanitizer: python3 not found — the secret-redaction engine (Layer 4)" \
     "cannot be provisioned. Tool output will reach the model UNREDACTED (the hooks" \

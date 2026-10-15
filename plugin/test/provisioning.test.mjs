@@ -80,7 +80,7 @@ function fakeUv(t, { failLock = false } = {}) {
       `echo "$*" >> "${dir}/log"\n` +
       'py=""; prev=""; for a in "$@"; do [ "$prev" = --python ] && py="$a"; prev="$a"; done\n' +
       'case " $* " in\n' +
-      `  *" -r "*) ${failLock ? "exit 1" : "exit 0"} ;;\n` +
+      `  *" -r "*) ${failLock ? 'echo "error: Request failed after 3 retries" >&2; exit 2' : "exit 0"} ;;\n` +
       "esac\n" +
       'venv="$(dirname "$(dirname "$py")")"\n' +
       'mkdir -p "$venv/lib/site-packages/pkg" && echo "x = 1" > "$venv/lib/site-packages/pkg/mod.py"\n' +
@@ -209,7 +209,14 @@ test("a re-provision that fails leaves the previous venv serving", (t) => {
   const { staged, before } = provisioned(t);
   bumpLock(staged);
   const res = provisionRedactor(staged, fakeUv(t, { failLock: true }));
-  assert.notEqual(res.status, 0);
+  assert.equal(res.status, 1);
+  // uv's own line names neither the plugin nor PyPI; the provisioner's does,
+  // with the installer's exit status and the zipapp fallback.
+  assert.match(res.stderr, /error: Request failed after 3 retries\n/);
+  assert.match(
+    res.stderr,
+    /agent-sanitizer: installing the engine's Python dependencies from PyPI \(uv pip install -r [^)]*requirements\.txt\) failed \(exit 2\) — .*redacts through the committed zipapp/,
+  );
   // Untouched, stamps and all, and the half-built venv is gone: the next
   // session sees the stamp mismatch and tries again.
   assert.deepEqual(venvState(staged.data), before);
