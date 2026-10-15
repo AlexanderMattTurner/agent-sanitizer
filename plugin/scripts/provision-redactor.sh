@@ -79,32 +79,44 @@ done
 build="$plugin_data/venv.new.$$"
 retired="$plugin_data/venv.old.$$"
 
+# The installer's own error names neither this plugin nor what it was fetching
+# (uv's is a bare "Request failed after 3 retries"), so a failed step says which
+# it was, and what serves the session instead: the venv a failed rebuild left in
+# place, else the zipapp, which needs python3.
+install_failed() {
+  local serving
+  if [[ -x "$venv/bin/agent-secret-redactor-daemon" ]]; then
+    serving="the previously provisioned engine in $venv keeps serving"
+  elif command -v python3 >/dev/null 2>&1; then
+    serving="this session redacts through the committed zipapp instead"
+  else
+    serving="with no python3 for the committed zipapp either, tool output reaches the model UNREDACTED (the hooks fail open; set AGENT_SANITIZER_FAIL_OPEN=0 to have it suppressed instead)"
+  fi
+  echo "agent-sanitizer: $1 failed (exit $2) — the secret-redaction engine (Layer 4) was not provisioned; $serving until a later session's retry succeeds.${3:+ $3}" >&2
+  exit 1
+}
+pypi_hint="If that was a network error, PyPI was unreachable: check this host's network and proxy access to pypi.org"
+
 # --require-hashes is explicit, as in build-redactor-pyz.mjs, so an unhashed
 # lock line fails the install rather than turning hash checking off. Unlike
 # that build, prebuilt platform wheels are fine: this venv runs only on the host
 # that built it.
-#
-# The installer's own error is terse and unattributed — uv's "Request failed
-# after 3 retries" names neither this plugin nor PyPI — so each step that fails
-# says which one it was and what the session falls back to.
-install_failed() {
-  echo "agent-sanitizer: $2 failed (exit $1) — the secret-redaction engine (Layer 4) was not provisioned; this session redacts through the committed zipapp instead, and the next session retries. A network error here means PyPI was unreachable: check this host's network and proxy access to pypi.org (uv and pip honour HTTPS_PROXY; uv also UV_INDEX_URL and, behind a TLS-intercepting proxy, UV_NATIVE_TLS=1)." >&2
-  exit 1
-}
 if command -v uv >/dev/null 2>&1; then
-  uv venv --quiet "$build" || install_failed "$?" "uv venv"
+  uv venv --quiet "$build" || install_failed "uv venv" "$?"
   uv pip install --quiet --python "$build/bin/python" --require-hashes -r "$req" ||
-    install_failed "$?" "installing the engine's Python dependencies from PyPI (uv pip install -r $req)"
+    install_failed "installing the engine's dependencies (uv pip install -r)" "$?" \
+      "$pypi_hint (uv honours HTTPS_PROXY and UV_INDEX_URL; behind a TLS-intercepting proxy, set UV_NATIVE_TLS=1)."
   # --no-deps: the wheel's dependencies just came from the hashed lock, and
   # letting it re-resolve them would pull unpinned versions in beside them.
   uv pip install --quiet --python "$build/bin/python" --no-deps -- "$wheel" ||
-    install_failed "$?" "installing the engine wheel (uv pip install $wheel)"
+    install_failed "installing the engine wheel (uv pip install --no-deps)" "$?"
 elif command -v python3 >/dev/null 2>&1; then
-  python3 -m venv "$build" || install_failed "$?" "python3 -m venv"
+  python3 -m venv "$build" || install_failed "python3 -m venv" "$?"
   "$build/bin/pip" install --quiet --require-hashes -r "$req" ||
-    install_failed "$?" "installing the engine's Python dependencies from PyPI (pip install -r $req)"
+    install_failed "installing the engine's dependencies (pip install -r)" "$?" \
+      "$pypi_hint (pip honours HTTPS_PROXY, PIP_INDEX_URL and PIP_CERT)."
   "$build/bin/pip" install --quiet --no-deps -- "$wheel" ||
-    install_failed "$?" "installing the engine wheel (pip install $wheel)"
+    install_failed "installing the engine wheel (pip install --no-deps)" "$?"
 else
   echo "agent-sanitizer: python3 not found — the secret-redaction engine (Layer 4)" \
     "cannot be provisioned. Tool output will reach the model UNREDACTED (the hooks" \
