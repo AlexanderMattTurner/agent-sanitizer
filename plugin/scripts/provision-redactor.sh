@@ -79,10 +79,10 @@ done
 build="$plugin_data/venv.new.$$"
 retired="$plugin_data/venv.old.$$"
 
-# The installer's own error names neither this plugin nor what it was fetching
-# (uv's is a bare "Request failed after 3 retries"), so a failed step says which
-# it was, and what serves the session instead: the venv a failed rebuild left in
-# place, else the zipapp, which needs python3.
+unredacted_note="(the hooks fail open; set AGENT_SANITIZER_FAIL_OPEN=0 to have it suppressed instead)"
+
+# The installer's own error names neither this plugin nor the step: uv's is a
+# bare "Request failed after 3 retries".
 install_failed() {
   local serving
   if [[ -x "$venv/bin/agent-secret-redactor-daemon" ]]; then
@@ -90,37 +90,42 @@ install_failed() {
   elif command -v python3 >/dev/null 2>&1; then
     serving="this session redacts through the committed zipapp instead"
   else
-    serving="with no python3 for the committed zipapp either, tool output reaches the model UNREDACTED (the hooks fail open; set AGENT_SANITIZER_FAIL_OPEN=0 to have it suppressed instead)"
+    serving="with no python3 for the committed zipapp either, tool output reaches the model UNREDACTED $unredacted_note"
   fi
   echo "agent-sanitizer: $1 failed (exit $2) — the secret-redaction engine (Layer 4) was not provisioned; $serving until a later session's retry succeeds.${3:+ $3}" >&2
   exit 1
 }
-pypi_hint="If that was a network error, PyPI was unreachable: check this host's network and proxy access to pypi.org"
+index_hint="If that was a network error, the package index was unreachable: check this host's network and proxy access to pypi.org, or to the index"
 
 # --require-hashes is explicit, as in build-redactor-pyz.mjs, so an unhashed
 # lock line fails the install rather than turning hash checking off. Unlike
 # that build, prebuilt platform wheels are fine: this venv runs only on the host
 # that built it.
 if command -v uv >/dev/null 2>&1; then
-  uv venv --quiet "$build" || install_failed "uv venv" "$?"
+  venv_hint=""
+  if ! command -v python3 >/dev/null 2>&1; then
+    venv_hint="With no python3 on PATH, uv downloads a managed Python from GitHub first: if that was a network error, install Python 3.10+ or allow that download."
+  fi
+  uv venv --quiet "$build" || install_failed "uv venv" "$?" "$venv_hint"
   uv pip install --quiet --python "$build/bin/python" --require-hashes -r "$req" ||
     install_failed "installing the engine's dependencies (uv pip install -r)" "$?" \
-      "$pypi_hint (uv honours HTTPS_PROXY and UV_INDEX_URL; behind a TLS-intercepting proxy, set UV_NATIVE_TLS=1)."
+      "$index_hint UV_INDEX_URL names (uv honours HTTPS_PROXY; behind a TLS-intercepting proxy, set UV_SYSTEM_CERTS=1, or UV_NATIVE_TLS=1 on an older uv)."
   # --no-deps: the wheel's dependencies just came from the hashed lock, and
   # letting it re-resolve them would pull unpinned versions in beside them.
   uv pip install --quiet --python "$build/bin/python" --no-deps -- "$wheel" ||
     install_failed "installing the engine wheel (uv pip install --no-deps)" "$?"
 elif command -v python3 >/dev/null 2>&1; then
-  python3 -m venv "$build" || install_failed "python3 -m venv" "$?"
+  python3 -m venv "$build" ||
+    install_failed "python3 -m venv" "$?" "On Debian/Ubuntu, install the python3-venv package."
   "$build/bin/pip" install --quiet --require-hashes -r "$req" ||
     install_failed "installing the engine's dependencies (pip install -r)" "$?" \
-      "$pypi_hint (pip honours HTTPS_PROXY, PIP_INDEX_URL and PIP_CERT)."
+      "$index_hint PIP_INDEX_URL names (pip honours HTTPS_PROXY and PIP_CERT)."
   "$build/bin/pip" install --quiet --no-deps -- "$wheel" ||
     install_failed "installing the engine wheel (pip install --no-deps)" "$?"
 else
   echo "agent-sanitizer: python3 not found — the secret-redaction engine (Layer 4)" \
-    "cannot be provisioned. Tool output will reach the model UNREDACTED (the hooks" \
-    "fail open; set AGENT_SANITIZER_FAIL_OPEN=0 to have it suppressed instead)" \
+    "cannot be provisioned. Tool output will reach the model UNREDACTED" \
+    "$unredacted_note" \
     "until Python 3.10+ or uv is installed and a new session starts." >&2
   exit 1
 fi
