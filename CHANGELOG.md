@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.66.3] - 2026-10-16
+
+### Fixed
+
+- Plugin redactor provisioning now provides step-specific advice when installation fails, clearly naming the failing step and offering zipapp fallback guidance.
+- Plugin redactor provisioning error messages now display what component actually serves when a step fails.
+
 ## [2.66.2] - 2026-10-14
 
 ### Fixed
