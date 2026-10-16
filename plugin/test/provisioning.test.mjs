@@ -62,16 +62,26 @@ function binWith(t, cmds) {
  * A `uv` that behaves like the real one where it matters: `uv venv` REFUSES a
  * path that already exists, and the engine wheel's console script is written
  * with the absolute interpreter path of the venv it was installed into. Every
- * `uv pip install` argv is appended to `<dir>/log`. `failLock` makes the
- * hashed-lock install fail, as a network or hash error would.
+ * `uv pip install` argv is appended to `<dir>/log`. `failAt` names the one
+ * step that fails with exit 2 — `venv`, `lock` (with real uv's network-error
+ * line) or `wheel`. A stub `python3` sits beside it unless `python3` is false,
+ * so whether the zipapp floor exists is the case's to state, not the host's.
  */
-function fakeUv(t, { failLock = false } = {}) {
+function fakeUv(t, { failAt = null, python3 = true } = {}) {
+  const fail = (step, line) =>
+    failAt === step ? `  echo "error: ${line}" >&2; exit 2\n` : "";
   const dir = join(scratch(t), "uv-bin");
   mkdirSync(dir);
+  if (python3) {
+    writeFileSync(join(dir, "python3"), "#!/bin/sh\nexit 0\n", {
+      mode: 0o755,
+    });
+  }
   writeFileSync(
     join(dir, "uv"),
     "#!/bin/sh\n" +
       'if [ "$1" = venv ]; then\n' +
+      fail("venv", "venv broke") +
       '  for d in "$@"; do :; done\n' +
       '  if [ -e "$d" ]; then echo "error: A virtual environment already exists at: $d" >&2; exit 2; fi\n' +
       '  mkdir -p "$d/bin" && printf "#!/bin/sh\\n" > "$d/bin/python" && chmod 755 "$d/bin/python"\n' +
@@ -80,8 +90,11 @@ function fakeUv(t, { failLock = false } = {}) {
       `echo "$*" >> "${dir}/log"\n` +
       'py=""; prev=""; for a in "$@"; do [ "$prev" = --python ] && py="$a"; prev="$a"; done\n' +
       'case " $* " in\n' +
-      `  *" -r "*) ${failLock ? "exit 1" : "exit 0"} ;;\n` +
+      '  *" -r "*)\n' +
+      fail("lock", "Request failed after 3 retries") +
+      "  exit 0 ;;\n" +
       "esac\n" +
+      fail("wheel", "wheel broke") +
       'venv="$(dirname "$(dirname "$py")")"\n' +
       'mkdir -p "$venv/lib/site-packages/pkg" && echo "x = 1" > "$venv/lib/site-packages/pkg/mod.py"\n' +
       'printf "#!%s/bin/python\\nimport sys\\n" "$venv" > "$venv/bin/agent-secret-redactor-daemon"\n' +
@@ -106,7 +119,11 @@ function stageRedactor(t) {
   return { plugin, data: join(scratch(t), "data") };
 }
 
-function provisionRedactor({ plugin, data }, uvDir, { umask = "022" } = {}) {
+function provisionRedactor(
+  { plugin, data },
+  uvDir,
+  { umask = "022", path = "/usr/bin:/bin" } = {},
+) {
   // Through `sh -c` so the umask is the case's to state, not the runner's.
   return spawnSync(
     "sh",
@@ -118,7 +135,7 @@ function provisionRedactor({ plugin, data }, uvDir, { umask = "022" } = {}) {
     {
       encoding: "utf8",
       env: {
-        PATH: `${uvDir}:/usr/bin:/bin`,
+        PATH: `${uvDir}:${path}`,
         AGENT_SANITIZER_SECRETS_ENABLED: "1",
         CLAUDE_PLUGIN_DATA: data,
       },
@@ -208,11 +225,115 @@ test("a group-writable umask leaves nothing in the venv another uid could edit",
 test("a re-provision that fails leaves the previous venv serving", (t) => {
   const { staged, before } = provisioned(t);
   bumpLock(staged);
-  const res = provisionRedactor(staged, fakeUv(t, { failLock: true }));
-  assert.notEqual(res.status, 0);
+  const res = provisionRedactor(staged, fakeUv(t, { failAt: "lock" }));
+  assert.equal(res.status, 1, res.stderr);
+  // uv's own line names neither the plugin nor PyPI; the provisioner's does,
+  // and names what actually serves: the venv left in place, not the zipapp.
+  assert.match(res.stderr, /error: Request failed after 3 retries\n/);
+  assert.match(
+    res.stderr,
+    /installing the engine's dependencies \(uv pip install -r\) failed \(exit 2\) — .*the previously provisioned engine in \S+venv keeps serving.* package index was unreachable/,
+  );
+  assert.doesNotMatch(res.stderr, /zipapp/);
   // Untouched, stamps and all, and the half-built venv is gone: the next
   // session sees the stamp mismatch and tries again.
   assert.deepEqual(venvState(staged.data), before);
+});
+
+for (const [failAt, step, pypi] of [
+  ["venv", "uv venv", false],
+  ["lock", "installing the engine's dependencies (uv pip install -r)", true],
+  ["wheel", "installing the engine wheel (uv pip install --no-deps)", false],
+]) {
+  test(`a first provision failing at ${failAt} names the step and the zipapp fallback`, (t) => {
+    const staged = stageRedactor(t);
+    const res = provisionRedactor(staged, fakeUv(t, { failAt }));
+    assert.equal(res.status, 1, res.stderr);
+    const line = res.stderr
+      .split("\n")
+      .find((l) => l.startsWith("agent-sanitizer: "));
+    assert.ok(line, res.stderr);
+    assert.ok(
+      line.startsWith(`agent-sanitizer: ${step} failed (exit 2) — `),
+      line,
+    );
+    assert.match(line, /redacts through the committed zipapp instead/);
+    // The network hint only where the step reaches the package index.
+    assert.equal(line.includes("package index was unreachable"), pypi, line);
+    // The half-built venv is gone, so the next session starts clean.
+    assert.deepEqual(
+      readdirSync(staged.data).filter((n) => n.startsWith("venv")),
+      [],
+    );
+  });
+}
+
+/** Everything the provisioner and the fakes run before an install fails. */
+const INSTALL_PATH_CMDS = [
+  "sh",
+  "bash",
+  "cat",
+  "chmod",
+  "cmp",
+  "date",
+  "dirname",
+  "mkdir",
+  "rm",
+];
+
+for (const [failAt, step, hint] of [
+  ["venv", "uv venv", /uv downloads a managed Python from GitHub first/],
+  [
+    "lock",
+    "installing the engine's dependencies (uv pip install -r)",
+    /package index was unreachable/,
+  ],
+]) {
+  test(`a failed ${failAt} step on a host with no python3 says output goes unredacted`, (t) => {
+    // No python3 anywhere on PATH: the zipapp floor needs one, so uv alone
+    // does not keep secrets redacted.
+    const res = provisionRedactor(
+      stageRedactor(t),
+      fakeUv(t, { failAt, python3: false }),
+      { path: binWith(t, INSTALL_PATH_CMDS) },
+    );
+    assert.equal(res.status, 1, res.stderr);
+    const line = res.stderr
+      .split("\n")
+      .find((l) => l.startsWith("agent-sanitizer: "));
+    assert.ok(
+      line?.startsWith(`agent-sanitizer: ${step} failed (exit 2) — `),
+      res.stderr,
+    );
+    assert.match(line, /tool output reaches the model UNREDACTED/);
+    assert.match(line, hint);
+    assert.doesNotMatch(line, /zipapp instead/);
+  });
+}
+
+test("the pip arm names its failing step and pip's own index knobs", (t) => {
+  // A python3 with no uv beside it: `-m venv` lays down a pip whose hashed-lock
+  // install fails the way an unreachable index does.
+  const dir = join(scratch(t), "py-bin");
+  mkdirSync(dir);
+  writeFileSync(
+    join(dir, "python3"),
+    "#!/bin/sh\n" +
+      '[ "$1 $2" = "-m venv" ] || exit 0\n' +
+      'mkdir -p "$3/bin"\n' +
+      'printf \'#!/bin/sh\\necho "ERROR: Could not find a version" >&2\\nexit 1\\n\' > "$3/bin/pip"\n' +
+      'chmod 755 "$3/bin/pip"\n',
+    { mode: 0o755 },
+  );
+  const res = provisionRedactor(stageRedactor(t), dir, {
+    path: binWith(t, INSTALL_PATH_CMDS),
+  });
+  assert.equal(res.status, 1, res.stderr);
+  assert.match(
+    res.stderr,
+    /agent-sanitizer: installing the engine's dependencies \(pip install -r\) failed \(exit 1\) — .*committed zipapp instead.* PIP_INDEX_URL/,
+  );
+  assert.doesNotMatch(res.stderr, /UV_/);
 });
 
 /**
