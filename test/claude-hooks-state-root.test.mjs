@@ -17,6 +17,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -75,6 +76,13 @@ describe("resolveStateRoot", () => {
     symlinkSync(fresh(), link);
     return link;
   };
+  // mkdir reports EEXIST through a symlink to a directory, so only the lstat
+  // check stands between this leaf and a store in a directory someone chose.
+  const symlinkedLeaf = () => {
+    const data = fresh();
+    symlinkSync(fresh(), join(data, "session-state"));
+    return data;
+  };
   const aFile = () => {
     const file = join(dir, `file${seq++}`);
     writeFileSync(file, "");
@@ -84,11 +92,21 @@ describe("resolveStateRoot", () => {
     ["a world-writable plugin data dir", () => fresh(0o777)],
     ["a group-writable session-state dir", groupWritableLeaf],
     ["a symlinked plugin data dir", symlinked],
+    ["a symlinked session-state dir", symlinkedLeaf],
     ["a plugin data path that is a file", aFile],
   ]))
     it(`falls back to $TMPDIR for ${name}`, () => {
       assert.equal(resolveStateRoot({ CLAUDE_PLUGIN_DATA: make() }), tmpdir());
     });
+
+  it("plants nothing in the target of a refused plugin data dir", () => {
+    const target = fresh(0o777);
+    const link = join(dir, `link${seq++}`);
+    symlinkSync(target, link);
+    resolveStateRoot({ CLAUDE_PLUGIN_DATA: link });
+    resolveStateRoot({ CLAUDE_PLUGIN_DATA: target });
+    assert.deepEqual(readdirSync(target), []);
+  });
 });
 
 const ALERT = new URL(
@@ -98,8 +116,9 @@ const ALERT = new URL(
 const REVEAL = new URL("../claude-hooks/lib/reveal.mjs", import.meta.url).href;
 
 /**
- * Record a launch InstructionsLoaded scan and a gate finding in a fresh process,
- * empty its whole $TMPDIR the way dirhelper does, then ask both readers again.
+ * Record a launch InstructionsLoaded scan, a gate finding and a Layer-2 span in a
+ * fresh process, empty its whole $TMPDIR the way dirhelper does, then ask each
+ * reader again.
  * @param {{ pluginData: boolean }} opts
  */
 function afterTmpPurge({ pluginData }) {
@@ -119,13 +138,16 @@ function afterTmpPurge({ pluginData }) {
     import { readdirSync, rmSync } from "node:fs";
     import { join } from "node:path";
     const a = await import(${JSON.stringify(ALERT)});
-    const { revealDir } = await import(${JSON.stringify(REVEAL)});
+    const r = await import(${JSON.stringify(REVEAL)});
     const sid = "long-lived-session";
+    const key = "0123456789ab";
     a.recordInstructionsLoaded(sid);
     a.appendAlert("uncleanable CLAUDE.md", sid);
+    r.persistSpan(key, "hidden original");
     const before = {
       notice: a.instructionsLoadedGapNotice(sid),
       alert: a.invisibleCharAlert(sid),
+      span: r.readSpan(key),
     };
     for (const name of readdirSync(process.env.TMPDIR))
       rmSync(join(process.env.TMPDIR, name), { recursive: true, force: true });
@@ -133,8 +155,8 @@ function afterTmpPurge({ pluginData }) {
       before,
       notice: a.instructionsLoadedGapNotice(sid),
       alert: a.invisibleCharAlert(sid),
+      span: r.readSpan(key),
       alertBase: a.ALERT_BASE,
-      revealDir: revealDir(),
     }));
   `;
   const res = spawnSync(
@@ -151,13 +173,14 @@ function afterTmpPurge({ pluginData }) {
 }
 
 describe("a $TMPDIR purge under a live session", () => {
-  it("keeps the InstructionsLoaded marker and the gate's findings under a plugin data dir", () => {
+  it("keeps the marker, the gate's findings and the spans under a plugin data dir", () => {
     const r = afterTmpPurge({ pluginData: true });
     assert.equal(r.before.notice, null);
     assert.match(r.before.alert, /uncleanable CLAUDE\.md/u);
+    assert.equal(r.before.span, "hidden original");
     assert.ok(r.alertBase.startsWith(join(r.pluginData, "session-state")));
-    assert.ok(r.revealDir.startsWith(join(r.pluginData, "session-state")));
     assert.equal(r.notice, null, "the purge produced a false gap notice");
+    assert.equal(r.span, "hidden original", "the purge failed a rehydration");
     assert.match(
       r.alert,
       /uncleanable CLAUDE\.md/u,
@@ -165,14 +188,17 @@ describe("a $TMPDIR purge under a live session", () => {
     );
   });
 
-  // The defect itself, still live where no plugin data dir exists: proves the
-  // purge above reaches the store it would have reached before the move.
-  it("still loses both without one", () => {
+  // Non-vacuity for the case above: the purge reaches the store wherever the
+  // store is in $TMPDIR. Pins the remaining exposure of hosts with no plugin
+  // data dir — this goes red, deliberately, the day that gap is closed.
+  it("still loses all three without one", () => {
     const r = afterTmpPurge({ pluginData: false });
     assert.equal(r.before.notice, null);
     assert.match(r.before.alert, /uncleanable CLAUDE\.md/u);
+    assert.equal(r.before.span, "hidden original");
     assert.ok(r.alertBase.startsWith(r.fakeTmp));
     assert.match(r.notice, /no InstructionsLoaded scan has run/u);
     assert.equal(r.alert, null);
+    assert.equal(r.span, null);
   });
 });

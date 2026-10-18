@@ -254,6 +254,38 @@ describe("the shared no-session fallback has a lifetime", () => {
   });
 });
 
+describe("a live session outlives the stale-session sweep", () => {
+  // The sweep ages another session's artifacts by timestamp, and the launch
+  // marker and the findings are written once. A session open past the sweep's
+  // age, joined by a second session in the same project, lost both: a false
+  // "no InstructionsLoaded scan has run" notice and a gate lifted mid-session.
+  const WEEK_AND_A_DAY_S = 8 * 24 * 60 * 60;
+  /** @param {string} path */
+  const ageOut = (path) => {
+    const past = Date.now() / 1000 - WEEK_AND_A_DAY_S;
+    lutimesSync(path, past, past);
+  };
+  const [live, other] = SESSIONS;
+
+  for (const [name, read] of /** @type {[string, boolean][]} */ ([
+    ["read since it aged", true],
+    ["never read since it aged", false],
+  ]))
+    it(`${read ? "keeps" : "sweeps"} the marker and findings ${name}`, () => {
+      recordInstructionsLoaded(live);
+      appendAlert("uncleanable CLAUDE.md", live);
+      ageOut(instructionsLoadedFile(live));
+      ageOut(alertDir(live));
+      if (read) {
+        assert.equal(instructionsLoadedSeen(live), true);
+        assert.match(invisibleCharAlert(live) ?? "", /uncleanable/u);
+      }
+      sweepStaleSessions(other);
+      assert.equal(existsSync(instructionsLoadedFile(live)), read);
+      assert.equal(existsSync(alertDir(live)), read);
+    });
+});
+
 describe("concurrent findings cannot lose each other", () => {
   it("keeps every finding recorded in one session", () => {
     // The defect this replaces: a lockless read-modify-write on ONE file, so

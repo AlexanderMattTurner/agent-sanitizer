@@ -32,6 +32,7 @@ import {
   PROJECT_HASH,
   scrubUntrustedText,
   STATE_ROOT,
+  touchLiveState,
   writeFileNoFollow,
   writeSentinelFile,
 } from "./hook-io.mjs";
@@ -142,12 +143,18 @@ export function instructionsLoadedNoticeFile(sessionId) {
  * lazily-loaded instruction files are being scanned at all. Ownership-validated
  * like every other marker here: a co-tenant could otherwise plant the
  * predictable path and suppress the notice below, which is the whole signal that
- * nested files are going unscanned.
+ * nested files are going unscanned. A marker that is seen is stamped as used:
+ * it is written once at launch, so otherwise a session outliving
+ * MARKER_TTL_MS would have it swept by another session's SessionStart and read
+ * its absence as the event never having fired.
  * @param {string} [sessionId]
  * @returns {boolean}
  */
 export function instructionsLoadedSeen(sessionId) {
-  return markerIsTrusted(instructionsLoadedFile(sessionId));
+  const marker = instructionsLoadedFile(sessionId);
+  if (!markerIsTrusted(marker)) return false;
+  touchLiveState(marker);
+  return true;
 }
 
 /** How long a past session's artifacts are kept before a later session sweeps. */
@@ -545,6 +552,9 @@ export function invisibleCharAlert(sessionId) {
   const parts = [];
   for (const dir of dirs) {
     if (!privateDirAt(dir)) continue;
+    // A live session's findings must outlast any sweep that ages the store by
+    // its directory's timestamp: losing them lifts the gate mid-session.
+    if (dir === own) touchLiveState(dir);
     // Sorted so a multi-finding report reads the same on every call; the names
     // are random, so the order carries no meaning beyond being stable.
     for (const name of readdirSync(dir).sort()) {

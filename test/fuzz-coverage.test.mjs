@@ -424,6 +424,7 @@ const FUZZ_EXEMPT = Object.freeze({
       "sweepStaleConfirms",
       "sweepStaleReveals",
       "sweepStaleSessions",
+      "touchLiveState",
       "writeFileNoFollow",
       "writeSentinelFile",
     ],

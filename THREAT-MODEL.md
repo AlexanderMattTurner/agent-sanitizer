@@ -797,7 +797,7 @@ positive costs a sentence of context, never a mangled input):
   the identical Write confirms and passes. The confirmation is the model's
   deliberate retry — never a human permission prompt — held as a
   consumed-on-use, TTL-bounded sentinel (keyed to path + content + the dropped
-  values) via the same squat-resistant `$TMPDIR` helpers as the invisible-char
+  values) in `$TMPDIR` via the same squat-resistant helpers as the invisible-char
   gate. Tracked files, secret-free files, failed git probes and unmappable
   views all skip the guard (fail open). "Tracked" approximates "recoverable":
   an uncommitted secret line on a tracked file is an accepted gap — the

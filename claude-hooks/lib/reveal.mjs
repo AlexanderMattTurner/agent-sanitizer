@@ -9,8 +9,8 @@
  * instructions" envelope (REVEAL_READ_ENVELOPE) re-attached when that file is read.
  * Read is not untrusted ingress, so a Read of the sidecar already bypasses
  * Layer 2 (no re-splice); the carve-out's job is to mark the bytes untrusted.
- * The store is content-addressed (identical output dedupes) and lives under a
- * throwaway tmp dir; _AGENT_SANITIZER_REVEAL_DIR overrides the location.
+ * The store is content-addressed (identical output dedupes) and lives under
+ * STATE_ROOT; _AGENT_SANITIZER_REVEAL_DIR overrides the location.
  *
  * The same dir also holds the per-splice SPAN files (`span-<key>.txt`): each
  * Layer-2 splice's (redacted) original, keyed by its placeholder's
@@ -47,12 +47,10 @@ import { readKnob } from "./knobs.mjs";
  * @returns {string}
  */
 export function revealDir() {
-  // Under STATE_ROOT so an OS temp cleaner cannot empty it under a live session
-  // (rehydration would fail closed). Project-keyed: one unkeyed directory is shared
-  // by every project on the machine, so one project's sweep ages out another's
-  // spans and a rehydration that should have restored a placeholder fails closed
-  // instead. The 12-hex span KEY inside the directory is untouched — it is the
-  // published placeholder grammar, not a path detail.
+  // Under STATE_ROOT, so an OS temp cleaner cannot empty it under a live session.
+  // Project-keyed, so one project's sweep cannot age out another's spans — either
+  // loss fails a rehydration closed. The 12-hex span KEY inside is untouched: it
+  // is the published placeholder grammar, not a path detail.
   return (
     readKnob("_AGENT_SANITIZER_REVEAL_DIR") ??
     join(STATE_ROOT, `agent-sanitizer-layer2-reveal-${PROJECT_HASH}`)
