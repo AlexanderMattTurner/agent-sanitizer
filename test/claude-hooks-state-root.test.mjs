@@ -14,7 +14,9 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   lstatSync,
+  lutimesSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -99,6 +101,20 @@ describe("resolveStateRoot", () => {
       assert.equal(resolveStateRoot({ CLAUDE_PLUGIN_DATA: make() }), tmpdir());
     });
 
+  it(
+    "falls back to $TMPDIR for a session-state dir this uid cannot write",
+    // Root's writes ignore the mode bits, so there is no unwritable dir to make.
+    { skip: process.getuid?.() === 0 && "root bypasses mode bits" },
+    () => {
+      const data = fresh();
+      const leaf = join(data, "session-state");
+      mkdirSync(leaf);
+      chmodSync(leaf, 0o500);
+      assert.equal(resolveStateRoot({ CLAUDE_PLUGIN_DATA: data }), tmpdir());
+      chmodSync(leaf, 0o700);
+    },
+  );
+
   it("plants nothing in the target of a refused plugin data dir", () => {
     const target = fresh(0o777);
     const link = join(dir, `link${seq++}`);
@@ -114,6 +130,22 @@ const ALERT = new URL(
   import.meta.url,
 ).href;
 const REVEAL = new URL("../claude-hooks/lib/reveal.mjs", import.meta.url).href;
+
+/**
+ * Run an ES module `script` in a fresh node under `env` — STATE_ROOT is fixed at
+ * module load — and return the JSON it prints.
+ * @param {NodeJS.ProcessEnv} env
+ * @param {string} script
+ */
+function inFreshProcess(env, script) {
+  const res = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", script],
+    { env, encoding: "utf8" },
+  );
+  assert.equal(res.status, 0, res.stderr);
+  return JSON.parse(res.stdout);
+}
 
 /**
  * Record a launch InstructionsLoaded scan, a gate finding and a Layer-2 span in a
@@ -134,20 +166,22 @@ function afterTmpPurge({ pluginData }) {
   delete env.CLAUDE_PLUGIN_DATA;
   delete env._AGENT_SANITIZER_REVEAL_DIR;
   if (pluginData) env.CLAUDE_PLUGIN_DATA = fresh();
-  const script = `
+  const result = inFreshProcess(
+    env,
+    `
     import { readdirSync, rmSync } from "node:fs";
     import { join } from "node:path";
     const a = await import(${JSON.stringify(ALERT)});
     const r = await import(${JSON.stringify(REVEAL)});
     const sid = "long-lived-session";
-    const key = "0123456789ab";
+    const span = "ab".repeat(6);
     a.recordInstructionsLoaded(sid);
     a.appendAlert("uncleanable CLAUDE.md", sid);
-    r.persistSpan(key, "hidden original");
+    r.persistSpan(span, "hidden original");
     const before = {
       notice: a.instructionsLoadedGapNotice(sid),
       alert: a.invisibleCharAlert(sid),
-      span: r.readSpan(key),
+      span: r.readSpan(span),
     };
     for (const name of readdirSync(process.env.TMPDIR))
       rmSync(join(process.env.TMPDIR, name), { recursive: true, force: true });
@@ -155,21 +189,12 @@ function afterTmpPurge({ pluginData }) {
       before,
       notice: a.instructionsLoadedGapNotice(sid),
       alert: a.invisibleCharAlert(sid),
-      span: r.readSpan(key),
+      span: r.readSpan(span),
       alertBase: a.ALERT_BASE,
     }));
-  `;
-  const res = spawnSync(
-    process.execPath,
-    ["--input-type=module", "-e", script],
-    { env, encoding: "utf8" },
+  `,
   );
-  assert.equal(res.status, 0, res.stderr);
-  return {
-    ...JSON.parse(res.stdout),
-    fakeTmp,
-    pluginData: env.CLAUDE_PLUGIN_DATA,
-  };
+  return { ...result, fakeTmp, pluginData: env.CLAUDE_PLUGIN_DATA };
 }
 
 describe("a $TMPDIR purge under a live session", () => {
@@ -200,5 +225,50 @@ describe("a $TMPDIR purge under a live session", () => {
     assert.match(r.notice, /no InstructionsLoaded scan has run/u);
     assert.equal(r.alert, null);
     assert.equal(r.span, null);
+  });
+});
+
+describe("the reveal sweep reaches projects that are never reopened", () => {
+  // The state root can be persistent, and each project sweeps only its own
+  // store's files, so a one-off project's spans — tool output — stayed for good.
+  it("removes another project's stale store and nothing it must keep", () => {
+    const root = fresh();
+    const store = (/** @type {string} */ hash) =>
+      join(root, `agent-sanitizer-layer2-reveal-${hash}`);
+    const old = (/** @type {string} */ path) => {
+      const past = Date.now() / 1000 - 8 * 24 * 60 * 60;
+      lutimesSync(path, past, past);
+    };
+    for (const hash of ["0badc0de", "cafef00d"]) {
+      mkdirSync(store(hash), { mode: 0o700 });
+      writeFileSync(join(store(hash), "span-x.txt"), "tool output");
+    }
+    old(join(store("0badc0de"), "span-x.txt"));
+    old(store("0badc0de"));
+    // A planted symlink at a store name: its target is not this uid's to empty.
+    const victim = fresh();
+    writeFileSync(join(victim, "keep"), "");
+    symlinkSync(victim, store("deadbeef"));
+    old(store("deadbeef"));
+    const env = { ...process.env, TMPDIR: root, CLAUDE_PROJECT_DIR: fresh() };
+    delete env.CLAUDE_PLUGIN_DATA;
+    delete env._AGENT_SANITIZER_REVEAL_DIR;
+    inFreshProcess(
+      env,
+      `const r = await import(${JSON.stringify(REVEAL)});
+       r.sweepStaleReveals();
+       console.log("null");`,
+    );
+    assert.equal(
+      existsSync(store("0badc0de")),
+      false,
+      "a stale store was kept",
+    );
+    assert.equal(
+      existsSync(store("cafef00d")),
+      true,
+      "a fresh store was swept",
+    );
+    assert.deepEqual(readdirSync(victim), ["keep"]);
   });
 });
