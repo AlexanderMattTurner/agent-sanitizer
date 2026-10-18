@@ -325,7 +325,13 @@ const FUZZ_EXEMPT = Object.freeze({
   ),
   ...withReason(
     "tests an lstat result or assembles a record from hook-supplied metadata; no untrusted bytes are parsed",
-    ["currentUid", "isPrivateDir", "ownedByCurrentUser", "traceRecord"],
+    [
+      "currentUid",
+      "isPrivateDir",
+      "ownedByCurrentUser",
+      "privateDirAt",
+      "traceRecord",
+    ],
   ),
   ...withReason("process lifecycle, shared state and lazy module loading", [
     "EmptyStdinError",
@@ -411,6 +417,7 @@ const FUZZ_EXEMPT = Object.freeze({
       "readSpan",
       "recordInstructionsLoaded",
       "recordInstructionsLoadedNotice",
+      "resolveStateRoot",
       "revealDir",
       "sessionPrefix",
       "spanPath",

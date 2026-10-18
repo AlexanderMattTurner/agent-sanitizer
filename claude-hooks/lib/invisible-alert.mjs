@@ -21,16 +21,17 @@ import {
 } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { basename, join } from "node:path";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import {
   hookgateMarkerPath,
   lazyImport,
   markerIsTrusted,
-  isPrivateDir,
+  privateDirAt,
   probeSetupAlive,
   PROJECT_DIR,
   PROJECT_HASH,
   scrubUntrustedText,
+  STATE_ROOT,
   writeFileNoFollow,
   writeSentinelFile,
 } from "./hook-io.mjs";
@@ -62,10 +63,13 @@ const { applyLayer1WellFormed } =
 /**
  * The path prefix every alert artifact of this PROJECT shares. Never a file
  * itself — only {@link sessionPrefix} and the sweep read it — so that one
- * `startsWith` covers every artifact the sweep must age out.
+ * `startsWith` covers every artifact the sweep must age out. Under STATE_ROOT,
+ * not $TMPDIR itself: an OS temp cleaner deleting a live session's marker would
+ * read as the InstructionsLoaded scan never having run, and deleting its
+ * findings would lift the gate mid-session.
  */
 export const ALERT_BASE = join(
-  tmpdir(),
+  STATE_ROOT,
   `.claude-invisible-char-alert-${PROJECT_HASH}`,
 );
 
@@ -86,7 +90,7 @@ export const ALERT_BASE = join(
 export function sessionPrefix(sessionId) {
   // The id becomes a path component, so anything outside this class — a `/` in
   // a hostile session id above all — is folded away rather than escaping
-  // $TMPDIR. A host that exports no session id falls back to one shared name,
+  // STATE_ROOT. A host that exports no session id falls back to one shared name,
   // whose findings and ack are bounded by FALLBACK_TTL_MS instead.
   const key =
     (sessionId ?? "").replace(/[^A-Za-z0-9._-]/gu, "_") || "no-session";
@@ -206,26 +210,6 @@ function withinTtl(path, ttlMs) {
 const withinFallbackTtl = (path) => withinTtl(path, FALLBACK_TTL_MS);
 
 /**
- * Whether `path` is a private directory of this uid ({@link isPrivateDir}) —
- * the directory counterpart of markerIsTrusted. `lstat`, so a symlink planted
- * at the predictable alert-dir path is judged on ITSELF: followed, it would let
- * a co-tenant aim the gate's reader at a directory of unrelated files this uid
- * owns and splice their bytes into a permission prompt. A group/other-writable
- * one is refused too: a co-tenant could unlink the finding the gate needs.
- * @param {string} path
- * @returns {boolean}
- */
-function dirIsTrusted(path) {
-  let st;
-  try {
-    st = lstatSync(path);
-  } catch {
-    return false;
-  }
-  return isPrivateDir(st);
-}
-
-/**
  * Delete this project's artifacts from OTHER sessions once they are older than
  * the TTL. The current session's own prefix is skipped, so the sweep can never
  * answer its own question wrong; every other session's files are past history
@@ -237,7 +221,7 @@ function dirIsTrusted(path) {
  * @returns {void}
  */
 export function sweepStaleSessions(sessionId) {
-  const dir = tmpdir();
+  const dir = STATE_ROOT;
   const prefix = `${basename(ALERT_BASE)}.s-`;
   const keep = basename(sessionPrefix(sessionId));
   const cutoff = Date.now() - MARKER_TTL_MS;
@@ -288,7 +272,7 @@ export function sweepStaleSessions(sessionId) {
  */
 function sweepStaleFallback(sessionId) {
   const dir = alertDir();
-  const inherited = alertDir(sessionId) !== dir && dirIsTrusted(dir);
+  const inherited = alertDir(sessionId) !== dir && privateDirAt(dir);
   const entries = inherited
     ? readdirSync(dir).map((name) => join(dir, name))
     : [];
@@ -560,7 +544,7 @@ export function invisibleCharAlert(sessionId) {
   const dirs = own === alertDir() ? [own] : [own, alertDir()];
   const parts = [];
   for (const dir of dirs) {
-    if (!dirIsTrusted(dir)) continue;
+    if (!privateDirAt(dir)) continue;
     // Sorted so a multi-finding report reads the same on every call; the names
     // are random, so the order carries no meaning beyond being stable.
     for (const name of readdirSync(dir).sort()) {
@@ -597,7 +581,7 @@ export function appendAlert(text, sessionId) {
   let usable;
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    usable = dirIsTrusted(dir);
+    usable = privateDirAt(dir);
   } catch {
     usable = false;
   }

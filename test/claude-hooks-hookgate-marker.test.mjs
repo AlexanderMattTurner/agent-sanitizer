@@ -235,9 +235,12 @@ describe("ownership checks read the kernel uid, never the passwd database", () =
         const counts = identifierCounts(program);
         return (
           rel !== ownHome &&
-          ["ownedByCurrentUser", "isPrivateDir", "currentUid"].some(
-            (name) => (counts.get(name) ?? 0) > 1,
-          )
+          [
+            "ownedByCurrentUser",
+            "isPrivateDir",
+            "privateDirAt",
+            "currentUid",
+          ].some((name) => (counts.get(name) ?? 0) > 1)
         );
       })
       .map(([rel]) => rel);

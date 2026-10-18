@@ -4,12 +4,15 @@ import {
   openSync,
   closeSync,
   lstatSync,
+  mkdirSync,
   readFileSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { excludeProvisioning } from "./hook-timing.mjs";
 import { readKnob } from "./knobs.mjs";
@@ -695,6 +698,39 @@ export const PROJECT_HASH = createHash("sha256")
   .digest("hex")
   .slice(0, 8);
 
+/**
+ * The directory the session-lifetime stores live under: the alert markers and
+ * findings (invisible-alert.mjs) and the reveal sidecars (reveal.mjs). They must
+ * outlive the longest session, which $TMPDIR does not promise — macOS's daily
+ * dirhelper job deletes anything in the per-user `/var/folders/.../T/` not
+ * accessed for 3 days, and a marker written at launch and only ever `lstat`ed
+ * then vanishes from a session still running, its absence read as "never ran".
+ *
+ * `$CLAUDE_PLUGIN_DATA/session-state` when both it and the plugin data dir are
+ * private to this uid ({@link isPrivateDir}; write on the parent is enough to
+ * swap the leaf). Created here, 0700, so the launch-time InstructionsLoaded
+ * event and the first tool call resolve the same root whichever runs first.
+ * Otherwise $TMPDIR, where every store's own squat checks already apply.
+ * @param {Record<string, string | undefined>} env
+ * @returns {string}
+ */
+export function resolveStateRoot(env) {
+  const data = env.CLAUDE_PLUGIN_DATA;
+  if (!data) return tmpdir();
+  const root = join(data, "session-state");
+  try {
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+  } catch {
+    // A read-only or unreachable plugin data dir is an ordinary host: $TMPDIR
+    // still holds the state, at its shorter lifetime.
+    return tmpdir();
+  }
+  return privateDirAt(data) && privateDirAt(root) ? root : tmpdir();
+}
+
+/** {@link resolveStateRoot} for this process, resolved once at load. */
+export const STATE_ROOT = resolveStateRoot(process.env);
+
 /** The marker filename stem; the project directory is appended to it. */
 const HOOKGATE_MARKER_STEM = "agent-sanitizer-hookgate-inflight-";
 
@@ -1102,6 +1138,25 @@ export function isPrivateDir(
   const owner =
     ownedByCurrentUser(st, uid) || (uid !== null && rootMayOwn && st.uid === 0);
   return st.isDirectory() && owner && (st.mode & 0o022) === 0;
+}
+
+/**
+ * Whether `path` is a private directory of this uid ({@link isPrivateDir}) —
+ * the directory counterpart of markerIsTrusted. `lstat`, so a symlink planted at
+ * a predictable path is judged on ITSELF: followed, it would let a co-tenant aim
+ * a reader at unrelated files this uid owns (the alert gate splices those bytes
+ * into a permission prompt). An absent path is simply not one.
+ * @param {string} path
+ * @returns {boolean}
+ */
+export function privateDirAt(path) {
+  let st;
+  try {
+    st = lstatSync(path);
+  } catch {
+    return false;
+  }
+  return isPrivateDir(st);
 }
 
 /**

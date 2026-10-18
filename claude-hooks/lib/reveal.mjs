@@ -31,9 +31,13 @@ import {
   closeSync,
   constants,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
-import { PROJECT_HASH, isPrivateDir, writeFileNoFollow } from "./hook-io.mjs";
+import {
+  PROJECT_HASH,
+  STATE_ROOT,
+  isPrivateDir,
+  writeFileNoFollow,
+} from "./hook-io.mjs";
 import { readKnob } from "./knobs.mjs";
 
 /**
@@ -43,14 +47,15 @@ import { readKnob } from "./knobs.mjs";
  * @returns {string}
  */
 export function revealDir() {
-  // Project-keyed like every other $TMPDIR store: one unkeyed directory is shared
+  // Under STATE_ROOT so an OS temp cleaner cannot empty it under a live session
+  // (rehydration would fail closed). Project-keyed: one unkeyed directory is shared
   // by every project on the machine, so one project's sweep ages out another's
   // spans and a rehydration that should have restored a placeholder fails closed
   // instead. The 12-hex span KEY inside the directory is untouched — it is the
   // published placeholder grammar, not a path detail.
   return (
     readKnob("_AGENT_SANITIZER_REVEAL_DIR") ??
-    join(tmpdir(), `agent-sanitizer-layer2-reveal-${PROJECT_HASH}`)
+    join(STATE_ROOT, `agent-sanitizer-layer2-reveal-${PROJECT_HASH}`)
   );
 }
 
