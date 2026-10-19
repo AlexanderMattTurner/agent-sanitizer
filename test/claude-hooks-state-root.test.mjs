@@ -249,8 +249,8 @@ describe("a $TMPDIR purge under a live session", () => {
 });
 
 describe("the reveal sweep reaches projects that are never reopened", () => {
-  // The state root can be persistent, and each project sweeps only its own
-  // store's files, so a one-off project's spans — tool output — stayed for good.
+  // The state root can be persistent, so a one-off project's spans — tool
+  // output — must age out without that project ever running again.
   it("removes another project's stale store and nothing it must keep", () => {
     const root = fresh();
     const store = (/** @type {string} */ hash) =>

@@ -1139,10 +1139,11 @@ export function ownedByCurrentUser(st, uid = currentUid()) {
  * Whether `st` (an lstat result) is a directory no untrusted uid can change: a
  * real directory (lstat, so a planted symlink is not one), owned by this uid —
  * or by root where `rootMayOwn` — with no group/other write bit. THE trust test
- * for every private directory these hooks keep (STATE_ROOT or $TMPDIR). Write is the
- * property because creating, unlinking or replacing an entry needs write on its
- * parent: a co-tenant holding it can delete the finding a gate needs, swap a
- * reveal file, or rebind the redactor socket to a listener that redacts nothing.
+ * for every private directory these hooks keep, under STATE_ROOT or $TMPDIR.
+ * Write is the property because creating, unlinking or replacing an entry needs
+ * write on its parent: a co-tenant holding it can delete the finding a gate
+ * needs, swap a reveal file, or rebind the redactor socket to a listener that
+ * redacts nothing.
  * Root ownership is strictly stronger than ours, so a deployment may hand a dir
  * to root (`rootMayOwn`); with no uid model nothing is trusted, root included.
  * @param {{ isDirectory(): boolean, uid: number, mode: number }} st

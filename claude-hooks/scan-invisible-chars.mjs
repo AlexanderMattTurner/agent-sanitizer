@@ -495,10 +495,10 @@ async function runScanCli({ trace: sink, scan: runScan, sessionId }) {
   // sessions left instead — SessionStart is the once-per-session touchpoint the
   // sweep belongs on.
   sweepStaleSessions(sessionId);
-  // The other two stores these hooks own (reveal under STATE_ROOT, confirm in $TMPDIR). Both are content- or
-  // fingerprint-addressed with no natural owner to delete them, so without a
-  // sweep they grow for the life of the machine; SessionStart is the only
-  // touchpoint that runs once per session rather than once per tool call.
+  // The other two stores these hooks own (reveal under STATE_ROOT, confirm in
+  // $TMPDIR). Both are content- or fingerprint-addressed with no natural owner
+  // to delete them, so without a sweep they grow for the life of the machine;
+  // SessionStart is the only touchpoint that runs once per session.
   sweepStaleReveals();
   sweepStaleConfirms();
 

@@ -927,6 +927,16 @@ it, so what anchors its trust is worth stating exactly.
   under `TMPDIR` is read only when this user owns it with owner-only write, so a
   squatted shared-temp entry cannot pre-suppress the warning that a call ran
   unsanitized.
+- **Session state lives under that directory too, not in `$TMPDIR`.** The
+  InstructionsLoaded marker, the invisible-char gate's findings and ack, and the
+  Layer-2 reveal spans sit in `${CLAUDE_PLUGIN_DATA}/session-state`, created mode
+  700 and used only when both it and the data directory are real directories
+  this user owns with no group/other write (`privateDirAt`) and the leaf is
+  writable. An OS temp cleaner (macOS dirhelper purges `$TMPDIR` entries unread
+  for 3 days) would otherwise delete a live session's marker — a false "no
+  InstructionsLoaded scan has run" notice — or its findings, lifting the gate.
+  A host with no plugin data directory, or one that fails those checks, falls
+  back to `$TMPDIR` and keeps that exposure.
 - **Opting out.** `AGENT_SANITIZER_HOOK_BINARY=0` never downloads and never runs
   a binary. That leaves the node path running the shipped bundle and the
   compile cache above; `AGENT_SANITIZER_COMPILE_CACHE=0` turns the cache off as

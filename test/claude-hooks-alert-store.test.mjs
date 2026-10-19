@@ -13,6 +13,7 @@
 import { describe, it, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import {
+  chownSync,
   existsSync,
   lutimesSync,
   mkdtempSync,
@@ -259,6 +260,17 @@ describe("the shared no-session fallback has a lifetime", () => {
     sweepStaleSessions();
     assert.equal(instructionsLoadedSeen(), false);
   });
+
+  it("does not let a read refresh the shared marker past that age", () => {
+    // A live session's read keeps its own marker fresh, but every session-less
+    // host reads this one, so a refresh would hold it — and the suppressed gap
+    // notice — forever.
+    recordInstructionsLoaded();
+    ageBy(instructionsLoadedFile(), 8 * DAY_MS);
+    assert.equal(instructionsLoadedSeen(), true);
+    sweepStaleSessions();
+    assert.equal(instructionsLoadedSeen(), false);
+  });
 });
 
 describe("a live session outlives the stale-session sweep", () => {
@@ -293,8 +305,8 @@ describe("a live session outlives the stale-session sweep", () => {
     });
 
   it("ages out a project that is never reopened", () => {
-    // The state root can be persistent, and each project used to sweep only
-    // its own prefix, so a one-off project's artifacts stayed for good.
+    // The state root can be persistent, so a one-off project's artifacts must
+    // age out without that project ever running again.
     const elsewhere = (/** @type {string} */ suffix) =>
       join(stateRoot, `.claude-invisible-char-alert-0badc0de.s-x.${suffix}`);
     writeFileSync(elsewhere("instructions-loaded"), "");
@@ -315,6 +327,33 @@ describe("a live session outlives the stale-session sweep", () => {
     rmSync(elsewhere("acked"));
     rmSync(bystander);
   });
+
+  it(
+    "leaves another uid's stale entry in a shared root, and keeps sweeping",
+    { skip: process.getuid?.() !== 0 && "only root can chown to another uid" },
+    () => {
+      // In a shared /tmp the entry is not ours to remove, and rmSync on another
+      // uid's file throws ENOTDIR — which aborted the whole SessionStart sweep.
+      const foreign = join(
+        stateRoot,
+        ".claude-invisible-char-alert-0badc0de.s-y.instructions-loaded",
+      );
+      const ours = join(
+        stateRoot,
+        ".claude-invisible-char-alert-0badc0de.s-z.instructions-loaded",
+      );
+      for (const path of [foreign, ours]) {
+        writeFileSync(path, "");
+        ageOut(path);
+      }
+      chownSync(foreign, 65534, 65534);
+      ageOut(foreign);
+      sweepStaleSessions(live);
+      assert.equal(existsSync(foreign), true, "another uid's entry was swept");
+      assert.equal(existsSync(ours), false, "the sweep stopped early");
+      rmSync(foreign);
+    },
+  );
 });
 
 describe("concurrent findings cannot lose each other", () => {
