@@ -73,11 +73,15 @@ module.exports = async ({ context, core }) => {
     return;
   }
 
-  // Strip HTML comments first with a newline-aware pattern so multi-line
-  // <!-- ... --> placeholders are removed too (a per-line /^<!--.*-->$/ only
-  // catches single-line comments).
-  const filtered = lessons
-    .replace(/<!--[\s\S]*?-->/g, "")
+  // Strip HTML comments with a newline-aware pattern, repeated until stable so
+  // crafted nesting (e.g. `<!--<!--inner-->-->`) cannot reintroduce `<!--`.
+  let withoutComments = lessons;
+  let prevComments;
+  do {
+    prevComments = withoutComments;
+    withoutComments = withoutComments.replace(/<!--[\s\S]*?-->/g, "");
+  } while (withoutComments !== prevComments);
+  const filtered = withoutComments
     .split("\n")
     .filter((line) => !line.trim().match(/^<[^>]*>$/))
     // Drop AI-attribution footers — session links, "Generated with Claude

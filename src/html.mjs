@@ -3010,6 +3010,11 @@ const SCRIPT_SCHEMES = new Set(["javascript", "vbscript"]);
 
 const RELATIVE_URL_BASE = "http://relative.invalid";
 
+// Protocol-relative URLs (`//host/path`) have an explicit host but no scheme.
+// The WHATWG parser strips leading whitespace/C0 before reading the `//`, so
+// the test mirrors that same prefix set.
+const PROTOCOL_RELATIVE_RE = /^[\t\n\r ]*\/\//;
+
 // `url` through the WHATWG URL parser, the one place a scheme is read: it
 // strips C0 controls, spaces and tabs/newlines as a browser does
 // (`&#1;javascript:`, `java\tscript:`). `scheme` is null for a page-relative
@@ -3022,7 +3027,9 @@ function resolveUrl(url) {
   return {
     scheme: absolute ? absolute.protocol.slice(0, -1) : null,
     parsed,
-    relative: !absolute && parsed.origin === RELATIVE_URL_BASE,
+    // `//host/path` (protocol-relative) has an explicit host even without a
+    // scheme; only path/query/fragment-relative URLs are truly same-origin.
+    relative: !absolute && !PROTOCOL_RELATIVE_RE.test(url),
   };
 }
 
