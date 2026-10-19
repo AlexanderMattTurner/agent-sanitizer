@@ -1,6 +1,8 @@
 /** Shared I/O helpers for the Claude Code hook scripts. */
 
 import {
+  accessSync,
+  constants as fsConstants,
   openSync,
   closeSync,
   lstatSync,
@@ -713,7 +715,9 @@ export const PROJECT_HASH = createHash("sha256")
  * launch-time InstructionsLoaded event and the first tool call resolve the same
  * root whichever runs first — and checked BEFORE the next is created inside it,
  * so a symlinked or shared plugin data dir never gets a directory planted in
- * its target. Otherwise $TMPDIR, where every store's own squat checks apply.
+ * its target. A root this process cannot write — a read-only mount, an owner
+ * bit removed — is no root: every marker write would fail and read as "the
+ * event never fired". Otherwise $TMPDIR, where the stores' squat checks apply.
  * @param {Record<string, string | undefined>} env
  * @returns {string}
  */
@@ -732,6 +736,11 @@ export function resolveStateRoot(env) {
         return tmpdir();
     }
     if (!privateDirAt(dir)) return tmpdir();
+  }
+  try {
+    accessSync(root, fsConstants.W_OK | fsConstants.X_OK);
+  } catch {
+    return tmpdir();
   }
   return root;
 }

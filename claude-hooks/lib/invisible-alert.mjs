@@ -61,6 +61,9 @@ const { applyLayer1WellFormed } =
     await lazyImport("agent-sanitizer")
   );
 
+/** Every alert artifact name's start, less the project hash that follows it. */
+const ALERT_STEM = ".claude-invisible-char-alert-";
+
 /**
  * The path prefix every alert artifact of this PROJECT shares. Never a file
  * itself — only {@link sessionPrefix} and the sweep read it — so that one
@@ -69,10 +72,17 @@ const { applyLayer1WellFormed } =
  * read as the InstructionsLoaded scan never having run, and deleting its
  * findings would lift the gate mid-session.
  */
-export const ALERT_BASE = join(
-  STATE_ROOT,
-  `.claude-invisible-char-alert-${PROJECT_HASH}`,
-);
+export const ALERT_BASE = join(STATE_ROOT, `${ALERT_STEM}${PROJECT_HASH}`);
+
+/**
+ * Whether `name` is a session artifact of ANY project: {@link ALERT_BASE}'s
+ * name, whatever its project hash, then `.s-`.
+ * @param {string} name
+ * @returns {boolean}
+ */
+const isAnyProjectSessionEntry = (name) =>
+  name.startsWith(ALERT_STEM) &&
+  /^[0-9a-f]{8}\.s-/u.test(name.slice(ALERT_STEM.length));
 
 /**
  * The path prefix every alert artifact of ONE session under this project shares.
@@ -217,10 +227,12 @@ function withinTtl(path, ttlMs) {
 const withinFallbackTtl = (path) => withinTtl(path, FALLBACK_TTL_MS);
 
 /**
- * Delete this project's artifacts from OTHER sessions once they are older than
+ * Delete OTHER sessions' artifacts, of every project, once they are older than
  * the TTL. The current session's own prefix is skipped, so the sweep can never
  * answer its own question wrong; every other session's files are past history
- * that nothing reads.
+ * that nothing reads — a live one keeps its marker and findings fresh on read.
+ * Every project, because STATE_ROOT may be persistent: a project never reopened
+ * would otherwise keep its artifacts for good.
  *
  * This replaces the destructive SessionStart clear: with the store session-keyed
  * there is nothing to reset, only old state to age out.
@@ -229,11 +241,10 @@ const withinFallbackTtl = (path) => withinTtl(path, FALLBACK_TTL_MS);
  */
 export function sweepStaleSessions(sessionId) {
   const dir = STATE_ROOT;
-  const prefix = `${basename(ALERT_BASE)}.s-`;
   const keep = basename(sessionPrefix(sessionId));
   const cutoff = Date.now() - MARKER_TTL_MS;
   for (const name of readdirSync(dir)) {
-    if (!name.startsWith(prefix)) continue;
+    if (!isAnyProjectSessionEntry(name)) continue;
     // Whole-segment match on the keep prefix, not a bare startsWith: session key
     // "abc" must not claim (and so preserve) session key "abc2"'s artifacts.
     if (name === keep || name.startsWith(`${keep}.`)) continue;

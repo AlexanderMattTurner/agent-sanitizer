@@ -24,9 +24,15 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-// Set before the hook module loads: the store paths are keyed to it.
+// Set before the hook module loads: the store paths are keyed to it. A private
+// $TMPDIR as the state root too, because the sweep reaches every project's
+// artifacts there and a parallel test file's sweep would otherwise race the
+// backdated artifacts below.
 const projectDir = mkdtempSync(join(tmpdir(), "sanitizer-alert-store-"));
 process.env.CLAUDE_PROJECT_DIR = projectDir;
+const stateRoot = mkdtempSync(join(tmpdir(), "sanitizer-alert-root-"));
+process.env.TMPDIR = stateRoot;
+delete process.env.CLAUDE_PLUGIN_DATA;
 
 const {
   acknowledgeAlert,
@@ -57,6 +63,7 @@ beforeEach(clear);
 after(() => {
   clear();
   rmSync(projectDir, { recursive: true, force: true });
+  rmSync(stateRoot, { recursive: true, force: true });
 });
 
 describe("a session cannot inherit another session's answer", () => {
@@ -284,6 +291,30 @@ describe("a live session outlives the stale-session sweep", () => {
       assert.equal(existsSync(instructionsLoadedFile(live)), read);
       assert.equal(existsSync(alertDir(live)), read);
     });
+
+  it("ages out a project that is never reopened", () => {
+    // The state root can be persistent, and each project used to sweep only
+    // its own prefix, so a one-off project's artifacts stayed for good.
+    const elsewhere = (/** @type {string} */ suffix) =>
+      join(stateRoot, `.claude-invisible-char-alert-0badc0de.s-x.${suffix}`);
+    writeFileSync(elsewhere("instructions-loaded"), "");
+    writeFileSync(elsewhere("acked"), "");
+    ageOut(elsewhere("instructions-loaded"));
+    // Not an alert artifact at all, however old: the sweep must not reach it.
+    const bystander = join(stateRoot, ".claude-invisible-char-alert-notahash");
+    writeFileSync(bystander, "");
+    ageOut(bystander);
+    sweepStaleSessions(live);
+    assert.equal(existsSync(elsewhere("instructions-loaded")), false);
+    assert.equal(
+      existsSync(elsewhere("acked")),
+      true,
+      "a fresh entry was swept",
+    );
+    assert.equal(existsSync(bystander), true, "a non-artifact was swept");
+    rmSync(elsewhere("acked"));
+    rmSync(bystander);
+  });
 });
 
 describe("concurrent findings cannot lose each other", () => {
