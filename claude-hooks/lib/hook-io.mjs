@@ -15,7 +15,7 @@ import {
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { excludeProvisioning } from "./hook-timing.mjs";
 import { readKnob } from "./knobs.mjs";
@@ -723,7 +723,9 @@ export const PROJECT_HASH = createHash("sha256")
  */
 export function resolveStateRoot(env) {
   const data = env.CLAUDE_PLUGIN_DATA;
-  if (!data) return tmpdir();
+  // A relative path resolves against each hook process's cwd, so two processes
+  // would disagree on the root, and it could land inside a scanned tree.
+  if (!data || !isAbsolute(data)) return tmpdir();
   const root = join(data, "session-state");
   for (const dir of [data, root]) {
     try {

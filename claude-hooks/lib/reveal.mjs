@@ -36,7 +36,6 @@ import { join, resolve, sep } from "node:path";
 import {
   PROJECT_HASH,
   STATE_ROOT,
-  isPrivateDir,
   privateDirAt,
   writeFileNoFollow,
 } from "./hook-io.mjs";
@@ -162,19 +161,7 @@ function revealDirIsSafe(dir) {
   } catch {
     return false;
   }
-  let st;
-  try {
-    st = lstatSync(dir);
-    /* c8 ignore start -- TOCTOU-race defense: after the mkdirSync above succeeds, dir
-       exists with accessible parents, so lstatSync can only throw if a co-tenant removes
-       or replaces it in the window between the two syscalls — unreachable in a
-       single-threaded test, yet load-bearing to keep persistReveal fail-closed on that
-       race rather than crashing. */
-  } catch {
-    return false;
-  }
-  /* c8 ignore stop */
-  return isPrivateDir(st);
+  return privateDirAt(dir);
 }
 
 /**

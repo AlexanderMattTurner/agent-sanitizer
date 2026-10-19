@@ -30,6 +30,9 @@ import { after, describe, it } from "node:test";
 
 import { resolveStateRoot } from "../claude-hooks/lib/hook-io.mjs";
 
+const HOOK_IO = new URL("../claude-hooks/lib/hook-io.mjs", import.meta.url)
+  .href;
+
 const dir = mkdtempSync(join(tmpdir(), "state-root-"));
 after(() => rmSync(dir, { recursive: true, force: true }));
 let seq = 0;
@@ -45,6 +48,23 @@ describe("resolveStateRoot", () => {
   it("is $TMPDIR when the host provides no plugin data dir", () => {
     assert.equal(resolveStateRoot({}), tmpdir());
     assert.equal(resolveStateRoot({ CLAUDE_PLUGIN_DATA: "" }), tmpdir());
+  });
+
+  it("is $TMPDIR for a relative plugin data path, which each cwd reads differently", () => {
+    const parent = fresh();
+    const res = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `const { resolveStateRoot } = await import(${JSON.stringify(HOOK_IO)});
+         console.log(resolveStateRoot({ CLAUDE_PLUGIN_DATA: "data" }));`,
+      ],
+      { cwd: parent, encoding: "utf8" },
+    );
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stdout.trim(), tmpdir());
+    assert.deepEqual(readdirSync(parent), [], "a store was created under cwd");
   });
 
   it("creates an owner-only session-state dir under a private plugin data dir", () => {
