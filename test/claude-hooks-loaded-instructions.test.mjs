@@ -43,6 +43,9 @@ process.env.CLAUDE_PROJECT_DIR = projectDir;
 // real ~/.claude either.
 const emptyConfigDir = mkdtempSync(join(tmpdir(), "sanitizer-empty-config-"));
 process.env.CLAUDE_CONFIG_DIR = emptyConfigDir;
+// The gap notice asks this binary for its version. A path that does not exist
+// keeps the session's real CLI out of the suite: the version reads as unknown.
+process.env.CLAUDE_CODE_EXECPATH = join(emptyConfigDir, "no-such-claude");
 
 const { readLoadedFile, scanLoadedFile, loadedFileMessage, scopeNotice } =
   await import("../claude-hooks/scan-loaded-instructions.mjs");
@@ -497,25 +500,115 @@ describe("a session with no InstructionsLoaded scan is named, once", () => {
   // suite runs in.
   beforeEach(() => project("CLAUDE.md", PROSE));
 
-  it("warns while no scan has been seen, naming every cause", () => {
-    const notice = instructionsLoadedGapNotice();
-    assert.match(notice, /InstructionsLoaded/u);
-    assert.match(notice, /unscanned/u);
-    // The marker cannot distinguish the three causes, so the notice must assert
-    // none of them — a reader sent to the wrong fix stops trusting the next
-    // notice. One marker each, so dropping a cause reds here:
-    // the host never wired the event (the self-wiring host's case, and the one
-    // cause the reader can repair in this session)...
-    assert.match(notice, /wired/u);
-    assert.match(notice, /`\/hooks` command/u);
-    // ...a Claude Code below the floor, quoted so "upgrade" names a number the
-    // reader can compare `claude --version` against...
-    assert.match(notice, /upgrading/u);
-    assert.match(notice, /2\.1\.69/u);
-    assert.match(notice, /claude --version/u);
-    // ...and the hook switched off by the operator.
-    assert.match(notice, /AGENT_SANITIZER_DISABLED_HOOKS/u);
-    assert.match(notice, /echo \$AGENT_SANITIZER_DISABLED_HOOKS/u);
+  // The hook checks the disable list and the CLI version itself, so the notice
+  // names only what it could not rule out: a reader sent to check a cause the
+  // hook already knew was false stops trusting the next notice.
+  const causeCases = [
+    {
+      name: "the hook is disabled",
+      env: {
+        AGENT_SANITIZER_DISABLED_HOOKS:
+          "sanitize-output, scan-loaded-instructions",
+      },
+      version: [2, 1, 304],
+      present: [/switched off in AGENT_SANITIZER_DISABLED_HOOKS/u],
+      absent: [/\/hooks/u, /claude --version/u],
+    },
+    {
+      name: "the CLI predates the event",
+      env: {},
+      version: [2, 1, 68],
+      present: [
+        /this Claude Code is 2\.1\.68, older than 2\.1\.69/u,
+        /upgrading/u,
+      ],
+      absent: [/\/hooks/u, /AGENT_SANITIZER_DISABLED_HOOKS/u],
+    },
+    {
+      name: "the CLI is at the floor",
+      env: {},
+      version: [2, 1, 69],
+      present: [/Claude Code 2\.1\.69 emits the event/u, /`\/hooks` command/u],
+      absent: [/older than/u, /claude --version/u],
+    },
+    {
+      name: "the CLI is newer and the hook enabled",
+      env: { AGENT_SANITIZER_DISABLED_HOOKS: "sanitize-output" },
+      version: [2, 1, 304],
+      present: [
+        /Claude Code 2\.1\.304 emits the event/u,
+        /never wired/u,
+        /crashed/u,
+      ],
+      absent: [/older than/u, /claude --version/u, /switched off/u],
+    },
+    // Major and minor must decide before patch: 2.0.999 is older, 3.0.0 newer.
+    {
+      name: "the CLI is an older minor with a larger patch",
+      env: {},
+      version: [2, 0, 999],
+      present: [/this Claude Code is 2\.0\.999, older than 2\.1\.69/u],
+      absent: [/\/hooks/u],
+    },
+    {
+      name: "the CLI is a newer major with a smaller patch",
+      env: {},
+      version: [3, 0, 0],
+      present: [/Claude Code 3\.0\.0 emits the event/u],
+      absent: [/older than/u],
+    },
+    {
+      name: "the CLI version cannot be read",
+      env: {},
+      version: null,
+      present: [
+        /`\/hooks` command/u,
+        /older than 2\.1\.69/u,
+        /claude --version/u,
+      ],
+      absent: [/switched off/u],
+    },
+  ];
+  for (const { name, env, version, present, absent } of causeCases)
+    it(`names only the cause left open when ${name}`, () => {
+      const notice = instructionsLoadedGapNotice(undefined, undefined, {
+        env,
+        cliVersion: () => version,
+      });
+      assert.match(notice, /unscanned/u);
+      for (const pattern of present) assert.match(notice, pattern);
+      for (const pattern of absent) assert.doesNotMatch(notice, pattern);
+    });
+
+  it("reads the version from the binary CLAUDE_CODE_EXECPATH names", () => {
+    const binDir = mkdtempSync(join(tmpdir(), "sanitizer-fake-claude-"));
+    const fake = join(binDir, "claude");
+    try {
+      writeFileSync(fake, "#!/bin/sh\necho '2.1.304 (Claude Code)'\n", {
+        mode: 0o755,
+      });
+      // The stale CLAUDE_CODE_VERSION a remote host hands hooks must not win.
+      const noticeUnder = (env) =>
+        instructionsLoadedGapNotice(undefined, undefined, { env });
+      assert.match(
+        noticeUnder({
+          CLAUDE_CODE_EXECPATH: fake,
+          CLAUDE_CODE_VERSION: "2.1.42",
+        }),
+        /Claude Code 2\.1\.304 emits the event/u,
+      );
+      assert.match(
+        noticeUnder({ CLAUDE_CODE_EXECPATH: join(binDir, "missing") }),
+        /version could not be read/u,
+      );
+      // With no EXECPATH, PATH's `claude` may be another install: not asked.
+      assert.match(
+        noticeUnder({ PATH: binDir, CLAUDE_CODE_VERSION: "2.1.304" }),
+        /version could not be read/u,
+      );
+    } finally {
+      rmSync(binDir, { recursive: true, force: true });
+    }
   });
 
   it("stays silent when nothing loads at launch, even with no scan seen", () => {
@@ -562,8 +655,8 @@ describe("a session with no InstructionsLoaded scan is named, once", () => {
 
   it("stays silent while the host's cold-start marker is present", () => {
     // A launch event fires about a second after SessionStart, so a host that is
-    // still installing has not necessarily wired anything wrong: the three
-    // causes the notice names would all be false. This is the Claude Code web
+    // still installing has not necessarily wired anything wrong: any cause the
+    // notice names would be false. This is the Claude Code web
     // case, where the hook files are build output a fresh container lacks.
     const coldDir = mkdtempSync(join(tmpdir(), "sanitizer-cold-start-"));
     const runtimeDir = mkdtempSync(join(tmpdir(), "sanitizer-runtime-"));
@@ -738,39 +831,70 @@ describe("a session with no InstructionsLoaded scan is named, once", () => {
     }
   });
 
-  it("fires once a later call touches a directory the empty launch never covered", () => {
-    // The blocker this fix must not reintroduce: an empty LAUNCH must not
-    // silence the whole session. If the scanner is genuinely unwired and a
-    // later tool call reaches into a subdirectory that DOES carry real,
-    // still-unscanned content, the notice must still fire there — the
-    // launch-empty cache only ever answers for the launch half.
-    const emptyDir = mkdtempSync(join(tmpdir(), "sanitizer-empty-then-"));
-    const nestedDir = join(emptyDir, "packages", "foo");
-    const session = "sess-empty-then-nested";
+  it("ignores the directory an older caller passes as the third argument", () => {
+    const emptyDir = mkdtempSync(join(tmpdir(), "sanitizer-old-caller-"));
+    const nestedDir = join(emptyDir, "sub");
+    const session = "sess-old-caller";
     try {
-      // Call 1: nothing at launch and no touched directory yet — silent, and
-      // the empty answer gets cached.
-      assert.equal(instructionsLoadedGapNotice(session, emptyDir), null);
-      assert.ok(existsSync(launchEmptyFile(session)));
-      // Call 2: still nothing touched — the cached empty answer alone must
-      // not manufacture a warning.
-      assert.equal(instructionsLoadedGapNotice(session, emptyDir), null);
-      // Call 3: a tool now reads a file in a subdirectory that carries real
-      // content, and the scanner STILL never fired InstructionsLoaded — the
-      // one case that must not stay silent.
-      mkdirSync(nestedDir, { recursive: true });
+      mkdirSync(nestedDir);
       writeFileSync(join(nestedDir, "CLAUDE.md"), PROSE);
-      assert.equal(instructionsLoadedSeen(session), false);
-      assert.match(
+      assert.equal(
         instructionsLoadedGapNotice(session, emptyDir, nestedDir),
-        /unscanned/u,
+        null,
       );
     } finally {
       rmSync(emptyDir, { recursive: true, force: true });
       rmSync(launchEmptyFile(session), { force: true });
-      rmSync(instructionsLoadedNoticeFile(session), { force: true });
     }
   });
+
+  // Reported bug: under a wired hook, a launch with no root CLAUDE.md and a Read
+  // into a subdirectory that has one got the notice. Claude Code loads that
+  // nested file only AFTER the Read, so its PreToolUse runs before any scan.
+  // The root-CLAUDE.md case is the positive control: the same spawn does
+  // report a gap when launch content went unscanned.
+  for (const { name, rootFile, expectNotice } of [
+    { name: "stays silent", rootFile: false, expectNotice: false },
+    { name: "still reports a launch gap", rootFile: true, expectNotice: true },
+  ])
+    it(`${name} on a Read into a nested-CLAUDE.md directory (root CLAUDE.md: ${rootFile})`, () => {
+      const proj = mkdtempSync(join(tmpdir(), "sanitizer-nested-only-"));
+      const stateDir = mkdtempSync(join(tmpdir(), "sanitizer-nested-tmp-"));
+      try {
+        mkdirSync(join(proj, "sub"));
+        writeFileSync(join(proj, "sub", "CLAUDE.md"), PROSE);
+        writeFileSync(join(proj, "sub", "file.txt"), "hello\n");
+        if (rootFile) writeFileSync(join(proj, "CLAUDE.md"), PROSE);
+        const result = spawnSync(
+          process.execPath,
+          [join(repoRoot, "claude-hooks", "pretooluse-sanitize.mjs")],
+          {
+            input: JSON.stringify({
+              session_id: "sess-nested-only",
+              hook_event_name: "PreToolUse",
+              tool_name: "Read",
+              tool_input: { file_path: join(proj, "sub", "file.txt") },
+            }),
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              CLAUDE_PROJECT_DIR: proj,
+              TMPDIR: stateDir,
+              CLAUDE_CODE_EXECPATH: join(stateDir, "no-such-claude"),
+            },
+          },
+        );
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(
+          /no InstructionsLoaded scan has run/u.test(result.stdout),
+          expectNotice,
+          result.stdout,
+        );
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+        rmSync(stateDir, { recursive: true, force: true });
+      }
+    });
 
   it("does not repeat the warning once it has been surfaced", () => {
     // The notice itself is a pure read: nothing is recorded until the caller

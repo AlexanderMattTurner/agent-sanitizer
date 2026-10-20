@@ -19,10 +19,13 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { basename, join } from "node:path";
 import { homedir } from "node:os";
 import {
+  DISABLED_HOOKS_ENV,
+  disabledHooks,
   hookgateMarkerPath,
   lazyImport,
   markerIsTrusted,
@@ -340,12 +343,13 @@ export function recordInstructionsLoaded(sessionId) {
  */
 const EVENT_MIN_CLI_VERSION = "2.1.69";
 
+/** The `--hook=` name of the InstructionsLoaded scanner. */
+const LOADED_SCAN_HOOK = "scan-loaded-instructions";
+
 /**
  * Companion marker: this session already found the LAUNCH set empty — that set
  * (which files load at session start) cannot change mid-session, so a second
- * glob of `dir` can never change that half of the answer. It says nothing about
- * a directory touched later; {@link instructionsLoadedGapNotice}'s `touchedDir`
- * covers that half fresh on every call instead.
+ * glob of `dir` can never change the answer.
  * @param {string} [sessionId]
  * @returns {string}
  */
@@ -456,35 +460,105 @@ function userGlobalLaunchHasContent(env = process.env) {
 }
 
 /**
+ * The running Claude Code's version as `[major, minor, patch]`, or null when it
+ * cannot be read. Asks the binary rather than `CLAUDE_CODE_VERSION`: a remote
+ * host hands hooks a stale value there (2.1.42 under a 2.1.304 CLI).
+ * `CLAUDE_CODE_EXECPATH` names the binary running this session. Without it the
+ * answer is null: PATH's `claude` may be another install, and reporting its
+ * version as this session's would name a false cause. On an npm install that
+ * path is `node`, whose `v…` output also reads as null.
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {number[] | null}
+ */
+function runningCliVersion(env = process.env) {
+  if (!env.CLAUDE_CODE_EXECPATH) return null;
+  const result = spawnSync(env.CLAUDE_CODE_EXECPATH, ["--version"], {
+    encoding: "utf8",
+    timeout: 2000,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const match = /^(\d+)\.(\d+)\.(\d+)/u.exec(result.stdout ?? "");
+  return match ? match.slice(1).map(Number) : null;
+}
+
+/**
+ * Whether `version` is older than EVENT_MIN_CLI_VERSION.
+ * @param {number[]} version
+ * @returns {boolean}
+ */
+function predatesEvent(version) {
+  const floor = EVENT_MIN_CLI_VERSION.split(".").map(Number);
+  for (let i = 0; i < floor.length; i++)
+    if (version[i] !== floor[i]) return version[i] < floor[i];
+  return false;
+}
+
+/**
+ * The causes of a missing InstructionsLoaded scan that this hook could NOT rule
+ * out, each with the command that settles it. The disable list and the CLI
+ * version are checked here; only the wiring is left for `/hooks`. A cause that
+ * is confirmed is returned alone, since it explains the gap by itself.
+ * @param {Record<string, string | undefined>} env
+ * @param {(env: Record<string, string | undefined>) => number[] | null} cliVersion
+ * @returns {string}
+ */
+function unexplainedGapCauses(env, cliVersion) {
+  // A real list of hook names never reaches this one-name `known`, so the
+  // unknown-name report would misfire on every other entry: it is silenced.
+  if (disabledHooks([LOADED_SCAN_HOOK], env, () => {}).size > 0)
+    return `${LOADED_SCAN_HOOK} is switched off in ${DISABLED_HOOKS_ENV}; removing it from that list restores the scan.`;
+  const unwired =
+    `this host never wired the InstructionsLoaded event to ${LOADED_SCAN_HOOK} ` +
+    "(the `/hooks` command lists what this session registered; wiring it " +
+    "restores the scan), or the hook crashed before it ran";
+  const version = cliVersion(env);
+  if (version === null)
+    return (
+      `${LOADED_SCAN_HOOK} is not disabled. Either ${unwired}, or this Claude ` +
+      `Code is older than ${EVENT_MIN_CLI_VERSION}, the first build that emits ` +
+      "the event (its version could not be read: run `claude --version`)."
+    );
+  if (predatesEvent(version))
+    return (
+      `this Claude Code is ${version.join(".")}, older than ` +
+      `${EVENT_MIN_CLI_VERSION}, the first build that emits the event; ` +
+      "upgrading restores the scan."
+    );
+  return (
+    `${LOADED_SCAN_HOOK} is not disabled and Claude Code ${version.join(".")} ` +
+    `emits the event, so either ${unwired}.`
+  );
+}
+
+/**
  * The one-time context line for a session where no InstructionsLoaded scan ran,
  * or null when the scan has been seen, the notice already ran this session, the
- * host's cold-start marker says setup is still running, or neither launch nor
- * `touchedDir` could have fired the event.
+ * host's cold-start marker says setup is still running, or nothing announced at
+ * launch could have fired the event.
  *
  * PURE for the notice: nothing is recorded until the caller confirms it landed
- * in a returned response. Launch-emptiness is cached once found — fixed for the
- * session — but `touchedDir` is re-checked every call: the claim below is about
- * SUBDIRECTORY files, so an empty launch must not silence a later call whose
- * tool touched a directory that DOES carry real, unscanned content.
+ * in a returned response. Launch-emptiness is cached once found, since the
+ * launch set is fixed for the session.
  *
- * SessionStart scans what loads at launch; a subdirectory's file is scanned by
- * the event; no scan means nothing says so — unless nothing touched so far held
- * a file the event would have ANNOUNCED, with bytes in it. The three remaining
- * causes are named together, since
- * the marker cannot tell them apart: an unwired event, a Claude Code older than
- * EVENT_MIN_CLI_VERSION, or the hook disabled via AGENT_SANITIZER_DISABLED_HOOKS.
+ * Launch is the only evidence read. Claude Code fires the session_start events
+ * before the first PreToolUse, but a subdirectory's CLAUDE.md loads only AFTER
+ * the tool call that reaches it, so a PreToolUse can never already see that
+ * file's scan, however the hook is wired.
  * @param {string} [sessionId]  the harness's session identity (see
  *   instructionsLoadedFile)
  * @param {string} [dir]  the project root to check (injectable; defaults to
  *   the real project)
- * @param {string} [touchedDir]  this tool call's own target directory, when
- *   known — re-checked every call, never cached
+ * @param {{
+ *   env?: Record<string, string | undefined>,
+ *   cliVersion?: (env: Record<string, string | undefined>) => number[] | null,
+ * }} [options]  injectable for tests; any other value, such as a directory
+ *   string from an older caller, reads as no options
  * @returns {string | null}
  */
 export function instructionsLoadedGapNotice(
   sessionId,
   dir = PROJECT_DIR,
-  touchedDir,
+  { env = process.env, cliVersion = runningCliVersion } = {},
 ) {
   if (instructionsLoadedSeen(sessionId)) return null;
   if (markerIsTrusted(instructionsLoadedNoticeFile(sessionId))) return null;
@@ -497,31 +571,20 @@ export function instructionsLoadedGapNotice(
   // notice for every later session on the host.
   const marker = hookgateMarkerPath();
   if (markerIsTrusted(marker) && probeSetupAlive(marker)) return null;
-  const launchCached = markerIsTrusted(launchEmptyFile(sessionId));
-  const launchHasBytes =
-    !launchCached &&
-    (anyFileHasBytes(announcedLaunchFiles(dir)) ||
-      userGlobalLaunchHasContent());
-  if (!launchCached && !launchHasBytes)
+  if (markerIsTrusted(launchEmptyFile(sessionId))) return null;
+  if (
+    !anyFileHasBytes(announcedLaunchFiles(dir)) &&
+    !userGlobalLaunchHasContent(env)
+  ) {
     writeSentinelFile(launchEmptyFile(sessionId));
-  const touchedHasBytes =
-    touchedDir !== undefined &&
-    anyFileHasBytes(announcedLaunchFiles(touchedDir));
-  if (!launchHasBytes && !touchedHasBytes) return null;
+    return null;
+  }
   return (
     "agent-sanitizer: no InstructionsLoaded scan has run this session, so " +
     "instruction files loaded from SUBDIRECTORIES (a nested CLAUDE.md, a " +
     "directory-scoped rule) are reaching the model unscanned for hidden " +
     "Unicode — the session-start scan covers only the files loaded at launch. " +
-    "Tell the user, and name all three causes with the command that decides " +
-    "each: this host never wired the InstructionsLoaded event to " +
-    "scan-loaded-instructions (the `/hooks` command lists what this session " +
-    "actually registered, whichever config dir or plugin root the host uses; " +
-    "wiring it restores the coverage), a Claude Code " +
-    `older than ${EVENT_MIN_CLI_VERSION}, the first build that emits the event ` +
-    "(`claude --version`; upgrading restores it), or scan-loaded-instructions " +
-    "switched off in AGENT_SANITIZER_DISABLED_HOOKS (`echo " +
-    "$AGENT_SANITIZER_DISABLED_HOOKS`)."
+    `Tell the user: ${unexplainedGapCauses(env, cliVersion)}`
   );
 }
 
