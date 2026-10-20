@@ -547,8 +547,10 @@ entirely: a host that never wired the `InstructionsLoaded` event to
 `scan-loaded-instructions`, a Claude Code older than 2.1.69, which is the first
 build that emits that event, and `scan-loaded-instructions` switched off in
 `AGENT_SANITIZER_DISABLED_HOOKS`.
-Nothing on disk tells them apart, so the PreToolUse gate names all three, once
-per session, rather than leaving the gap silent.
+The PreToolUse gate reports the gap once per session rather than leaving it
+silent. It checks the disable list and asks the session's own `claude --version`,
+so the notice names only the cause it could not rule out: usually the wiring,
+which only `/hooks` shows.
 
 A fourth state is not one of them and is not reported as one: the host emits no
 event when it has nothing to announce. The gate therefore asks not "does anything
@@ -561,10 +563,11 @@ or an empty `~/.claude/CLAUDE.md` fires no event however the hook is wired, so
 the missing scan there is evidence of nothing. The trade this accepts is a false
 NEGATIVE: a repo whose announced instruction files all sit in subdirectories —
 a monorepo of per-package `CLAUDE.md` under a root carrying only `AGENTS.md`, on
-a machine with no user-global memory — loses the notice until a tool call touches
-one of those directories, which is what the gate's per-call `touchedDir` check
-recovers. Weighed against a false POSITIVE on every session launched outside a
-project, which trains the operator to skip the notice everywhere.
+a machine with no user-global memory — gets no notice at all. A tool call that
+touches such a directory is no evidence either: Claude Code loads the nested
+file only after that call, so its PreToolUse runs before any scan could have.
+Weighed against a false POSITIVE on every session launched outside a project,
+which trains the operator to skip the notice everywhere.
 
 That table is a claim about someone else's product, so the event that names a
 loaded file is also what falsifies it. `contextScopeContradiction` checks every
