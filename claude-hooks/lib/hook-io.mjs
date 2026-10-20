@@ -1,15 +1,21 @@
 /** Shared I/O helpers for the Claude Code hook scripts. */
 
 import {
+  accessSync,
+  constants as fsConstants,
   openSync,
   closeSync,
   lstatSync,
+  lutimesSync,
+  mkdirSync,
   readFileSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { excludeProvisioning } from "./hook-timing.mjs";
 import { readKnob } from "./knobs.mjs";
@@ -695,6 +701,55 @@ export const PROJECT_HASH = createHash("sha256")
   .digest("hex")
   .slice(0, 8);
 
+/**
+ * The directory the session-lifetime stores live under: the alert markers and
+ * findings (invisible-alert.mjs) and the reveal sidecars (reveal.mjs). They must
+ * outlive the longest session, which $TMPDIR does not promise — macOS's daily
+ * dirhelper job deletes anything in the per-user `/var/folders/.../T/` not
+ * accessed for 3 days, and a marker written at launch and only ever `lstat`ed
+ * then vanishes from a session still running, its absence read as "never ran".
+ *
+ * `$CLAUDE_PLUGIN_DATA/session-state` when both levels are private to this uid
+ * ({@link privateDirAt}): write on the plugin data dir alone is enough to swap
+ * `session-state` out. Each level is created 0700 when absent — so the
+ * launch-time InstructionsLoaded event and the first tool call resolve the same
+ * root whichever runs first — and checked BEFORE the next is created inside it,
+ * so a symlinked or shared plugin data dir never gets a directory planted in
+ * its target. A root this process cannot write — a read-only mount, an owner
+ * bit removed — is no root: every marker write would fail and read as "the
+ * event never fired". Otherwise $TMPDIR, where the stores' squat checks apply.
+ * @param {Record<string, string | undefined>} env
+ * @returns {string}
+ */
+export function resolveStateRoot(env) {
+  const data = env.CLAUDE_PLUGIN_DATA;
+  // A relative path resolves against each hook process's cwd, so two processes
+  // would disagree on the root, and it could land inside a scanned tree.
+  if (!data || !isAbsolute(data)) return tmpdir();
+  const root = join(data, "session-state");
+  for (const dir of [data, root]) {
+    try {
+      mkdirSync(dir, { mode: 0o700 });
+    } catch (err) {
+      // Anything but "already there" — a read-only or unreachable plugin data
+      // dir — is an ordinary host: $TMPDIR still holds the state, at its
+      // shorter lifetime.
+      if (/** @type {NodeJS.ErrnoException} */ (err).code !== "EEXIST")
+        return tmpdir();
+    }
+    if (!privateDirAt(dir)) return tmpdir();
+  }
+  try {
+    accessSync(root, fsConstants.W_OK | fsConstants.X_OK);
+  } catch {
+    return tmpdir();
+  }
+  return root;
+}
+
+/** {@link resolveStateRoot} for this process, resolved once at load. */
+export const STATE_ROOT = resolveStateRoot(process.env);
+
 /** The marker filename stem; the project directory is appended to it. */
 const HOOKGATE_MARKER_STEM = "agent-sanitizer-hookgate-inflight-";
 
@@ -1067,7 +1122,7 @@ export function currentUid() {
 
 /**
  * Whether `st` (an lstat result) is owned by this process's uid. THE ownership
- * predicate for every $TMPDIR store these hooks trust — a second spelling is how
+ * predicate for every state store these hooks trust — a second spelling is how
  * four call sites came to share the passwd-lookup crash {@link currentUid}
  * documents. False when the platform has no uid model: ownership that cannot be
  * proven is not granted. `uid` is a seam for a test that must model another
@@ -1084,10 +1139,11 @@ export function ownedByCurrentUser(st, uid = currentUid()) {
  * Whether `st` (an lstat result) is a directory no untrusted uid can change: a
  * real directory (lstat, so a planted symlink is not one), owned by this uid —
  * or by root where `rootMayOwn` — with no group/other write bit. THE trust test
- * for every private directory these hooks keep in $TMPDIR. Write is the
- * property because creating, unlinking or replacing an entry needs write on its
- * parent: a co-tenant holding it can delete the finding a gate needs, swap a
- * reveal file, or rebind the redactor socket to a listener that redacts nothing.
+ * for every private directory these hooks keep, under STATE_ROOT or $TMPDIR.
+ * Write is the property because creating, unlinking or replacing an entry needs
+ * write on its parent: a co-tenant holding it can delete the finding a gate
+ * needs, swap a reveal file, or rebind the redactor socket to a listener that
+ * redacts nothing.
  * Root ownership is strictly stronger than ours, so a deployment may hand a dir
  * to root (`rootMayOwn`); with no uid model nothing is trusted, root included.
  * @param {{ isDirectory(): boolean, uid: number, mode: number }} st
@@ -1102,6 +1158,44 @@ export function isPrivateDir(
   const owner =
     ownedByCurrentUser(st, uid) || (uid !== null && rootMayOwn && st.uid === 0);
   return st.isDirectory() && owner && (st.mode & 0o022) === 0;
+}
+
+/**
+ * Whether `path` is a private directory of this uid ({@link isPrivateDir}) —
+ * the directory counterpart of markerIsTrusted. `lstat`, so a symlink planted at
+ * a predictable path is judged on ITSELF: followed, it would let a co-tenant aim
+ * a reader at unrelated files this uid owns (the alert gate splices those bytes
+ * into a permission prompt). An absent path is simply not one.
+ * @param {string} path
+ * @param {{ uid?: number | null }} [opts]  as in {@link isPrivateDir}
+ * @returns {boolean}
+ */
+export function privateDirAt(path, opts) {
+  let st;
+  try {
+    st = lstatSync(path);
+  } catch {
+    return false;
+  }
+  return isPrivateDir(st, opts);
+}
+
+/**
+ * Stamp a state file the caller has just trusted as used now, so a live
+ * session's state never looks idle to an age-based sweep — another session's
+ * {@link STATE_ROOT} sweep (mtime) or an OS temp cleaner (atime). `lutimes`, so
+ * a symlink swapped in after the caller's check is stamped itself, never its
+ * target. A path a parallel sweep removed after that check is simply gone.
+ * @param {string} path
+ * @returns {void}
+ */
+export function touchLiveState(path) {
+  const now = new Date();
+  try {
+    lutimesSync(path, now, now);
+  } catch (err) {
+    if (/** @type {NodeJS.ErrnoException} */ (err).code !== "ENOENT") throw err;
+  }
 }
 
 /**

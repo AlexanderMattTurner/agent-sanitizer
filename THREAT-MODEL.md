@@ -797,7 +797,7 @@ positive costs a sentence of context, never a mangled input):
   the identical Write confirms and passes. The confirmation is the model's
   deliberate retry — never a human permission prompt — held as a
   consumed-on-use, TTL-bounded sentinel (keyed to path + content + the dropped
-  values) via the same squat-resistant `$TMPDIR` helpers as the invisible-char
+  values) in `$TMPDIR` via the same squat-resistant helpers as the invisible-char
   gate. Tracked files, secret-free files, failed git probes and unmappable
   views all skip the guard (fail open). "Tracked" approximates "recoverable":
   an uncommitted secret line on a tracked file is an accepted gap — the
@@ -927,6 +927,16 @@ it, so what anchors its trust is worth stating exactly.
   under `TMPDIR` is read only when this user owns it with owner-only write, so a
   squatted shared-temp entry cannot pre-suppress the warning that a call ran
   unsanitized.
+- **Session state lives under that directory too, not in `$TMPDIR`.** The
+  InstructionsLoaded marker, the invisible-char gate's findings and ack, and the
+  Layer-2 reveal spans sit in `${CLAUDE_PLUGIN_DATA}/session-state`, created mode
+  700 and used only when both it and the data directory are real directories
+  this user owns with no group/other write (`privateDirAt`) and the leaf is
+  writable. An OS temp cleaner (macOS dirhelper purges `$TMPDIR` entries unread
+  for 3 days) would otherwise delete a live session's marker — a false "no
+  InstructionsLoaded scan has run" notice — or its findings, lifting the gate.
+  A host with no plugin data directory, or one that fails those checks, falls
+  back to `$TMPDIR` and keeps that exposure.
 - **Opting out.** `AGENT_SANITIZER_HOOK_BINARY=0` never downloads and never runs
   a binary. That leaves the node path running the shipped bundle and the
   compile cache above; `AGENT_SANITIZER_COMPILE_CACHE=0` turns the cache off as

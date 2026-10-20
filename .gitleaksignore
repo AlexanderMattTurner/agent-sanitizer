@@ -1,0 +1,7 @@
+# Fingerprints of reviewed gitleaks findings that are not credentials, one per
+# line with the reason above it. A fingerprint names one commit, file, rule and
+# line, so an entry cannot excuse the same string anywhere else.
+
+# A Layer-2 span-store key (12 hex, a content address) in a test fixture; the
+# file now builds the key instead of spelling it.
+6e96837e89512d1bef39f0f67d38d7457b50d3c9:test/claude-hooks-state-root.test.mjs:generic-api-key:143

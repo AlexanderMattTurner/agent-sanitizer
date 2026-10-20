@@ -2741,7 +2741,7 @@ test("_AGENT_SANITIZER_REVEAL_DIR relocates the Layer-2 reveal store", (t) => {
   );
   assert.equal(res.status, 0, res.stderr);
   // The override is proven by the store existing HERE rather than under the
-  // default tmp location — a default-path write would leave this dir absent.
+  // default state root — a default-path write would leave this dir absent.
   assert.ok(
     readdirSync(revealDir).length > 0,
     `no reveal sidecar landed in the overridden dir: ${res.stdout}`,

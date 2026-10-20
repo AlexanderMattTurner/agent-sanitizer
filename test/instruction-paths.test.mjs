@@ -215,11 +215,13 @@ describe("every instruction-file write stays inside its root", () => {
     // The O_RDONLY|O_NOFOLLOW open of the contained target.
     "src/instructions.mjs::cleanFile",
   ];
-  // The hooks' own state under $TMPDIR (state files, sentinels, alert, reveal
-  // and confirm stores with their sweeps, the setup marker's flock probe, the
-  // opt-in trace log): none touches a scanned tree.
+  // The hooks' own state under $TMPDIR or the plugin data dir (state files,
+  // sentinels, the state root itself, alert, reveal and confirm stores with
+  // their sweeps, the setup marker's flock probe, the opt-in trace log): none
+  // touches a scanned tree.
   const FS_EXEMPT = [
     "claude-hooks/lib/hook-io.mjs::readSetupMarker",
+    "claude-hooks/lib/hook-io.mjs::resolveStateRoot",
     "claude-hooks/lib/hook-io.mjs::writeFileNoFollow",
     "claude-hooks/lib/hook-io.mjs::writeSentinelFile",
     "claude-hooks/lib/invisible-alert.mjs::appendAlert",
@@ -228,6 +230,7 @@ describe("every instruction-file write stays inside its root", () => {
     "claude-hooks/lib/reveal.mjs::persistSpan",
     "claude-hooks/lib/reveal.mjs::readSpan",
     "claude-hooks/lib/reveal.mjs::revealDirIsSafe",
+    "claude-hooks/lib/reveal.mjs::sweepAbandonedRevealStores",
     "claude-hooks/lib/reveal.mjs::sweepStaleReveals",
     "claude-hooks/lib/secret-drop-guard.mjs::consumeConfirm",
     "claude-hooks/lib/secret-drop-guard.mjs::sweepStaleConfirms",

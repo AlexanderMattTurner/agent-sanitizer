@@ -21,16 +21,19 @@ import {
 } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { basename, join } from "node:path";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import {
   hookgateMarkerPath,
   lazyImport,
   markerIsTrusted,
-  isPrivateDir,
+  ownedByCurrentUser,
+  privateDirAt,
   probeSetupAlive,
   PROJECT_DIR,
   PROJECT_HASH,
   scrubUntrustedText,
+  STATE_ROOT,
+  touchLiveState,
   writeFileNoFollow,
   writeSentinelFile,
 } from "./hook-io.mjs";
@@ -59,15 +62,28 @@ const { applyLayer1WellFormed } =
     await lazyImport("agent-sanitizer")
   );
 
+/** Every alert artifact name's start, less the project hash that follows it. */
+const ALERT_STEM = ".claude-invisible-char-alert-";
+
 /**
  * The path prefix every alert artifact of this PROJECT shares. Never a file
  * itself — only {@link sessionPrefix} and the sweep read it — so that one
- * `startsWith` covers every artifact the sweep must age out.
+ * `startsWith` covers every artifact the sweep must age out. Under STATE_ROOT,
+ * not $TMPDIR itself: an OS temp cleaner deleting a live session's marker would
+ * read as the InstructionsLoaded scan never having run, and deleting its
+ * findings would lift the gate mid-session.
  */
-export const ALERT_BASE = join(
-  tmpdir(),
-  `.claude-invisible-char-alert-${PROJECT_HASH}`,
-);
+export const ALERT_BASE = join(STATE_ROOT, `${ALERT_STEM}${PROJECT_HASH}`);
+
+/**
+ * Whether `name` is a session artifact of ANY project: {@link ALERT_BASE}'s
+ * name, whatever its project hash, then `.s-`.
+ * @param {string} name
+ * @returns {boolean}
+ */
+const isAnyProjectSessionEntry = (name) =>
+  name.startsWith(ALERT_STEM) &&
+  /^[0-9a-f]{8}\.s-/u.test(name.slice(ALERT_STEM.length));
 
 /**
  * The path prefix every alert artifact of ONE session under this project shares.
@@ -86,7 +102,7 @@ export const ALERT_BASE = join(
 export function sessionPrefix(sessionId) {
   // The id becomes a path component, so anything outside this class — a `/` in
   // a hostile session id above all — is folded away rather than escaping
-  // $TMPDIR. A host that exports no session id falls back to one shared name,
+  // STATE_ROOT. A host that exports no session id falls back to one shared name,
   // whose findings and ack are bounded by FALLBACK_TTL_MS instead.
   const key =
     (sessionId ?? "").replace(/[^A-Za-z0-9._-]/gu, "_") || "no-session";
@@ -138,12 +154,20 @@ export function instructionsLoadedNoticeFile(sessionId) {
  * lazily-loaded instruction files are being scanned at all. Ownership-validated
  * like every other marker here: a co-tenant could otherwise plant the
  * predictable path and suppress the notice below, which is the whole signal that
- * nested files are going unscanned.
+ * nested files are going unscanned. A marker that is seen is stamped as used:
+ * it is written once at launch, so otherwise a session outliving
+ * MARKER_TTL_MS would have it swept by another session's SessionStart and read
+ * its absence as the event never having fired.
  * @param {string} [sessionId]
  * @returns {boolean}
  */
 export function instructionsLoadedSeen(sessionId) {
-  return markerIsTrusted(instructionsLoadedFile(sessionId));
+  const marker = instructionsLoadedFile(sessionId);
+  if (!markerIsTrusted(marker)) return false;
+  // Not the shared no-session marker: every session-less host would refresh
+  // it, and MARKER_TTL_MS is what keeps it from silencing every later session.
+  if (sessionPrefix(sessionId) !== sessionPrefix()) touchLiveState(marker);
+  return true;
 }
 
 /** How long a past session's artifacts are kept before a later session sweeps. */
@@ -182,8 +206,8 @@ const FALLBACK_TTL_MS = 30 * 60 * 1000;
  * this `lstat` reads as expired, which is what every caller wants of a file that
  * is no longer there: the sweep's unlink becomes a no-op, the gate's reader skips
  * it, and an ack that vanished stops suppressing the ask. Propagating instead
- * would abort recordInstructionsLoaded on a benign $TMPDIR race and render the
- * false "instruction file was NOT scanned" fault.
+ * would abort recordInstructionsLoaded on a benign STATE_ROOT race and render
+ * the false "instruction file was NOT scanned" fault.
  *
  * `lstat`, so a planted symlink is judged on itself.
  * @param {string} path
@@ -206,30 +230,12 @@ function withinTtl(path, ttlMs) {
 const withinFallbackTtl = (path) => withinTtl(path, FALLBACK_TTL_MS);
 
 /**
- * Whether `path` is a private directory of this uid ({@link isPrivateDir}) —
- * the directory counterpart of markerIsTrusted. `lstat`, so a symlink planted
- * at the predictable alert-dir path is judged on ITSELF: followed, it would let
- * a co-tenant aim the gate's reader at a directory of unrelated files this uid
- * owns and splice their bytes into a permission prompt. A group/other-writable
- * one is refused too: a co-tenant could unlink the finding the gate needs.
- * @param {string} path
- * @returns {boolean}
- */
-function dirIsTrusted(path) {
-  let st;
-  try {
-    st = lstatSync(path);
-  } catch {
-    return false;
-  }
-  return isPrivateDir(st);
-}
-
-/**
- * Delete this project's artifacts from OTHER sessions once they are older than
+ * Delete OTHER sessions' artifacts, of every project, once they are older than
  * the TTL. The current session's own prefix is skipped, so the sweep can never
  * answer its own question wrong; every other session's files are past history
- * that nothing reads.
+ * that nothing reads — a live one keeps its marker and findings fresh on read.
+ * Every project, because STATE_ROOT may be persistent: a project never reopened
+ * would otherwise keep its artifacts for good.
  *
  * This replaces the destructive SessionStart clear: with the store session-keyed
  * there is nothing to reset, only old state to age out.
@@ -237,28 +243,28 @@ function dirIsTrusted(path) {
  * @returns {void}
  */
 export function sweepStaleSessions(sessionId) {
-  const dir = tmpdir();
-  const prefix = `${basename(ALERT_BASE)}.s-`;
+  const dir = STATE_ROOT;
   const keep = basename(sessionPrefix(sessionId));
   const cutoff = Date.now() - MARKER_TTL_MS;
   for (const name of readdirSync(dir)) {
-    if (!name.startsWith(prefix)) continue;
+    if (!isAnyProjectSessionEntry(name)) continue;
     // Whole-segment match on the keep prefix, not a bare startsWith: session key
     // "abc" must not claim (and so preserve) session key "abc2"'s artifacts.
     if (name === keep || name.startsWith(`${keep}.`)) continue;
     const path = join(dir, name);
     try {
-      // lstat, not stat: a squatted symlink at a predictable $TMPDIR path must
-      // be judged on ITSELF, not on whatever it points at.
-      if (lstatSync(path).mtimeMs >= cutoff) continue;
+      // lstat, not stat: a squatted symlink at a predictable path is judged on
+      // ITSELF. Ownership first: in a shared /tmp another uid's entry is not
+      // ours to remove, and an rmSync on its file fails ENOTDIR, not EPERM.
+      const st = lstatSync(path);
+      if (!ownedByCurrentUser(st) || st.mtimeMs >= cutoff) continue;
       rmSync(path, { recursive: true, force: true });
     } catch (err) {
       // ENOENT: a parallel session swept this entry between readdir and lstat.
-      // EPERM/EACCES: a co-tenant's entry sharing the prefix, which is not ours
-      // to remove. Both are benign races on a shared $TMPDIR, and a throw here
-      // would abort recordInstructionsLoaded and render the "instruction file
-      // was NOT scanned" fault on a session that WAS scanned. Anything else is
-      // a bug in this sweep and propagates.
+      // EPERM/EACCES: an entry of ours a co-tenant's directory shields. A throw
+      // here would abort recordInstructionsLoaded and render the "instruction
+      // file was NOT scanned" fault on a session that WAS scanned. Anything else
+      // is a bug in this sweep and propagates.
       const code = /** @type {NodeJS.ErrnoException} */ (err).code;
       if (code !== "ENOENT" && code !== "EPERM" && code !== "EACCES") throw err;
     }
@@ -268,7 +274,7 @@ export function sweepStaleSessions(sessionId) {
 
 /**
  * Remove the shared-prefix artifacts the reader has stopped honouring, so they
- * stop occupying $TMPDIR too. The loop above cannot: it skips the current
+ * stop occupying STATE_ROOT too. The loop above cannot: it skips the current
  * session's prefix, which on a host with no session id IS this one.
  *
  * Mirrors what {@link invisibleCharAlert} and {@link alertAcknowledged} read.
@@ -281,14 +287,14 @@ export function sweepStaleSessions(sessionId) {
  * scanned, or re-glob a launch this session already found empty. They still go,
  * at MARKER_TTL_MS — the same age the loop above ages a real session's prefix
  * out at, and far past any session's life — because the loop skips this prefix
- * and would otherwise leave a session-less host's markers in $TMPDIR forever,
- * with the gap notice suppressed on every later session.
+ * and would otherwise leave a session-less host's markers in STATE_ROOT
+ * forever, with the gap notice suppressed on every later session.
  * @param {string} [sessionId]
  * @returns {void}
  */
 function sweepStaleFallback(sessionId) {
   const dir = alertDir();
-  const inherited = alertDir(sessionId) !== dir && dirIsTrusted(dir);
+  const inherited = alertDir(sessionId) !== dir && privateDirAt(dir);
   const entries = inherited
     ? readdirSync(dir).map((name) => join(dir, name))
     : [];
@@ -311,7 +317,7 @@ function sweepStaleFallback(sessionId) {
 
 /**
  * Record that the InstructionsLoaded scanner engaged. Symlink-safe presence
- * write (see writeSentinelFile) at a predictable $TMPDIR path.
+ * write (see writeSentinelFile) at a predictable STATE_ROOT path.
  *
  * The event fires once per instruction file loaded, so the already-recorded case
  * returns without a write — and the stale-session sweep rides the FIRST fire of
@@ -534,14 +540,14 @@ export function recordInstructionsLoadedNotice(sessionId) {
  * The alert findings if invisible-char injection was detected in instruction
  * files and couldn't be auto-cleaned, else null.
  *
- * The store is a DIRECTORY of one file per finding, all at predictable,
- * world-visible $TMPDIR paths, so both the directory and every entry in it are
- * attacker-plantable: trust the directory only when it is a real directory this
- * uid owns (a symlink would let a co-tenant aim this reader at unrelated files),
- * each entry only when markerIsTrusted confirms a regular file this uid owns,
- * then scrub the bytes through Layer-1 before any caller splices them into a
- * reason — the report would otherwise carry ANSI/invisible spoofing into the
- * model's context.
+ * The store is a DIRECTORY of one file per finding, all at predictable
+ * STATE_ROOT paths (world-visible in the $TMPDIR fallback), so both the
+ * directory and every entry in it are attacker-plantable: trust the directory
+ * only when it is a real directory this uid owns (a symlink would let a
+ * co-tenant aim this reader at unrelated files), each entry only when
+ * markerIsTrusted confirms a regular file this uid owns, then scrub the bytes
+ * through Layer-1 before any caller splices them into a reason — the report
+ * would otherwise carry ANSI/invisible spoofing into the model's context.
  * This session's store AND the shared `no-session` fallback, because a hook that
  * faults BEFORE it can parse its payload has no session identity to key by: its
  * finding lands in the fallback, and a strictly session-keyed read would leave
@@ -560,7 +566,10 @@ export function invisibleCharAlert(sessionId) {
   const dirs = own === alertDir() ? [own] : [own, alertDir()];
   const parts = [];
   for (const dir of dirs) {
-    if (!dirIsTrusted(dir)) continue;
+    if (!privateDirAt(dir)) continue;
+    // A live session's findings must outlast any sweep that ages the store by
+    // its directory's timestamp: losing them lifts the gate mid-session.
+    if (dir === own) touchLiveState(dir);
     // Sorted so a multi-finding report reads the same on every call; the names
     // are random, so the order carries no meaning beyond being stable.
     for (const name of readdirSync(dir).sort()) {
@@ -583,7 +592,7 @@ export function invisibleCharAlert(sessionId) {
  * through a read-modify-write would let two hooks recording a finding at once
  * silently drop one of them; a fresh file per finding has no shared cell to
  * lose. Symlink-refusing (writeFileNoFollow) because the store sits at a
- * predictable, world-visible $TMPDIR path.
+ * predictable STATE_ROOT path, world-visible in the $TMPDIR fallback.
  * @param {string} text
  * @param {string} [sessionId]
  * @returns {boolean} whether the finding was recorded
@@ -597,7 +606,7 @@ export function appendAlert(text, sessionId) {
   let usable;
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    usable = dirIsTrusted(dir);
+    usable = privateDirAt(dir);
   } catch {
     usable = false;
   }
@@ -612,9 +621,10 @@ export function appendAlert(text, sessionId) {
 /**
  * True once the gate has surfaced its blocking ask this session. Validates
  * ownership (not mere existence): a co-tenant could pre-create the ack at its
- * predictable $TMPDIR path to permanently suppress the one-time blocking ask down
- * to the passive reminder, so trust the marker only when it is a regular file
- * this uid wrote (markerIsTrusted), mirroring how acknowledgeAlert writes it.
+ * predictable STATE_ROOT path to permanently suppress the one-time blocking ask
+ * down to the passive reminder, so trust the marker only when it is a regular
+ * file this uid wrote (markerIsTrusted), mirroring how acknowledgeAlert writes
+ * it.
  *
  * On a host that exports no session id every session shares the fallback prefix,
  * so the ack has no session to end with and would suppress the one-time blocking
@@ -638,8 +648,8 @@ export function alertAcknowledged(sessionId) {
  * @returns {void}
  */
 export function acknowledgeAlert(sessionId) {
-  // Symlink-safe presence write: the ack sits at a predictable $TMPDIR path a
-  // co-tenant could pre-plant a symlink at (see writeSentinelFile).
+  // Symlink-safe presence write: the ack sits at a predictable STATE_ROOT path
+  // a co-tenant could pre-plant a symlink at (see writeSentinelFile).
   writeSentinelFile(alertAckFile(sessionId));
 }
 
