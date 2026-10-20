@@ -13,6 +13,7 @@
 import { describe, it, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import {
+  chownSync,
   existsSync,
   lutimesSync,
   mkdtempSync,
@@ -24,9 +25,15 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-// Set before the hook module loads: the store paths are keyed to it.
+// Set before the hook module loads: the store paths are keyed to it. A private
+// $TMPDIR as the state root too, because the sweep reaches every project's
+// artifacts there and a parallel test file's sweep would otherwise race the
+// backdated artifacts below.
 const projectDir = mkdtempSync(join(tmpdir(), "sanitizer-alert-store-"));
 process.env.CLAUDE_PROJECT_DIR = projectDir;
+const stateRoot = mkdtempSync(join(tmpdir(), "sanitizer-alert-root-"));
+process.env.TMPDIR = stateRoot;
+delete process.env.CLAUDE_PLUGIN_DATA;
 
 const {
   acknowledgeAlert,
@@ -57,6 +64,7 @@ beforeEach(clear);
 after(() => {
   clear();
   rmSync(projectDir, { recursive: true, force: true });
+  rmSync(stateRoot, { recursive: true, force: true });
 });
 
 describe("a session cannot inherit another session's answer", () => {
@@ -252,6 +260,100 @@ describe("the shared no-session fallback has a lifetime", () => {
     sweepStaleSessions();
     assert.equal(instructionsLoadedSeen(), false);
   });
+
+  it("does not let a read refresh the shared marker past that age", () => {
+    // A live session's read keeps its own marker fresh, but every session-less
+    // host reads this one, so a refresh would hold it — and the suppressed gap
+    // notice — forever.
+    recordInstructionsLoaded();
+    ageBy(instructionsLoadedFile(), 8 * DAY_MS);
+    assert.equal(instructionsLoadedSeen(), true);
+    sweepStaleSessions();
+    assert.equal(instructionsLoadedSeen(), false);
+  });
+});
+
+describe("a live session outlives the stale-session sweep", () => {
+  // The sweep ages another session's artifacts by timestamp, and the launch
+  // marker and the findings are written once. A session open past the sweep's
+  // age, joined by a second session in the same project, lost both: a false
+  // "no InstructionsLoaded scan has run" notice and a gate lifted mid-session.
+  const WEEK_AND_A_DAY_S = 8 * 24 * 60 * 60;
+  /** @param {string} path */
+  const ageOut = (path) => {
+    const past = Date.now() / 1000 - WEEK_AND_A_DAY_S;
+    lutimesSync(path, past, past);
+  };
+  const [live, other] = SESSIONS;
+
+  for (const [name, read] of /** @type {[string, boolean][]} */ ([
+    ["read since it aged", true],
+    ["never read since it aged", false],
+  ]))
+    it(`${read ? "keeps" : "sweeps"} the marker and findings ${name}`, () => {
+      recordInstructionsLoaded(live);
+      appendAlert("uncleanable CLAUDE.md", live);
+      ageOut(instructionsLoadedFile(live));
+      ageOut(alertDir(live));
+      if (read) {
+        assert.equal(instructionsLoadedSeen(live), true);
+        assert.match(invisibleCharAlert(live) ?? "", /uncleanable/u);
+      }
+      sweepStaleSessions(other);
+      assert.equal(existsSync(instructionsLoadedFile(live)), read);
+      assert.equal(existsSync(alertDir(live)), read);
+    });
+
+  it("ages out a project that is never reopened", () => {
+    // The state root can be persistent, so a one-off project's artifacts must
+    // age out without that project ever running again.
+    const elsewhere = (/** @type {string} */ suffix) =>
+      join(stateRoot, `.claude-invisible-char-alert-0badc0de.s-x.${suffix}`);
+    writeFileSync(elsewhere("instructions-loaded"), "");
+    writeFileSync(elsewhere("acked"), "");
+    ageOut(elsewhere("instructions-loaded"));
+    // Not an alert artifact at all, however old: the sweep must not reach it.
+    const bystander = join(stateRoot, ".claude-invisible-char-alert-notahash");
+    writeFileSync(bystander, "");
+    ageOut(bystander);
+    sweepStaleSessions(live);
+    assert.equal(existsSync(elsewhere("instructions-loaded")), false);
+    assert.equal(
+      existsSync(elsewhere("acked")),
+      true,
+      "a fresh entry was swept",
+    );
+    assert.equal(existsSync(bystander), true, "a non-artifact was swept");
+    rmSync(elsewhere("acked"));
+    rmSync(bystander);
+  });
+
+  it(
+    "leaves another uid's stale entry in a shared root, and keeps sweeping",
+    { skip: process.getuid?.() !== 0 && "only root can chown to another uid" },
+    () => {
+      // In a shared /tmp the entry is not ours to remove, and rmSync on another
+      // uid's file throws ENOTDIR — which aborted the whole SessionStart sweep.
+      const foreign = join(
+        stateRoot,
+        ".claude-invisible-char-alert-0badc0de.s-y.instructions-loaded",
+      );
+      const ours = join(
+        stateRoot,
+        ".claude-invisible-char-alert-0badc0de.s-z.instructions-loaded",
+      );
+      for (const path of [foreign, ours]) {
+        writeFileSync(path, "");
+        ageOut(path);
+      }
+      chownSync(foreign, 65534, 65534);
+      ageOut(foreign);
+      sweepStaleSessions(live);
+      assert.equal(existsSync(foreign), true, "another uid's entry was swept");
+      assert.equal(existsSync(ours), false, "the sweep stopped early");
+      rmSync(foreign);
+    },
+  );
 });
 
 describe("concurrent findings cannot lose each other", () => {

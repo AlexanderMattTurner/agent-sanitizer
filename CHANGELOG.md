@@ -8,6 +8,23 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.66.4] - 2026-10-20
+
+### Fixed
+
+- State-root sweep now skips other users' entries and preserves the shared marker's TTL.
+- Plugin now refuses relative paths for `CLAUDE_PLUGIN_DATA` as the state root.
+- Never-reopened projects' state is now aged out, and unwritable state roots are skipped during cleanup.
+- Session alert state is preserved during the 7-day stale-session sweep.
+- Session-lifetime state is kept out of `$TMPDIR` when the plugin has a data directory.
+
+## [2.66.3] - 2026-10-16
+
+### Fixed
+
+- Plugin redactor provisioning now provides step-specific advice when installation fails, clearly naming the failing step and offering zipapp fallback guidance.
+- Plugin redactor provisioning error messages now display what component actually serves when a step fails.
+
 ## [2.66.2] - 2026-10-14
 
 ### Fixed

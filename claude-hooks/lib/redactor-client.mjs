@@ -35,7 +35,12 @@ import {
   encodeFrame,
   isPlainObject,
 } from "./redactor-wire.mjs";
-import { currentUid, isPrivateDir, ownedByCurrentUser } from "./hook-io.mjs";
+import {
+  currentUid,
+  isPrivateDir,
+  ownedByCurrentUser,
+  privateDirAt,
+} from "./hook-io.mjs";
 import { readKnob } from "./knobs.mjs";
 
 export { FRAME_CAP };
@@ -55,25 +60,6 @@ const SOCKET_PATH_MAX = 103;
 const TEMP_BIND_NAME_LENGTH = 17;
 
 /**
- * Whether `root` is a real directory this uid owns that no group/other can
- * write. lstat, so a symlinked root is refused rather than followed. An absent
- * root is just not a candidate: this runs at module load, where a throw would
- * stop the hook loading at all.
- * @param {string} root
- * @param {number | null} uid
- * @returns {boolean}
- */
-function isPrivateRoot(root, uid) {
-  let st;
-  try {
-    st = lstatSync(root);
-  } catch {
-    return false;
-  }
-  return isPrivateDir(st, { uid });
-}
-
-/**
  * The redactor socket path: one per user, shared by every session of that user
  * (the daemon redacts each REQUESTER's env secrets). The daemon binds it 0600
  * under a 0700 dir AFTER priming, so its existence means "ready". In order:
@@ -81,7 +67,7 @@ function isPrivateRoot(root, uid) {
  * 1. `_AGENT_SANITIZER_REDACTOR_SOCKET` — explicit override.
  * 2. `$XDG_RUNTIME_DIR`, then `$CLAUDE_PLUGIN_DATA` — per-user directories no
  *    other uid can write, so a co-tenant cannot pre-create the socket dir under
- *    them. Taken only if isPrivateRoot passes and the path fits sun_path.
+ *    them. Taken only if privateDirAt passes and the path fits sun_path.
  * 3. `<tmpdir>/agent-sanitizer-redactor-<uid>` — on a shared /tmp a co-tenant
  *    can still pre-create it; the daemon then refuses to serve and the client
  *    refuses to connect (classifySocket), costing availability, never a secret.
@@ -94,7 +80,7 @@ export function resolveSocketPath(env, uid) {
   const override = readKnob("_AGENT_SANITIZER_REDACTOR_SOCKET", env);
   if (override) return override;
   for (const root of [env.XDG_RUNTIME_DIR, env.CLAUDE_PLUGIN_DATA]) {
-    if (!root || !isPrivateRoot(root, uid)) continue;
+    if (!root || !privateDirAt(root, { uid })) continue;
     const dir = join(root, "agent-sanitizer-redactor");
     if (Buffer.byteLength(dir) + 1 + TEMP_BIND_NAME_LENGTH <= SOCKET_PATH_MAX)
       return join(dir, "redactor.sock");

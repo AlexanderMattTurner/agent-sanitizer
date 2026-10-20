@@ -9,8 +9,8 @@
  * instructions" envelope (REVEAL_READ_ENVELOPE) re-attached when that file is read.
  * Read is not untrusted ingress, so a Read of the sidecar already bypasses
  * Layer 2 (no re-splice); the carve-out's job is to mark the bytes untrusted.
- * The store is content-addressed (identical output dedupes) and lives under a
- * throwaway tmp dir; _AGENT_SANITIZER_REVEAL_DIR overrides the location.
+ * The store is content-addressed (identical output dedupes) and lives under
+ * STATE_ROOT; _AGENT_SANITIZER_REVEAL_DIR overrides the location.
  *
  * The same dir also holds the per-splice SPAN files (`span-<key>.txt`): each
  * Layer-2 splice's (redacted) original, keyed by its placeholder's
@@ -25,16 +25,25 @@ import {
   mkdirSync,
   lstatSync,
   readdirSync,
+  rmSync,
   unlinkSync,
   openSync,
   readFileSync,
   closeSync,
   constants,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
-import { PROJECT_HASH, isPrivateDir, writeFileNoFollow } from "./hook-io.mjs";
+import {
+  PROJECT_HASH,
+  STATE_ROOT,
+  privateDirAt,
+  writeFileNoFollow,
+} from "./hook-io.mjs";
 import { readKnob } from "./knobs.mjs";
+
+/** The default reveal store's name, less the project hash that completes it. */
+const REVEAL_STORE_STEM = "agent-sanitizer-layer2-reveal-";
+const ANY_PROJECT_HASH = /^[0-9a-f]{8}$/u;
 
 /**
  * Where reveal sidecars are stored. Exported so the PreToolUse placeholder
@@ -43,14 +52,13 @@ import { readKnob } from "./knobs.mjs";
  * @returns {string}
  */
 export function revealDir() {
-  // Project-keyed like every other $TMPDIR store: one unkeyed directory is shared
-  // by every project on the machine, so one project's sweep ages out another's
-  // spans and a rehydration that should have restored a placeholder fails closed
-  // instead. The 12-hex span KEY inside the directory is untouched — it is the
-  // published placeholder grammar, not a path detail.
+  // Under STATE_ROOT, so an OS temp cleaner cannot empty it under a live session.
+  // Project-keyed, so one project's sweep cannot age out another's spans — either
+  // loss fails a rehydration closed. The 12-hex span KEY inside is untouched: it
+  // is the published placeholder grammar, not a path detail.
   return (
     readKnob("_AGENT_SANITIZER_REVEAL_DIR") ??
-    join(tmpdir(), `agent-sanitizer-layer2-reveal-${PROJECT_HASH}`)
+    join(STATE_ROOT, `${REVEAL_STORE_STEM}${PROJECT_HASH}`)
   );
 }
 
@@ -63,7 +71,8 @@ export function revealDir() {
 export const REVEAL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * Delete this project's reveal sidecars and spans older than {@link REVEAL_TTL_MS}.
+ * Delete this project's reveal sidecars and spans older than {@link REVEAL_TTL_MS},
+ * and every other project's default store that holds nothing younger.
  *
  * Nothing else removes them: every entry is content-addressed, so a store that is
  * never swept grows for the life of the machine. Called from SessionStart, the one
@@ -71,6 +80,7 @@ export const REVEAL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
  * @returns {void}
  */
 export function sweepStaleReveals() {
+  sweepAbandonedRevealStores();
   const dir = revealDir();
   // existsSync first: revealDirIsSafe CREATES the directory, and a sweep run on
   // every session start must not leave an empty store behind for a project that
@@ -89,6 +99,37 @@ export function sweepStaleReveals() {
       // else is a bug in this sweep and propagates.
       const code = /** @type {NodeJS.ErrnoException} */ (err).code;
       if (code !== "ENOENT" && code !== "EPERM" && code !== "EACCES") throw err;
+    }
+  }
+}
+
+/**
+ * Remove OTHER projects' default reveal stores under STATE_ROOT once they are
+ * older than {@link REVEAL_TTL_MS}. Each project sweeps only its own store's
+ * files, and STATE_ROOT is persistent when it is the plugin data dir, so a
+ * project never reopened would keep its spans — tool output — for good. A
+ * store's mtime moves with every entry written or swept, and entries are
+ * write-once, so a store past the cutoff holds only files past it too.
+ * @returns {void}
+ */
+function sweepAbandonedRevealStores() {
+  const cutoff = Date.now() - REVEAL_TTL_MS;
+  for (const name of readdirSync(STATE_ROOT)) {
+    const path = join(STATE_ROOT, name);
+    const isStore =
+      name.startsWith(REVEAL_STORE_STEM) &&
+      ANY_PROJECT_HASH.test(name.slice(REVEAL_STORE_STEM.length));
+    if (!isStore || path === revealDir()) continue;
+    // privateDirAt: a co-tenant's store, or a symlink planted at the name, is
+    // not this uid's to remove.
+    if (!privateDirAt(path)) continue;
+    try {
+      if (lstatSync(path).mtimeMs < cutoff)
+        rmSync(path, { recursive: true, force: true });
+    } catch (err) {
+      // ENOENT: a parallel session swept this store between readdir and lstat.
+      if (/** @type {NodeJS.ErrnoException} */ (err).code !== "ENOENT")
+        throw err;
     }
   }
 }
@@ -120,19 +161,7 @@ function revealDirIsSafe(dir) {
   } catch {
     return false;
   }
-  let st;
-  try {
-    st = lstatSync(dir);
-    /* c8 ignore start -- TOCTOU-race defense: after the mkdirSync above succeeds, dir
-       exists with accessible parents, so lstatSync can only throw if a co-tenant removes
-       or replaces it in the window between the two syscalls — unreachable in a
-       single-threaded test, yet load-bearing to keep persistReveal fail-closed on that
-       race rather than crashing. */
-  } catch {
-    return false;
-  }
-  /* c8 ignore stop */
-  return isPrivateDir(st);
+  return privateDirAt(dir);
 }
 
 /**

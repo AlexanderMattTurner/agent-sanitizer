@@ -547,8 +547,10 @@ entirely: a host that never wired the `InstructionsLoaded` event to
 `scan-loaded-instructions`, a Claude Code older than 2.1.69, which is the first
 build that emits that event, and `scan-loaded-instructions` switched off in
 `AGENT_SANITIZER_DISABLED_HOOKS`.
-Nothing on disk tells them apart, so the PreToolUse gate names all three, once
-per session, rather than leaving the gap silent.
+The PreToolUse gate reports the gap once per session rather than leaving it
+silent. It checks the disable list and asks the session's own `claude --version`,
+so the notice names only the cause it could not rule out: usually the wiring,
+which only `/hooks` shows.
 
 A fourth state is not one of them and is not reported as one: the host emits no
 event when it has nothing to announce. The gate therefore asks not "does anything
@@ -561,10 +563,11 @@ or an empty `~/.claude/CLAUDE.md` fires no event however the hook is wired, so
 the missing scan there is evidence of nothing. The trade this accepts is a false
 NEGATIVE: a repo whose announced instruction files all sit in subdirectories —
 a monorepo of per-package `CLAUDE.md` under a root carrying only `AGENTS.md`, on
-a machine with no user-global memory — loses the notice until a tool call touches
-one of those directories, which is what the gate's per-call `touchedDir` check
-recovers. Weighed against a false POSITIVE on every session launched outside a
-project, which trains the operator to skip the notice everywhere.
+a machine with no user-global memory — gets no notice at all. A tool call that
+touches such a directory is no evidence either: Claude Code loads the nested
+file only after that call, so its PreToolUse runs before any scan could have.
+Weighed against a false POSITIVE on every session launched outside a project,
+which trains the operator to skip the notice everywhere.
 
 That table is a claim about someone else's product, so the event that names a
 loaded file is also what falsifies it. `contextScopeContradiction` checks every
@@ -797,7 +800,7 @@ positive costs a sentence of context, never a mangled input):
   the identical Write confirms and passes. The confirmation is the model's
   deliberate retry — never a human permission prompt — held as a
   consumed-on-use, TTL-bounded sentinel (keyed to path + content + the dropped
-  values) via the same squat-resistant `$TMPDIR` helpers as the invisible-char
+  values) in `$TMPDIR` via the same squat-resistant helpers as the invisible-char
   gate. Tracked files, secret-free files, failed git probes and unmappable
   views all skip the guard (fail open). "Tracked" approximates "recoverable":
   an uncommitted secret line on a tracked file is an accepted gap — the
@@ -927,6 +930,16 @@ it, so what anchors its trust is worth stating exactly.
   under `TMPDIR` is read only when this user owns it with owner-only write, so a
   squatted shared-temp entry cannot pre-suppress the warning that a call ran
   unsanitized.
+- **Session state lives under that directory too, not in `$TMPDIR`.** The
+  InstructionsLoaded marker, the invisible-char gate's findings and ack, and the
+  Layer-2 reveal spans sit in `${CLAUDE_PLUGIN_DATA}/session-state`, created mode
+  700 and used only when both it and the data directory are real directories
+  this user owns with no group/other write (`privateDirAt`) and the leaf is
+  writable. An OS temp cleaner (macOS dirhelper purges `$TMPDIR` entries unread
+  for 3 days) would otherwise delete a live session's marker — a false "no
+  InstructionsLoaded scan has run" notice — or its findings, lifting the gate.
+  A host with no plugin data directory, or one that fails those checks, falls
+  back to `$TMPDIR` and keeps that exposure.
 - **Opting out.** `AGENT_SANITIZER_HOOK_BINARY=0` never downloads and never runs
   a binary. That leaves the node path running the shipped bundle and the
   compile cache above; `AGENT_SANITIZER_COMPILE_CACHE=0` turns the cache off as
