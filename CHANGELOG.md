@@ -8,6 +8,16 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.66.4] - 2026-10-20
+
+### Fixed
+
+- State-root sweep now skips other users' entries and preserves the shared marker's TTL.
+- Plugin now refuses relative paths for `CLAUDE_PLUGIN_DATA` as the state root.
+- Never-reopened projects' state is now aged out, and unwritable state roots are skipped during cleanup.
+- Session alert state is preserved during the 7-day stale-session sweep.
+- Session-lifetime state is kept out of `$TMPDIR` when the plugin has a data directory.
+
 ## [2.66.3] - 2026-10-16
 
 ### Fixed
