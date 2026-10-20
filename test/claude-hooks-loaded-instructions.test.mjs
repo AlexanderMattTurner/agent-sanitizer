@@ -542,6 +542,21 @@ describe("a session with no InstructionsLoaded scan is named, once", () => {
       ],
       absent: [/older than/u, /claude --version/u, /switched off/u],
     },
+    // Major and minor must decide before patch: 2.0.999 is older, 3.0.0 newer.
+    {
+      name: "the CLI is an older minor with a larger patch",
+      env: {},
+      version: [2, 0, 999],
+      present: [/this Claude Code is 2\.0\.999, older than 2\.1\.69/u],
+      absent: [/\/hooks/u],
+    },
+    {
+      name: "the CLI is a newer major with a smaller patch",
+      env: {},
+      version: [3, 0, 0],
+      present: [/Claude Code 3\.0\.0 emits the event/u],
+      absent: [/older than/u],
+    },
     {
       name: "the CLI version cannot be read",
       env: {},
@@ -556,12 +571,10 @@ describe("a session with no InstructionsLoaded scan is named, once", () => {
   ];
   for (const { name, env, version, present, absent } of causeCases)
     it(`names only the cause left open when ${name}`, () => {
-      const notice = instructionsLoadedGapNotice(
-        undefined,
-        undefined,
+      const notice = instructionsLoadedGapNotice(undefined, undefined, {
         env,
-        () => version,
-      );
+        cliVersion: () => version,
+      });
       assert.match(notice, /unscanned/u);
       for (const pattern of present) assert.match(notice, pattern);
       for (const pattern of absent) assert.doesNotMatch(notice, pattern);
@@ -575,17 +588,22 @@ describe("a session with no InstructionsLoaded scan is named, once", () => {
         mode: 0o755,
       });
       // The stale CLAUDE_CODE_VERSION a remote host hands hooks must not win.
+      const noticeUnder = (env) =>
+        instructionsLoadedGapNotice(undefined, undefined, { env });
       assert.match(
-        instructionsLoadedGapNotice(undefined, undefined, {
+        noticeUnder({
           CLAUDE_CODE_EXECPATH: fake,
           CLAUDE_CODE_VERSION: "2.1.42",
         }),
         /Claude Code 2\.1\.304 emits the event/u,
       );
       assert.match(
-        instructionsLoadedGapNotice(undefined, undefined, {
-          CLAUDE_CODE_EXECPATH: join(binDir, "missing"),
-        }),
+        noticeUnder({ CLAUDE_CODE_EXECPATH: join(binDir, "missing") }),
+        /version could not be read/u,
+      );
+      // With no EXECPATH, PATH's `claude` may be another install: not asked.
+      assert.match(
+        noticeUnder({ PATH: binDir, CLAUDE_CODE_VERSION: "2.1.304" }),
         /version could not be read/u,
       );
     } finally {
@@ -637,8 +655,8 @@ describe("a session with no InstructionsLoaded scan is named, once", () => {
 
   it("stays silent while the host's cold-start marker is present", () => {
     // A launch event fires about a second after SessionStart, so a host that is
-    // still installing has not necessarily wired anything wrong: the three
-    // causes the notice names would all be false. This is the Claude Code web
+    // still installing has not necessarily wired anything wrong: any cause the
+    // notice names would be false. This is the Claude Code web
     // case, where the hook files are build output a fresh container lacks.
     const coldDir = mkdtempSync(join(tmpdir(), "sanitizer-cold-start-"));
     const runtimeDir = mkdtempSync(join(tmpdir(), "sanitizer-runtime-"));
@@ -810,6 +828,23 @@ describe("a session with no InstructionsLoaded scan is named, once", () => {
     } finally {
       rmSync(loopDir, { recursive: true, force: true });
       rmSync(instructionsLoadedNoticeFile(loopSession), { force: true });
+    }
+  });
+
+  it("ignores the directory an older caller passes as the third argument", () => {
+    const emptyDir = mkdtempSync(join(tmpdir(), "sanitizer-old-caller-"));
+    const nestedDir = join(emptyDir, "sub");
+    const session = "sess-old-caller";
+    try {
+      mkdirSync(nestedDir);
+      writeFileSync(join(nestedDir, "CLAUDE.md"), PROSE);
+      assert.equal(
+        instructionsLoadedGapNotice(session, emptyDir, nestedDir),
+        null,
+      );
+    } finally {
+      rmSync(emptyDir, { recursive: true, force: true });
+      rmSync(launchEmptyFile(session), { force: true });
     }
   });
 

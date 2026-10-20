@@ -457,21 +457,20 @@ function userGlobalLaunchHasContent(env = process.env) {
  * The running Claude Code's version as `[major, minor, patch]`, or null when it
  * cannot be read. Asks the binary rather than `CLAUDE_CODE_VERSION`: a remote
  * host hands hooks a stale value there (2.1.42 under a 2.1.304 CLI).
- * `CLAUDE_CODE_EXECPATH` names the binary running this session; PATH's `claude`
- * may be another install.
+ * `CLAUDE_CODE_EXECPATH` names the binary running this session. Without it the
+ * answer is null: PATH's `claude` may be another install, and reporting its
+ * version as this session's would name a false cause. On an npm install that
+ * path is `node`, whose `v…` output also reads as null.
  * @param {Record<string, string | undefined>} [env]
  * @returns {number[] | null}
  */
 function runningCliVersion(env = process.env) {
-  const result = spawnSync(
-    env.CLAUDE_CODE_EXECPATH || "claude",
-    ["--version"],
-    {
-      encoding: "utf8",
-      timeout: 5000,
-      stdio: ["ignore", "pipe", "ignore"],
-    },
-  );
+  if (!env.CLAUDE_CODE_EXECPATH) return null;
+  const result = spawnSync(env.CLAUDE_CODE_EXECPATH, ["--version"], {
+    encoding: "utf8",
+    timeout: 2000,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
   const match = /^(\d+)\.(\d+)\.(\d+)/u.exec(result.stdout ?? "");
   return match ? match.slice(1).map(Number) : null;
 }
@@ -543,16 +542,17 @@ function unexplainedGapCauses(env, cliVersion) {
  *   instructionsLoadedFile)
  * @param {string} [dir]  the project root to check (injectable; defaults to
  *   the real project)
- * @param {Record<string, string | undefined>} [env]
- * @param {(env: Record<string, string | undefined>) => number[] | null} [cliVersion]
- *   injectable for tests
+ * @param {{
+ *   env?: Record<string, string | undefined>,
+ *   cliVersion?: (env: Record<string, string | undefined>) => number[] | null,
+ * }} [options]  injectable for tests; any other value, such as a directory
+ *   string from an older caller, reads as no options
  * @returns {string | null}
  */
 export function instructionsLoadedGapNotice(
   sessionId,
   dir = PROJECT_DIR,
-  env = process.env,
-  cliVersion = runningCliVersion,
+  { env = process.env, cliVersion = runningCliVersion } = {},
 ) {
   if (instructionsLoadedSeen(sessionId)) return null;
   if (markerIsTrusted(instructionsLoadedNoticeFile(sessionId))) return null;
