@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.66.5] - 2026-10-20
+
+### Fixed
+
+- The gap notice no longer covers nested-only `CLAUDE.md` files, and its third argument is now properly used for options.
+- Fixed `InstructionsLoaded` gap notice misfiring by checking its own causes.
+
 ## [2.66.4] - 2026-10-20
 
 ### Fixed
