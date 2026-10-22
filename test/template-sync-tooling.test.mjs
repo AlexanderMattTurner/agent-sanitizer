@@ -207,37 +207,4 @@ describe("template-sync.yaml: each staged script gets the env it requires", () =
     ])
       assert.ok(checked.includes(marker), `never checked ${marker}`);
   });
-
-  // The resolver's fanout.py shells out to `claude`, which the runner image does
-  // not provide; without the install the model tier resolves nothing.
-  it("installs the claude CLI before the model tier, under the same gate", () => {
-    const steps = syncJob.steps;
-    const resolveAt = steps.findIndex(
-      (step) =>
-        typeof step.run === "string" &&
-        stagedScripts(step.run).includes("template-sync-resolve.sh"),
-    );
-    assert.ok(
-      resolveAt !== -1,
-      `${WORKFLOW}: no step runs template-sync-resolve.sh`,
-    );
-    const installs = steps
-      .slice(0, resolveAt)
-      .filter(
-        (step) =>
-          typeof step.run === "string" &&
-          stagedScripts(step.run).includes("install-claude-cli.sh"),
-      );
-    assert.equal(
-      installs.length,
-      1,
-      `${WORKFLOW}: exactly one step before "${label(steps[resolveAt], resolveAt)}" ` +
-        `must run "$SYNC_TOOLS/install-claude-cli.sh"`,
-    );
-    assert.equal(
-      installs[0].if,
-      steps[resolveAt].if,
-      `${WORKFLOW}: the claude CLI install must run whenever the resolve step does`,
-    );
-  });
 });

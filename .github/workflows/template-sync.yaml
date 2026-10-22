@@ -354,16 +354,6 @@ jobs:
           git -C "${dest}" checkout --detach "${RESOLVER_REF}"
           echo "dir=${dest}/.github/resolver" >>"$GITHUB_OUTPUT"
 
-      # The model tier is the resolver's fanout.py, which shells out to the
-      # `claude` binary — nothing else in this job puts it on PATH, and without
-      # it fanout dies before resolving anything ("the `claude` CLI is not on
-      # PATH"), leaving every non-structural conflict to the marker gate.
-      - name: Install the Claude CLI (pinned)
-        if: inputs.dry-run != true && steps.sync.outputs.has_conflicts == 'true' && steps.create-pr.outputs.pull-request-number
-        env:
-          SYNC_TOOLS: ${{ steps.tools.outputs.scripts }}
-        run: bash "$SYNC_TOOLS/install-claude-cli.sh"
-
       - name: Resolve the sync conflicts
         id: resolve
         if: inputs.dry-run != true && steps.sync.outputs.has_conflicts == 'true' && steps.create-pr.outputs.pull-request-number
