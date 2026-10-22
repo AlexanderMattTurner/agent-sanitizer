@@ -66,6 +66,30 @@ function assertGuardedBy(map, path, reader, mechanism) {
   );
 }
 
+/**
+ * The tracked shipped/tooling inputs, enumerated against the REAL checkout.
+ *
+ * `git ls-files` run with `cwd: root` only answers for `root` when `root` is the
+ * repository's top level. Stryker's sandbox is a plain directory copy at
+ * `<repo>/.stryker-tmp/sandbox-XXXXXX/` that git ignores, so there the pathspecs
+ * resolve inside an untracked subdirectory and list nothing — `only 0 inputs`,
+ * red in the mutation dry run on every shard. The sandbox holds the same paths
+ * as the checkout it was copied from (only their contents are instrumented), so
+ * the top-level listing is the population the partition is about.
+ */
+function trackedInputs(root) {
+  const top = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+    cwd: root,
+    encoding: "utf8",
+  }).trim();
+  return execFileSync("git", ["ls-files", "--", ...GUARDED_ROOTS], {
+    cwd: top,
+    encoding: "utf8",
+  })
+    .split("\n")
+    .filter((path) => path !== "" && !NOT_AN_INPUT.test(path));
+}
+
 describe("guard-pair residue (.hooks/guard-pairs.json)", () => {
   it("names only files the scan cannot reach, mapped to tests that exist", () => {
     const entries = Object.entries(pairs);
@@ -134,14 +158,14 @@ describe("guard-pair residue (.hooks/guard-pairs.json)", () => {
     }
   });
 
+  it("enumerates the same inputs from a subdirectory of the checkout (as in the Stryker sandbox)", () => {
+    const fromSubdir = trackedInputs(join(repoRoot, "test"));
+    assert.ok(fromSubdir.length > 50, `only ${fromSubdir.length} inputs`);
+    assert.deepEqual(fromSubdir, trackedInputs(repoRoot));
+  });
+
   it("classifies every tracked shipped/tooling input: derived, residue, pending or CI-only", () => {
-    const population = execFileSync(
-      "git",
-      ["ls-files", "--", ...GUARDED_ROOTS],
-      { cwd: repoRoot, encoding: "utf8" },
-    )
-      .split("\n")
-      .filter((path) => path !== "" && !NOT_AN_INPUT.test(path));
+    const population = trackedInputs(repoRoot);
     assert.ok(population.length > 50, `only ${population.length} inputs`);
     const parts = [
       population.filter((path) => derived.has(path)),

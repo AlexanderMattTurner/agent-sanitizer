@@ -17,6 +17,7 @@ on:
     branches: [main]
     paths:
       - .github/workflows/**
+      - .github/scripts/sync-required-checks.sh
       - .pre-commit-config.yaml
   workflow_dispatch:
     inputs:
@@ -62,5 +63,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RULESET_SYNC_TOKEN_ORG }}
           REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           CHECK_ONLY: ${{ inputs.check-only }}
         run: bash .github/scripts/sync-required-checks.sh
