@@ -2,7 +2,7 @@
 # Apply (or, with CHECK_ONLY=true, only diff) the branch-protection ruleset's
 # required-status-checks to the `# required-check:` annotations in
 # .github/workflows. Invoked solely by sync-required-checks.yaml; reads REPO,
-# CHECK_ONLY, and GH_TOKEN from the environment.
+# DEFAULT_BRANCH, CHECK_ONLY, and GH_TOKEN from the environment.
 #
 # The ci-truth-serum rev is read from .pre-commit-config.yaml — its single
 # source — so this apply step and the check-required-reporter lint can never run
@@ -21,7 +21,20 @@ if [[ ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
   exit 1
 fi
 
-args=(--repo "$REPO")
+: "${REPO:?REPO required}"
+: "${DEFAULT_BRANCH:?DEFAULT_BRANCH required}"
+
+# ci-truth-serum's own discovery refuses when several repo-owned branch rulesets
+# exist, so name the one that carries the required checks on the default branch.
+ids="$(gh api --paginate "repos/${REPO}/rules/branches/${DEFAULT_BRANCH}" \
+  --jq '.[] | select(.ruleset_source_type == "Repository" and .type == "required_status_checks") | .ruleset_id' |
+  sort -u)"
+if [[ -z "$ids" || "$ids" == *$'\n'* ]]; then
+  echo "Expected exactly one repo-owned ruleset requiring status checks on ${DEFAULT_BRANCH} of ${REPO}; found: ${ids:-none}" >&2
+  exit 1
+fi
+
+args=(--repo "$REPO" --ruleset-id "$ids")
 if [[ "${CHECK_ONLY:-false}" == "true" ]]; then
   args+=(--check)
 fi
