@@ -148,3 +148,63 @@ describe("template-sync.yaml: the sync job runs staged tooling", () => {
     }
   });
 });
+
+/**
+ * Every `${NAME:?…}` a script declares required, read from the staged script's
+ * source — the script itself is the SSOT for what it needs.
+ */
+const requiredEnv = (script) => [
+  ...new Set(
+    [
+      ...readFileSync(
+        join(repoRoot, ".github/scripts", script),
+        "utf8",
+      ).matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*):\?/g),
+    ].map((match) => match[1]),
+  ),
+];
+
+/**
+ * Variables the runner exports into every step by itself. `GITHUB_TOKEN` is
+ * NOT one of them — a step only has it when its `env:` binds it.
+ */
+const RUNNER_PROVIDED = /^(?:GITHUB_(?!TOKEN$)|RUNNER_)/;
+
+/** The `$SYNC_TOOLS/<name>.sh` scripts a step's `run:` invokes. */
+const stagedScripts = (run) =>
+  scriptTokens(run)
+    .map((token) => token.match(/^\$\{?SYNC_TOOLS\}?\/([^/]+\.sh)$/)?.[1])
+    .filter(Boolean);
+
+describe("template-sync.yaml: each staged script gets the env it requires", () => {
+  // A step that runs a staged script without an env var the script requires
+  // dies on its `${VAR:?}` guard. Only that form, in the top-level script, is
+  // read; sourced lib/ files and `[[ -z ]]` checks are out of scope.
+  it("binds every `${VAR:?}` the script declares", () => {
+    const checked = [];
+    for (const { step, index } of runSteps)
+      for (const script of stagedScripts(step.run)) {
+        const bound = {
+          ...(workflow.env ?? {}),
+          ...(syncJob.env ?? {}),
+          ...(step.env ?? {}),
+        };
+        for (const name of requiredEnv(script)) {
+          if (RUNNER_PROVIDED.test(name)) continue;
+          checked.push(`${script}:${name}`);
+          assert.ok(
+            typeof bound[name] === "string" && bound[name] !== "",
+            `${WORKFLOW}: ${label(step, index)} runs ${script}, which requires ` +
+              `$${name}, but neither the step, the job nor the workflow env sets it`,
+          );
+        }
+      }
+    // Non-vacuity: the gate's two requirements must be among those checked, so
+    // a regex that stopped matching cannot pass this on an empty set.
+    for (const marker of [
+      "template-sync-marker-gate.sh:BASE_SHA",
+      "template-sync-marker-gate.sh:GITHUB_TOKEN",
+    ])
+      assert.ok(checked.includes(marker), `never checked ${marker}`);
+  });
+});

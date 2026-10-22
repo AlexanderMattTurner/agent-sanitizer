@@ -395,6 +395,9 @@ jobs:
         if: ${{ !cancelled() && inputs.dry-run != true && steps.create-pr.outputs.pull-request-number }}
         env:
           SYNC_TOOLS: ${{ steps.tools.outputs.scripts }}
+          # The commit each still-marked path is restored to — the one the sync
+          # branched from, which is also the commit the staged tooling came from.
+          BASE_SHA: ${{ github.sha }}
           # token-fallback-ok: designed graceful degradation, not an accident.
           GITHUB_TOKEN: ${{ secrets.TEMPLATE_SYNC_TOKEN_ORG || secrets.GITHUB_TOKEN }}
         run: bash "$SYNC_TOOLS/template-sync-marker-gate.sh"
@@ -402,7 +405,7 @@ jobs:
       # A sync merges itself only when NOTHING needed judgement. See the script
       # for the full predicate; the two carve-outs are that a model-resolved file
       # never qualifies, and neither does a change to the supervision surface.
-      # It runs a BASE_SHA copy for the same reason the gate does: the gate
+      # It runs the STAGED copy for the same reason the gate does: the gate
       # passing only proves the branch carries no conflict marker, never that
       # this script or the predicate it reads still match the reviewed version.
       - name: Enable auto-merge on a fully deterministic sync
