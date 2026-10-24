@@ -50,6 +50,29 @@ export GH_TOKEN
 owner="${GH_REPO%%/*}"
 name="${GH_REPO##*/}"
 
+# Read the reviewer's reviews BEFORE the thread evidence below, and pin the hold
+# this run may dismiss to what this read sees. INVARIANT — that order keeps the
+# dismissal off a hold the reviewer submits mid-run: such a hold postdates the
+# resolved-thread snapshot that licenses the dismissal, so nothing here has
+# cleared it and it keeps blocking the merge.
+reviews_ndjson="$(reviewer_reviews_ndjson "$owner" "$name" "$PR")"
+latest_state="$(jq -rs \
+  'if length == 0 then "" else (sort_by(.submittedAt) | last | .state) end' \
+  <<<"$reviews_ndjson")"
+
+# The most recent CHANGES_REQUESTED specifically, NOT the latest review: a
+# CHANGES_REQUESTED keeps blocking until dismissed or superseded by an APPROVED
+# from the same reviewer, and a later COMMENTED review does not clear it. So the
+# blocking review is routinely not the latest one.
+blocking_review_id="$(jq -rs '[.[] | select(.state == "CHANGES_REQUESTED")]
+  | if length == 0 then "" else (sort_by(.submittedAt) | last | .databaseId) end' \
+  <<<"$reviews_ndjson")"
+
+if [[ "$latest_state" != "CHANGES_REQUESTED" && "$latest_state" != "COMMENTED" ]]; then
+  echo "reviewer's latest review is '${latest_state:-<none>}' — no live hold to clear; nothing to do" >&2
+  exit 0
+fi
+
 # Count the reviewer's threads two ways, over the shared paginated read — a PR
 # can accrue >100 threads, and an unpaginated first:100 would miss a later page.
 # The per-page projection emits one {total, unresolved} object; the trailing
@@ -57,9 +80,9 @@ name="${GH_REPO##*/}"
 #
 # A thread hold is "demonstrably cleared" only when the reviewer opened at least
 # one thread AND none remain unresolved. A CHANGES_REQUESTED / COMMENTED review
-# that opened ZERO threads carries no resolution signal at all — clearing it on
-# "unresolved == 0" (trivially true with no threads) would merge the reviewer's
-# concern unaddressed.
+# that opened ZERO threads carries no resolution signal at all, so the `total`
+# guard below exits on it: auto-clearing a thread-less hold on "unresolved == 0"
+# (trivially true with no threads) would merge the reviewer's concern unaddressed.
 counts="$(fetch_review_threads "$owner" "$name" "$PR" \
   "[.[] | $REVIEW_THREAD_ROOT_IS_REVIEWER]
    | {total: length, unresolved: (map(select(.isResolved == false)) | length)}" |
@@ -78,23 +101,11 @@ if [[ "${total:-0}" -eq 0 ]]; then
   exit 0
 fi
 
-# What is the reviewer's latest review state? reviewer_reviews_ndjson owns the
-# paginated read (a long-lived PR can accrue >100 reviews, and an unpaginated
-# first:100 returns the OLDEST 100 and would pick a stale state) and the reviewer
-# predicate; the slurp picks the globally latest by submittedAt.
-reviews_ndjson="$(reviewer_reviews_ndjson "$owner" "$name" "$PR")"
-latest_state="$(jq -rs 'if length == 0 then "" else (sort_by(.submittedAt) | last | .state) end' <<<"$reviews_ndjson")"
-
-if [[ "$latest_state" != "CHANGES_REQUESTED" && "$latest_state" != "COMMENTED" ]]; then
-  echo "reviewer's latest review is '${latest_state:-<none>}' — no live hold to clear; nothing to do" >&2
-  exit 0
-fi
-
 cleared_by="every review conversation from the automated reviewer has been resolved"
 
-# Dismiss the REVIEWER'S OWN stale CHANGES_REQUESTED. Reached only when the hold
-# is already proven clear above and the approval was structurally refused, so it
-# is the fallback lever for a hold nothing else can clear.
+# Dismiss the stale CHANGES_REQUESTED pinned above. Reached only when that hold
+# is already proven clear and the approval was structurally refused, so it is the
+# fallback lever for a hold nothing else can clear.
 #
 # Dismissal is not approval: it needs write access rather than a different actor,
 # so it succeeds exactly where the approval cannot — including for GITHUB_TOKEN,
@@ -106,25 +117,26 @@ cleared_by="every review conversation from the automated reviewer has been resol
 # idempotent — a dismissed review's state stops being CHANGES_REQUESTED, so a
 # re-run finds nothing and says so.
 dismiss_stale_hold() {
-  local reason="$1" review_id dismiss_err
-  # The most recent CHANGES_REQUESTED specifically, NOT the latest review: a
-  # CHANGES_REQUESTED keeps blocking until dismissed or superseded by an APPROVED
-  # from the same reviewer, and a later COMMENTED review does not clear it. So the
-  # blocking review is routinely not the latest one.
-  review_id="$(jq -rs '[.[] | select(.state == "CHANGES_REQUESTED")]
-    | if length == 0 then "" else (sort_by(.submittedAt) | last | .databaseId) end' <<<"$reviews_ndjson")"
+  local reason="$1" review_id="$blocking_review_id" dismiss_err now_state
 
   if [[ -z "$review_id" ]]; then
-    echo "no active CHANGES_REQUESTED from ${REVIEWER_LOGIN} to dismiss — its hold was a COMMENTED review, which does not block a merge." >&2
+    echo "${REVIEWER_LOGIN} has no active CHANGES_REQUESTED, so it has none to dismiss: its hold was a COMMENTED review, or it never filed one. A hold from any other reviewer still blocks the merge." >&2
     return 0
   fi
 
-  # Unlike the approval refusals above, a failed dismissal is NOT structural:
-  # nothing about this PR makes it permanently impossible, so it is a real error
-  # and must be seen rather than logged past.
+  # Unlike the approval refusals above, a failed dismissal is NOT structural, so
+  # it is a real error. One case is not: the pinned hold can be dismissed by a
+  # human or another sweep between the pin above and this call, and GitHub then
+  # refuses the PUT. Re-read the review to tell those apart — an unreadable state
+  # falls through to the loud failure, so a real fault is never swallowed.
   if ! dismiss_err="$(gh api --method PUT \
     "repos/${GH_REPO}/pulls/${PR}/reviews/${review_id}/dismissals" \
     -f message="$reason" -f event=DISMISS 2>&1)"; then
+    if now_state="$(gh api "repos/${GH_REPO}/pulls/${PR}/reviews/${review_id}" \
+      --jq '.state')" && [[ "$now_state" != "CHANGES_REQUESTED" ]]; then
+      echo "review ${review_id} is now '${now_state}', so its hold was cleared by someone else while this run worked; nothing to dismiss." >&2
+      return 0
+    fi
     echo "failed to dismiss the reviewer's stale hold (review ${review_id}): ${dismiss_err}" >&2
     return 1
   fi
