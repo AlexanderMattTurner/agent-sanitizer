@@ -329,8 +329,7 @@ jobs:
       # Both steps need a marker-bearing file: a kept-local conflict emits no
       # conflict_files, and template-sync-resolve.sh refuses an empty list.
       - name: Install mergiraf (pinned, digest-verified)
-<<<<<<< local
-        if: inputs.dry-run != true && steps.sync.outputs.has_conflicts == 'true' && steps.create-pr.outputs.pull-request-number
+        if: inputs.dry-run != true && steps.sync.outputs.conflict_files != '' && steps.create-pr.outputs.pull-request-number
         env:
           SYNC_TOOLS: ${{ steps.tools.outputs.scripts }}
         run: bash "$SYNC_TOOLS/install-mergiraf.sh"
@@ -342,7 +341,7 @@ jobs:
       # line names, so the two never run different commits of the resolver.
       - name: Check out the resolver from its own repository
         id: resolver
-        if: inputs.dry-run != true && steps.sync.outputs.has_conflicts == 'true' && steps.create-pr.outputs.pull-request-number
+        if: inputs.dry-run != true && steps.sync.outputs.conflict_files != '' && steps.create-pr.outputs.pull-request-number
         env:
           RESOLVER_REPOSITORY: AlexanderMattTurner/agent-resolve-merge-conflicts
           RESOLVER_REF: ca9a3fa872a9c06ade766de9bf69ff7b0329247f
@@ -351,13 +350,6 @@ jobs:
           git clone --no-tags "https://github.com/${RESOLVER_REPOSITORY}.git" "${dest}"
           git -C "${dest}" checkout --detach "${RESOLVER_REF}"
           echo "dir=${dest}/.github/resolver" >>"$GITHUB_OUTPUT"
-||||||| base
-        if: inputs.dry-run != true && steps.sync.outputs.has_conflicts == 'true' && steps.create-pr.outputs.pull-request-number
-        run: bash .github/scripts/install-mergiraf.sh
-=======
-        if: inputs.dry-run != true && steps.sync.outputs.conflict_files != '' && steps.create-pr.outputs.pull-request-number
-        run: bash .github/scripts/install-mergiraf.sh
->>>>>>> template
 
       - name: Resolve the sync conflicts
         id: resolve
@@ -425,21 +417,5 @@ jobs:
           HAS_DOWNGRADES: ${{ steps.sync.outputs.has_downgrades }}
           ALL_DETERMINISTIC: ${{ steps.resolve.outputs.all_deterministic }}
           CHANGED_PATHS: ${{ steps.sync.outputs.changed_paths }}
-<<<<<<< local
-        run: bash "$SYNC_TOOLS/template-sync-automerge.sh"
-||||||| base
-        run: |
-          set -o pipefail
-          automerge_dir="${RUNNER_TEMP}/marker-gate-automerge"
-          mkdir -p "${automerge_dir}" # bare-mkdir-ok: the extraction below is the post-condition and fails loudly
-          timeout --kill-after=30 300 git archive "${BASE_SHA}" .github/scripts | tar -x -f - -C "${automerge_dir}"
-          bash "${automerge_dir}/.github/scripts/template-sync-automerge.sh"
-=======
           MARKERLESS_FILES: ${{ steps.sync.outputs.markerless_files }}
-        run: |
-          set -o pipefail
-          automerge_dir="${RUNNER_TEMP}/marker-gate-automerge"
-          mkdir -p "${automerge_dir}" # bare-mkdir-ok: the extraction below is the post-condition and fails loudly
-          timeout --kill-after=30 300 git archive "${BASE_SHA}" .github/scripts | tar -x -f - -C "${automerge_dir}"
-          bash "${automerge_dir}/.github/scripts/template-sync-automerge.sh"
->>>>>>> template
+        run: bash "$SYNC_TOOLS/template-sync-automerge.sh"

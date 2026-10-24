@@ -5,30 +5,13 @@
 # resolved, so post the APPROVE that supersedes the hold and satisfies a
 # review-required ruleset."
 #
-<<<<<<< local
 # It is deliberately state-based and idempotent: it reads the CURRENT thread and
 # review state via the API and decides from that alone, never from who resolved
 # what. Whoever addressed a finding resolves its thread — the author, an agent, a
 # human clicking Resolve — and a resolve fires no workflow event, so the periodic
 # sweep over open PRs (claude-reviewer-hold-clear.yaml) is what turns the last
 # resolution into a cleared hold.
-||||||| base
-# It is deliberately state-based and idempotent: it reads the CURRENT thread and
-# review state via the API and decides from that alone, never from who resolved
-# what. That is what closes the stranding gap — the approval used to fire only as
-# a side effect of the resolver resolving the last thread itself, so a thread
-# resolved any other way (a human clicking Resolve, an agent, a prior run's race)
-# left the CHANGES_REQUESTED with nothing to clear it. Runs on a periodic sweep
-# of open PRs (claude-reviewer-hold-clear.yaml), so a thread an agent or a human
-# resolves — which fires no workflow event — cannot leave the hold stranded.
-=======
-# It is deliberately state-based and idempotent: it reads thread and review state
-# via the API and decides from that alone, never from who resolved what. It runs
-# on a periodic sweep of open PRs (claude-reviewer-hold-clear.yaml), so a
-# resolution that fires no workflow event cannot leave the hold stranded.
->>>>>>> template
 #
-<<<<<<< local
 # Approves ONLY when the reviewer's LATEST review is a live hold or comment —
 # CHANGES_REQUESTED or COMMENTED (any other latest state means nothing to clear:
 # APPROVED already through, DISMISSED, or "" the reviewer never reviewed this PR —
@@ -37,24 +20,6 @@
 # comment authored by REVIEWER_LOGIN) with none still unresolved. A hold whose
 # concern lived only in the review BODY has no thread to resolve and is therefore
 # never auto-cleared; it waits for a human or a re-review.
-||||||| base
-# Approves ONLY when the reviewer's LATEST review is a live hold or comment —
-# CHANGES_REQUESTED or COMMENTED (any other latest state means nothing to clear:
-# APPROVED already through, DISMISSED, or "" the reviewer never reviewed this PR —
-# so an unrelated thread-resolved event mints no approval; this allowlist is
-# stricter than "!= APPROVED" on purpose) — AND one of two resolution signals holds:
-#   the reviewer opened at least one thread (root comment authored by
-#   REVIEWER_LOGIN) and none is still unresolved. A hold whose concern lived only
-#   in the review body opens no thread, so it clears on the reviewer's own
-#   re-review instead.
-=======
-# Approves ONLY when the reviewer's LATEST review is CHANGES_REQUESTED or
-# COMMENTED (any other latest state means nothing to clear: APPROVED already
-# through, DISMISSED, or "" it never reviewed this PR; the allowlist is stricter
-# than "!= APPROVED" on purpose), AND the reviewer opened at least one thread
-# with none still unresolved. A hold whose concern lived only in the review body
-# opens no thread, so it clears on the reviewer's own re-review instead.
->>>>>>> template
 #
 # Env: the GH_TOKEN_* ladder rungs (see lib/github-token-ladder.bash), GH_REPO
 # (owner/name), PR; REVIEWER_LOGIN optional.
@@ -85,56 +50,15 @@ export GH_TOKEN
 owner="${GH_REPO%%/*}"
 name="${GH_REPO##*/}"
 
-<<<<<<< local
-# Count the reviewer's threads two ways, over the shared paginated read — a PR
-# can accrue >100 threads, and an unpaginated first:100 would miss a later page.
-# The per-page projection emits one {total, unresolved} object; the trailing
-# reduce sums them.
-#
-||||||| base
-# Count the reviewer's threads two ways. Paginated: a PR can accrue >100 threads,
-# and an unpaginated first:100 would miss a thread on a later page. The per-page
-# --jq emits one {total, unresolved} object; the trailing reduce sums them.
-# shellcheck disable=SC2016 # GraphQL query + jq program are literal, not shell
-remaining_query='query($owner: String!, $name: String!, $pr: Int!, $endCursor: String) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $pr) {
-      reviewThreads(first: 100, after: $endCursor) {
-        pageInfo { hasNextPage endCursor }
-        nodes { isResolved comments(first: 1) { nodes { author { login } } } }
-      }
-    }
-  }
-}'
-=======
 # Read the reviewer's reviews BEFORE the thread evidence below, and pin the hold
 # this run may dismiss to what this read sees. INVARIANT — that order keeps the
 # dismissal off a hold the reviewer submits mid-run: such a hold postdates the
 # resolved-thread snapshot that licenses the dismissal, so nothing here has
 # cleared it and it keeps blocking the merge.
-# shellcheck disable=SC2016 # GraphQL query + jq program are literal, not shell
-reviews_query='query($owner: String!, $name: String!, $pr: Int!, $endCursor: String) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $pr) {
-      reviews(first: 100, after: $endCursor) {
-        pageInfo { hasNextPage endCursor }
-        nodes { databaseId author { login } state submittedAt }
-      }
-    }
-  }
-}'
-reviewer_reviews="$(gh api graphql --paginate \
-  -f query="$reviews_query" -f owner="$owner" -f name="$name" -F pr="$PR" \
-  --jq ".data.repository.pullRequest.reviews.nodes[]
-        | ${REVIEWER_MATCH_AUTHOR}
-        | {databaseId, state, submittedAt}")"
-
-# Paginated: a long-lived PR can accrue >100 reviews, and an unpaginated
-# first:100 returns the OLDEST 100 and would pick a stale state. Each slurp below
-# therefore sorts by submittedAt across every page.
+reviews_ndjson="$(reviewer_reviews_ndjson "$owner" "$name" "$PR")"
 latest_state="$(jq -rs \
   'if length == 0 then "" else (sort_by(.submittedAt) | last | .state) end' \
-  <<<"$reviewer_reviews")"
+  <<<"$reviews_ndjson")"
 
 # The most recent CHANGES_REQUESTED specifically, NOT the latest review: a
 # CHANGES_REQUESTED keeps blocking until dismissed or superseded by an APPROVED
@@ -142,60 +66,26 @@ latest_state="$(jq -rs \
 # blocking review is routinely not the latest one.
 blocking_review_id="$(jq -rs '[.[] | select(.state == "CHANGES_REQUESTED")]
   | if length == 0 then "" else (sort_by(.submittedAt) | last | .databaseId) end' \
-  <<<"$reviewer_reviews")"
+  <<<"$reviews_ndjson")"
 
 if [[ "$latest_state" != "CHANGES_REQUESTED" && "$latest_state" != "COMMENTED" ]]; then
   echo "reviewer's latest review is '${latest_state:-<none>}' — no live hold to clear; nothing to do" >&2
   exit 0
 fi
 
-# Count the reviewer's threads two ways. Paginated: a PR can accrue >100 threads,
-# and an unpaginated first:100 would miss a thread on a later page. The per-page
-# --jq emits one {total, unresolved} object; the trailing reduce sums them.
-# shellcheck disable=SC2016 # GraphQL query + jq program are literal, not shell
-remaining_query='query($owner: String!, $name: String!, $pr: Int!, $endCursor: String) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $pr) {
-      reviewThreads(first: 100, after: $endCursor) {
-        pageInfo { hasNextPage endCursor }
-        nodes { isResolved comments(first: 1) { nodes { author { login } } } }
-      }
-    }
-  }
-}'
->>>>>>> template
+# Count the reviewer's threads two ways, over the shared paginated read — a PR
+# can accrue >100 threads, and an unpaginated first:100 would miss a later page.
+# The per-page projection emits one {total, unresolved} object; the trailing
+# reduce sums them.
+#
 # A thread hold is "demonstrably cleared" only when the reviewer opened at least
 # one thread AND none remain unresolved. A CHANGES_REQUESTED / COMMENTED review
-<<<<<<< local
-# that opened ZERO threads carries no resolution signal at all — clearing it on
-# "unresolved == 0" (trivially true with no threads) would merge the reviewer's
-# concern unaddressed.
+# that opened ZERO threads carries no resolution signal at all, so the `total`
+# guard below exits on it: auto-clearing a thread-less hold on "unresolved == 0"
+# (trivially true with no threads) would merge the reviewer's concern unaddressed.
 counts="$(fetch_review_threads "$owner" "$name" "$PR" \
   "[.[] | $REVIEW_THREAD_ROOT_IS_REVIEWER]
    | {total: length, unresolved: (map(select(.isResolved == false)) | length)}" |
-||||||| base
-# that opened ZERO threads carries no THREAD resolution signal; it is cleared only
-# by the BODY signal below (the model judged the review's summary finding
-# addressed), never on thread state alone — auto-clearing a thread-less hold on
-# "unresolved == 0" (trivially true with no threads) would merge the reviewer's
-# concern unaddressed.
-# shellcheck disable=SC2016 # jq program is literal, not shell ($p is a jq var)
-counts="$(gh api graphql --paginate \
-  -f query="$remaining_query" -f owner="$owner" -f name="$name" -F pr="$PR" \
-  --jq "[.data.repository.pullRequest.reviewThreads.nodes[]
-         | ${REVIEWER_MATCH_THREAD_ROOT}]
-        | {total: length, unresolved: (map(select(.isResolved == false)) | length)}" |
-=======
-# that opened ZERO threads carries no thread resolution signal, so the `total`
-# guard below exits on it: auto-clearing a thread-less hold on "unresolved == 0"
-# (trivially true with no threads) would merge the reviewer's concern unaddressed.
-# shellcheck disable=SC2016 # jq program is literal, not shell ($p is a jq var)
-counts="$(gh api graphql --paginate \
-  -f query="$remaining_query" -f owner="$owner" -f name="$name" -F pr="$PR" \
-  --jq "[.data.repository.pullRequest.reviewThreads.nodes[]
-         | ${REVIEWER_MATCH_THREAD_ROOT}]
-        | {total: length, unresolved: (map(select(.isResolved == false)) | length)}" |
->>>>>>> template
   jq -s 'reduce .[] as $p ({total: 0, unresolved: 0};
            {total: (.total + $p.total), unresolved: (.unresolved + $p.unresolved)})')"
 unresolved="$(jq -r '.unresolved' <<<"$counts")"
@@ -211,49 +101,6 @@ if [[ "${total:-0}" -eq 0 ]]; then
   exit 0
 fi
 
-<<<<<<< local
-# What is the reviewer's latest review state? reviewer_reviews_ndjson owns the
-# paginated read (a long-lived PR can accrue >100 reviews, and an unpaginated
-# first:100 returns the OLDEST 100 and would pick a stale state) and the reviewer
-# predicate; the slurp picks the globally latest by submittedAt.
-reviews_ndjson="$(reviewer_reviews_ndjson "$owner" "$name" "$PR")"
-latest_state="$(jq -rs 'if length == 0 then "" else (sort_by(.submittedAt) | last | .state) end' <<<"$reviews_ndjson")"
-
-if [[ "$latest_state" != "CHANGES_REQUESTED" && "$latest_state" != "COMMENTED" ]]; then
-  echo "reviewer's latest review is '${latest_state:-<none>}' — no live hold to clear; nothing to do" >&2
-  exit 0
-fi
-
-||||||| base
-# What is the reviewer's latest review state? Paginated (a long-lived PR can
-# accrue >100 reviews, and an unpaginated first:100 returns the OLDEST 100 and
-# would pick a stale state): the per-page --jq emits the reviewer's reviews as
-# NDJSON and the slurp picks the globally latest by submittedAt.
-# shellcheck disable=SC2016 # GraphQL query + jq program are literal, not shell
-reviews_query='query($owner: String!, $name: String!, $pr: Int!, $endCursor: String) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $pr) {
-      reviews(first: 100, after: $endCursor) {
-        pageInfo { hasNextPage endCursor }
-        nodes { databaseId author { login } state submittedAt }
-      }
-    }
-  }
-}'
-latest_state="$(gh api graphql --paginate \
-  -f query="$reviews_query" -f owner="$owner" -f name="$name" -F pr="$PR" \
-  --jq ".data.repository.pullRequest.reviews.nodes[]
-        | ${REVIEWER_MATCH_AUTHOR}
-        | {state, submittedAt}" |
-  jq -rs 'if length == 0 then "" else (sort_by(.submittedAt) | last | .state) end')"
-
-if [[ "$latest_state" != "CHANGES_REQUESTED" && "$latest_state" != "COMMENTED" ]]; then
-  echo "reviewer's latest review is '${latest_state:-<none>}' — no live hold to clear; nothing to do" >&2
-  exit 0
-fi
-
-=======
->>>>>>> template
 cleared_by="every review conversation from the automated reviewer has been resolved"
 
 # Dismiss the stale CHANGES_REQUESTED pinned above. Reached only when that hold
@@ -270,30 +117,7 @@ cleared_by="every review conversation from the automated reviewer has been resol
 # idempotent — a dismissed review's state stops being CHANGES_REQUESTED, so a
 # re-run finds nothing and says so.
 dismiss_stale_hold() {
-<<<<<<< local
-  local reason="$1" review_id dismiss_err
-  # The most recent CHANGES_REQUESTED specifically, NOT the latest review: a
-  # CHANGES_REQUESTED keeps blocking until dismissed or superseded by an APPROVED
-  # from the same reviewer, and a later COMMENTED review does not clear it. So the
-  # blocking review is routinely not the latest one.
-  review_id="$(jq -rs '[.[] | select(.state == "CHANGES_REQUESTED")]
-    | if length == 0 then "" else (sort_by(.submittedAt) | last | .databaseId) end' <<<"$reviews_ndjson")"
-||||||| base
-  local reason="$1" review_id dismiss_err
-  # The most recent CHANGES_REQUESTED specifically, NOT the latest review: a
-  # CHANGES_REQUESTED keeps blocking until dismissed or superseded by an APPROVED
-  # from the same reviewer, and a later COMMENTED review does not clear it. So the
-  # blocking review is routinely not the latest one.
-  review_id="$(gh api graphql --paginate \
-    -f query="$reviews_query" -f owner="$owner" -f name="$name" -F pr="$PR" \
-    --jq ".data.repository.pullRequest.reviews.nodes[]
-          | ${REVIEWER_MATCH_AUTHOR}
-          | select(.state == \"CHANGES_REQUESTED\")
-          | {databaseId, submittedAt}" |
-    jq -rs 'if length == 0 then "" else (sort_by(.submittedAt) | last | .databaseId) end')"
-=======
   local reason="$1" review_id="$blocking_review_id" dismiss_err now_state
->>>>>>> template
 
   if [[ -z "$review_id" ]]; then
     echo "${REVIEWER_LOGIN} has no active CHANGES_REQUESTED, so it has none to dismiss: its hold was a COMMENTED review, or it never filed one. A hold from any other reviewer still blocks the merge." >&2
