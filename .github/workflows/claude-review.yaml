@@ -102,17 +102,16 @@ jobs:
         RUN_URL='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
         bash .github/scripts/review-findings-gate.sh
     secrets:
-      # Rung 1 is the metered key, spent before any subscription tier, under the
-      # template's secret name. The OAuth tiers keep this repository's order
-      # behind it. An unset rung is skipped.
-      rung_1: ${{ secrets.FAR_ANTHROPIC_API_KEY }}
-      rung_2: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-      rung_3: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK }}
-      rung_4: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_2 }}
-      rung_5: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_3 }}
-      rung_6: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_4 }}
-      rung_7: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_5 }}
-      rung_8: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_6 }}
+      # Subscription OAuth tokens only: no rung is a metered API key, so a
+      # review that exhausts every tier fails instead of billing. An unset
+      # rung is skipped.
+      rung_1: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      rung_2: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK }}
+      rung_3: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_2 }}
+      rung_4: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_3 }}
+      rung_5: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_4 }}
+      rung_6: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_5 }}
+      rung_7: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_6 }}
 
   # ────────────────────────────────────────────────────────────────────────────
   # Auto-approve the PRs the reviewer deliberately SKIPS, and clear the
