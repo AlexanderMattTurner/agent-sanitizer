@@ -81,11 +81,11 @@ UNRESOLVABLE_SITES = {
     ),
     (
         "src/gates.mjs",
-        'new RegExp( parseCredentialNames(credentialNamesSpec).fieldNamePatterns.join("|"), "i", )',
+        'new RegExp( credentialNames().fieldNamePatterns.join("|"), "i", )',
     ): (
         "The secret pre-gate's keyword arm is the credential vocabulary's "
-        "field-value nouns, joined: data read from credential-names.json at "
-        "first use. Each noun is `[a-z0-9]+` parts joined by `[_-]?`, so every "
+        "field-value nouns, joined: data validated from credential-names.json "
+        "at first use. Each noun is `[a-z0-9]+` parts joined by `[_-]?`, so every "
         "alternative is a bounded literal and the alternation has no nested "
         "quantifier. test_redos_js_exemption_instances.py builds it from the "
         "shipped vocabulary and analyzes it."

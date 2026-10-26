@@ -9,7 +9,9 @@
  * set of credential-bearing variable names. A rendered second copy is what let
  * this matcher fall twelve segments behind the engine.
  *
- * The JSON configs are imported as modules, not read from disk at call time:
+ * The vocabulary comes from `credentialNames()`, the package's one loader of
+ * that file. The JSON configs below are imported as modules, not read from disk
+ * at call time:
  * esbuild inlines them into the plugin bundle (which ships with no config
  * directory beside it) and Node resolves them natively from the package when the
  * hooks run from source. Their VALIDATION stays lazy — a malformed credential
@@ -21,7 +23,6 @@
 // engine alias and an external consumer resolves the same specifier.
 import { credentialNameMatcher } from "agent-sanitizer/credential-names-matcher";
 
-import credentialNames from "../../python/agent_sanitizer/secrets/data/credential-names.json" with { type: "json" };
 import redactionFloor from "../../python/agent_sanitizer/secrets/data/redaction-floor.json" with { type: "json" };
 import inferenceKeys from "../config/inference-key-vars.json" with { type: "json" };
 import scrubbed from "../config/scrubbed-env-vars.json" with { type: "json" };
@@ -155,7 +156,6 @@ let _credentialRule;
 function credentialRule() {
   if (_credentialRule !== undefined) return _credentialRule;
   return (_credentialRule = credentialNameMatcher({
-    spec: credentialNames,
     scope: "trailing",
     declineNonSecret: true,
   }));

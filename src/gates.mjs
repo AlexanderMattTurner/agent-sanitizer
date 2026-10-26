@@ -6,15 +6,13 @@
  * without dragging in the heavy remark/rehype/unified graph: a static
  * `export … from "./html.mjs"` would eagerly evaluate that ~200ms module on
  * every root import, defeating the lazy-load design. This module imports only
- * the credential vocabulary (a JSON file and its dependency-free parser), so
- * re-exporting it is free.
+ * the dependency-free credential vocabulary, so re-exporting it is free.
  *
  * INVARIANT: every gate is a SUPERSET of its parser (a narrower one silently
  * turns its layer off; a needless fire only costs a parse), checked by
  * test/gates-superset.test.mjs.
  */
-import credentialNamesSpec from "../python/agent_sanitizer/secrets/data/credential-names.json" with { type: "json" };
-import { parseCredentialNames } from "./credential-names.mjs";
+import { credentialNames } from "./credential-names.mjs";
 
 // ─── Cheap pre-gates ─────────────────────────────────────────────────────────
 
@@ -137,7 +135,7 @@ let _fieldNameHint;
  */
 function fieldNameHint() {
   return (_fieldNameHint ??= new RegExp(
-    parseCredentialNames(credentialNamesSpec).fieldNamePatterns.join("|"),
+    credentialNames().fieldNamePatterns.join("|"),
     "i",
   ));
 }
