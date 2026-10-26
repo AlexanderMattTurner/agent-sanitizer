@@ -80,6 +80,17 @@ UNRESOLVABLE_SITES = {
         "It is a bare character class, so the pattern carries no quantifier."
     ),
     (
+        "src/gates.mjs",
+        'new RegExp( parseCredentialNames(credentialNamesSpec).fieldNamePatterns.join("|"), "i", )',
+    ): (
+        "The secret pre-gate's keyword arm is the credential vocabulary's "
+        "field-value nouns, joined: data read from credential-names.json at "
+        "first use. Each noun is `[a-z0-9]+` parts joined by `[_-]?`, so every "
+        "alternative is a bounded literal and the alternation has no nested "
+        "quantifier. test_redos_js_exemption_instances.py builds it from the "
+        "shipped vocabulary and analyzes it."
+    ),
+    (
         "src/html.mjs",
         'new RegExp(`</${rawText}(?![a-z0-9-])`, "i")',
     ): (
