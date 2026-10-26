@@ -331,14 +331,10 @@ function containedWritePath(absPath, root) {
  */
 function assertContained(absPath, realRoot, literalRoot, pattern) {
   if (isContained(literalRoot, absPath)) return;
-  let real;
-  try {
-    real = realpathSync(absPath);
-  } catch (err) {
-    classifyReadFailure(err);
-    real = null;
-  }
-  if (real !== null && isContained(realRoot, real)) return;
+  // A match outside the tree that resolves to nothing throws its own errno:
+  // still loud, and still refused.
+  const real = realpathSync(absPath);
+  if (isContained(realRoot, real)) return;
   throw new Error(
     `instruction-file path escapes scan root: pattern ${JSON.stringify(
       pattern,
@@ -471,7 +467,10 @@ export function scanInstructionFiles(
       if (classifyReadFailure(err) === "skipped")
         skipped.push({
           file: relative(cwd, file),
-          reason: /** @type {NodeJS.ErrnoException} */ (err).code ?? "",
+          // classifyReadFailure returns only for an errno, so `code` is set.
+          reason: /** @type {string} */ (
+            /** @type {NodeJS.ErrnoException} */ (err).code
+          ),
         });
       continue;
     }

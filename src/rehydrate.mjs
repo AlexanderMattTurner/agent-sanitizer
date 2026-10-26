@@ -55,11 +55,7 @@
  * {@link rehydrateRedacted}).
  */
 import { applyLayer1, normalizeLoneSurrogates } from "./layer1.mjs";
-import {
-  FILE_WRITE_TOOLS,
-  fieldValues,
-  isFileWriteTool,
-} from "./file-write-tools.mjs";
+import { FILE_WRITE_TOOLS, fieldValues } from "./file-write-tools.mjs";
 import {
   occurrences,
   overlapAwareCount,
@@ -777,16 +773,14 @@ function multiEditDeny(filePath) {
 }
 
 /**
- * Every string a placeholder can sit in for `tool`, per {@link FILE_WRITE_TOOLS},
- * or null when the input is not well-formed for it: a placeholder field that is
- * not a string, or a nested field over an absent or empty array.
- * @param {string} tool
+ * Every string a placeholder can sit in, per one {@link FILE_WRITE_TOOLS}
+ * entry, or null when the input is not well-formed for it: a placeholder field
+ * that is not a string, or a nested field over an absent or empty array.
+ * @param {import("./file-write-tools.mjs").FileWriteTool} entry
  * @param {any} ti
  * @returns {string[] | null}
  */
-function placeholderFields(tool, ti) {
-  const entry = isFileWriteTool(tool) ? FILE_WRITE_TOOLS[tool] : undefined;
-  if (!entry) return null;
+function placeholderFields(entry, ti) {
   const values = [];
   for (const spec of entry.placeholders) {
     const found = fieldValues(spec, ti);
@@ -814,8 +808,9 @@ function placeholderFields(tool, ti) {
  */
 function isCandidate(tool, ti) {
   if (typeof ti?.file_path !== "string") return false;
-  if (!FILE_WRITE_TOOLS[tool]?.rehydrates) return false;
-  return placeholderFields(tool, ti) !== null;
+  const entry = FILE_WRITE_TOOLS[tool];
+  if (!entry?.rehydrates) return false;
+  return placeholderFields(entry, ti) !== null;
 }
 
 /**
@@ -847,7 +842,9 @@ export async function rehydrateRedacted(
   // secret; mapping .ipynb JSON is not supported, so refuse with guidance.
   if (
     tool === "NotebookEdit" &&
-    placeholderFields(tool, toolInput)?.some((v) => v.includes(hint))
+    placeholderFields(FILE_WRITE_TOOLS.NotebookEdit, toolInput)?.some((v) =>
+      v.includes(hint),
+    )
   )
     return {
       deny:
@@ -857,7 +854,7 @@ export async function rehydrateRedacted(
     };
   if (!isCandidate(tool, toolInput)) return null;
   const hinted = /** @type {string[]} */ (
-    placeholderFields(tool, toolInput)
+    placeholderFields(FILE_WRITE_TOOLS[tool], toolInput)
   ).some((v) => v.includes(hint));
 
   let content;

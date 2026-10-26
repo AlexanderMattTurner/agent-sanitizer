@@ -16,6 +16,7 @@ import {
   statSync,
   lstatSync,
   readdirSync,
+  realpathSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -25,6 +26,7 @@ import {
   scanText,
   findInstructionFiles,
   scanInstructionFiles,
+  classifyReadFailure,
   walkContextGlobs,
   cleanFile,
   excludeFromContextScan,
@@ -1135,5 +1137,38 @@ describe("cleanFile non-UTF-8 safety", () => {
       raw,
       "the non-UTF-8 file is left byte-for-byte unchanged",
     );
+  });
+});
+
+describe("classifyReadFailure", () => {
+  it("buckets an errno and rethrows anything without one", () => {
+    const errno = (code) => Object.assign(new Error(code), { code });
+    assert.equal(classifyReadFailure(errno("ENOENT")), "absent");
+    assert.equal(classifyReadFailure(errno("EACCES")), "skipped");
+    assert.equal(classifyReadFailure(errno("EISDIR")), "skipped");
+    // A bug (no errno) is never laundered into a bucket.
+    const bug = new TypeError("scanText is not a function");
+    assert.throws(
+      () => classifyReadFailure(bug),
+      (err) => err === bug,
+    );
+  });
+});
+
+describe("findInstructionFiles through a symlinked cwd", () => {
+  it("keeps an absolute glob that names the real path behind the cwd", () => {
+    // cwd is spelled through a symlink, so the real path is outside it
+    // lexically while its realpath is inside the scan root: kept, not thrown.
+    const real = mkdtempSync(join(tmpdir(), "instr-real-"));
+    const link = `${real}-link`;
+    symlinkSync(real, link, "dir");
+    try {
+      const file = join(realpathSync(real), "CLAUDE.md");
+      writeFileSync(file, "x\n");
+      assert.deepEqual(findInstructionFiles([file], { cwd: link }), [file]);
+    } finally {
+      rmSync(link, { force: true });
+      rmSync(real, { recursive: true, force: true });
+    }
   });
 });
