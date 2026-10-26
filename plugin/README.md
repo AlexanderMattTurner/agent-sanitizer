@@ -114,8 +114,8 @@ setup script writes such a marker points the hooks at it with
 
 When a hook cannot run, it fails **open** by default: the guarded action
 proceeds and the model is told, in `additionalContext`, that what it is reading
-was never sanitized. One exception, with secrets enabled, when the hook process
-starts but its machinery fails: a write-shaped call (Write/Edit/MultiEdit/NotebookEdit) whose
+was never sanitized. Two exceptions, with secrets enabled, when the hook process
+starts but its machinery fails. The output hook withholds any tool output it failed on, because that output was never checked for secrets. And a write-shaped call (Write/Edit/MultiEdit/NotebookEdit) whose
 input carries `[REDACTED` placeholder text **asks** even under the open
 default — with the sanitizer down, rehydration cannot run, and passing it
 through would persist the placeholder over the real secret on disk. (A missing
