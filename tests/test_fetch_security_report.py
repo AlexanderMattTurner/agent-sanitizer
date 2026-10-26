@@ -75,7 +75,7 @@ def test_seeded_dependabot_alert_is_surfaced(tmp_path: Path, copy_script) -> Non
     assert "`lodash` (npm)" in text, text
     # And the fallback text must NOT be present — its appearance would mean the
     # call failed and we regressed to the swallowed-error behavior.
-    assert "Could not fetch Dependabot alerts" not in text, text
+    assert "Could not fetch Dependabot Alerts" not in text, text
 
 
 # A `gh` that fails every alert API call the way a missing scope does.
