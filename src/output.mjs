@@ -54,6 +54,7 @@ import {
   warningMessages,
 } from "./severity.mjs";
 import { orderedMatches, spliceOrdered } from "./view-map.mjs";
+import { errMessage } from "./err-message.mjs";
 
 /**
  * Closed enum of LIBRARY-OWNED Layer-5 warning codes — the ONLY warning values
@@ -118,18 +119,6 @@ function mapFilterWarning(code) {
         "the model-facing context.",
     );
   return label;
-}
-
-/**
- * Message from a caught value (`unknown` under strict mode), with one level of
- * cause chain appended so a wrapped failure reads "outer: root".
- * @param {unknown} err
- * @returns {string}
- */
-function errMessage(err) {
-  if (!(err instanceof Error)) return String(err);
-  const cause = err.cause instanceof Error ? `: ${err.cause.message}` : "";
-  return err.message + cause;
 }
 
 /**
