@@ -8,6 +8,7 @@
 # can never lock the session.
 #
 # Behavior:
+<<<<<<< local
 #   * Fast path — if <hook-script> parses cleanly, run it as a child with the
 #     PreToolUse stdin payload forwarded transparently and its stdout (JSON
 #     verdicts included) passed through verbatim. A runtime exit 2 from the
@@ -18,6 +19,20 @@
 #     this shim is treated as a fault, never as policy.
 #   * Degraded path — if <hook-script> fails `bash -n`, fall back to a policy
 #     instead of exiting non-zero (which Claude Code would treat as a block):
+||||||| base
+#   * Fast path — if <hook-script> parses cleanly, exec it. The PreToolUse
+#     stdin payload is forwarded transparently.
+#   * Degraded path — if <hook-script> fails `bash -n`, fall back to a
+#     fail-safe policy instead of exiting non-zero (which Claude Code would
+#     treat as a tool block):
+=======
+#   * Fast path — if <hook-script> parses cleanly, exec it. The PreToolUse
+#     stdin payload is forwarded transparently.
+#   * Degraded path — if <hook-script> fails its syntax check, fall back to a
+#     fail-safe policy instead of letting the broken hook's exit decide (a bash
+#     syntax error exits 2, which blocks every call; a node one exits 1, which
+#     lets every call through unchecked):
+>>>>>>> template
 #       - Edit/Write/MultiEdit/NotebookEdit targeting .claude/hooks/ or
 #         .hooks/ are allowed so the broken hook can be repaired in-session.
 #       - Everything else goes through emit_degraded (below).
@@ -62,11 +77,28 @@ target="${1:-}"
 # unexpected shift failure (CLAUDE.md: branch on the condition instead).
 [[ $# -gt 0 ]] && shift
 
+<<<<<<< local
 # JSON-escape $1 (backslashes before quotes, so nothing re-touches an inserted
 # escape). A non-literal reason that broke the JSON would leave stdout
 # unparseable, which Claude Code reads as NO verdict — an unintended fail-open
 # even under the closed posture.
 json_escape() {
+||||||| base
+# Emit a fail-closed PreToolUse "ask" verdict and print nothing else. A non-zero
+# exit OR empty stdout is NON-blocking in Claude Code, so a missing/corrupt hook
+# must still PRINT a verdict and exit 0 or the guarded tool sails through
+# UNGUARDED (fail OPEN) — the whole reason this shim exists. The reason is
+# JSON-escaped so a future non-literal reason can't break the JSON into a
+# fail-open.
+emit_ask() {
+=======
+# Emit a fail-closed PreToolUse "ask" verdict and print nothing else. An exit 1
+# OR empty stdout is NON-blocking in Claude Code, so a missing/corrupt hook must
+# still PRINT a verdict and exit 0 or the guarded tool runs UNGUARDED (fail OPEN).
+# The bash sibling of lib-hook-io.mjs's hookSpecificOutput: this path runs when a
+# hook file may be broken, so it cannot load one. The reason is JSON-escaped.
+emit_ask() {
+>>>>>>> template
   local esc="${1//\\/\\\\}"
   printf '%s' "${esc//\"/\\\"}"
 }
@@ -99,7 +131,16 @@ emit_degraded() {
 }
 
 if [[ -z "$target" ]] || [[ ! -f "$target" ]]; then
+<<<<<<< local
   # Misconfigured hook path: no verdict source at all.
+||||||| base
+  # Misconfigured hook path: no verdict source at all. Fail closed with an "ask"
+  # instead of the non-blocking `exit 1` that would let the guarded tool run
+  # unchecked (fail OPEN).
+=======
+  # Misconfigured hook path: no verdict source at all. Fail closed with an "ask"
+  # rather than an exit, which would let the guarded tool run unchecked.
+>>>>>>> template
   echo "safe-launch: missing target hook: $target" >&2
   emit_degraded "safe-launch: hook is missing; verdict unavailable."
 fi

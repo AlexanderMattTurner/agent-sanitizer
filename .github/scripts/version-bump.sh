@@ -19,6 +19,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib-ci-retry.sh"
 # shellcheck source=lib/anthropic-ladder.bash disable=SC1091
 source "$SCRIPT_DIR/lib/anthropic-ladder.bash"
+# shellcheck source=lib/git-auth.bash disable=SC1091
+source "$SCRIPT_DIR/lib/git-auth.bash"
 
 log() { echo "$@" >&2; }
 
@@ -618,6 +620,7 @@ RELEASE_DOCS_PUSH_FAILED=0
 # says nothing about what shipped.
 PUBLISHED_SHA=$(git rev-parse HEAD)
 DEFAULT_BRANCH="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}"
+<<<<<<< local
 git config user.name "github-actions[bot]"
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 # Only pass paths that exist: `git add` (unlike `git diff`) fails hard on a
@@ -631,6 +634,16 @@ for release_doc in CHANGELOG.md "$PLUGIN_MANIFEST"; do
 done
 if [[ "${#RELEASE_DOCS_PATHS[@]}" -eq 0 ]] || git diff --quiet -- "${RELEASE_DOCS_PATHS[@]}"; then
   log "No release-docs changes to commit."
+||||||| base
+git config user.name "github-actions[bot]"
+git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+if git diff --quiet -- CHANGELOG.md; then
+  log "No CHANGELOG changes to commit."
+=======
+git_bot_identity
+if git diff --quiet -- CHANGELOG.md; then
+  log "No CHANGELOG changes to commit."
+>>>>>>> template
 else
   git add -- "${RELEASE_DOCS_PATHS[@]}"
   git commit -m "docs: release $NEW_VERSION [skip ci]"
