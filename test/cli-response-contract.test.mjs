@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { describe, it } from "node:test";
 
 import { OPS } from "../bin/sanitize-cli.mjs";
+import { python3Available, skipUnless } from "./helpers/skip.mjs";
 
 /**
  * The CLI is the ONLY bridge between the JS source of truth and every non-JS
@@ -22,18 +23,12 @@ import { OPS } from "../bin/sanitize-cli.mjs";
 
 const PY = "python3";
 
-/** The interpreter probe is separated from the check itself on purpose: a bare
- * `catch` around the real work cannot tell "no python3 on this runner" from
- * "the module moved / raised", and would retire the cross-check in exactly the
- * scenario it exists to catch. */
-function pythonAvailable() {
-  try {
-    execFileSync(PY, ["-c", "pass"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
+// Probed once, outside every test body: a failure of the real work below must
+// fail the test, never read as a missing interpreter.
+const NO_PYTHON = skipUnless(
+  python3Available(),
+  "no python3 interpreter on this runner",
+);
 
 describe("CLI response shape is a checked projection, not a hand-written one", () => {
   it("the sanitize op forwards every field sanitize() produces", async () => {
@@ -55,57 +50,57 @@ describe("CLI response shape is a checked projection, not a hand-written one", (
     assert.ok(Array.isArray(resp.splices));
   });
 
-  it("the Python client's SanitizeResult accepts exactly those fields", (t) => {
-    if (!pythonAvailable()) {
-      t.skip("no python3 interpreter on this runner");
-      return;
-    }
-    // Deliberately OUTSIDE any catch: a moved module, a syntax error or a
-    // non-zero exit must fail this test rather than silently retire it.
-    const out = execFileSync(
-      PY,
-      [
-        "-c",
+  it(
+    "the Python client's SanitizeResult accepts exactly those fields",
+    { skip: NO_PYTHON },
+    () => {
+      // Deliberately OUTSIDE any catch: a moved module, a syntax error or a
+      // non-zero exit must fail this test rather than silently retire it.
+      const out = execFileSync(
+        PY,
         [
-          "import sys, json, dataclasses",
-          "sys.path.insert(0, 'python')",
-          "from agent_sanitizer import SanitizeResult",
-          "print(json.dumps(sorted(f.name for f in dataclasses.fields(SanitizeResult))))",
-        ].join("; "),
-      ],
-      { encoding: "utf-8" },
-    );
-    const pythonFields = JSON.parse(out);
-    assert.deepEqual(pythonFields, [
-      "cleaned",
-      "found",
-      "notes",
-      "splices",
-      "warnings",
-    ]);
-  });
+          "-c",
+          [
+            "import sys, json, dataclasses",
+            "sys.path.insert(0, 'python')",
+            "from agent_sanitizer import SanitizeResult",
+            "print(json.dumps(sorted(f.name for f in dataclasses.fields(SanitizeResult))))",
+          ].join("; "),
+        ],
+        { encoding: "utf-8" },
+      );
+      const pythonFields = JSON.parse(out);
+      assert.deepEqual(pythonFields, [
+        "cleaned",
+        "found",
+        "notes",
+        "splices",
+        "warnings",
+      ]);
+    },
+  );
 
-  it("a newer CLI does not brick an older Python client", (t) => {
-    if (!pythonAvailable()) {
-      t.skip("no python3 interpreter on this runner");
-      return;
-    }
-    // The forward-compat direction, asserted as behaviour rather than trusted
-    // from the docstring: an unknown field must be dropped, not raise.
-    const out = execFileSync(
-      PY,
-      [
-        "-c",
+  it(
+    "a newer CLI does not brick an older Python client",
+    { skip: NO_PYTHON },
+    () => {
+      // The forward-compat direction, asserted as behaviour rather than trusted
+      // from the docstring: an unknown field must be dropped, not raise.
+      const out = execFileSync(
+        PY,
         [
-          "import sys",
-          "sys.path.insert(0, 'python')",
-          "from agent_sanitizer import SanitizeResult",
-          "r = SanitizeResult.from_response({'cleaned': 'x', 'a_field_from_the_future': [1]})",
-          "print(r.cleaned)",
-        ].join("; "),
-      ],
-      { encoding: "utf-8" },
-    );
-    assert.equal(out.trim(), "x");
-  });
+          "-c",
+          [
+            "import sys",
+            "sys.path.insert(0, 'python')",
+            "from agent_sanitizer import SanitizeResult",
+            "r = SanitizeResult.from_response({'cleaned': 'x', 'a_field_from_the_future': [1]})",
+            "print(r.cleaned)",
+          ].join("; "),
+        ],
+        { encoding: "utf-8" },
+      );
+      assert.equal(out.trim(), "x");
+    },
+  );
 });

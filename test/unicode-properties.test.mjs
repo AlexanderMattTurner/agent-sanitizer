@@ -21,6 +21,7 @@ import {
 } from "../scripts/lib/ucd.mjs";
 import * as generated from "../src/unicode-properties.mjs";
 import { CF_CODEPOINTS } from "../src/cf-charset.mjs";
+import { skipUnless } from "./helpers/skip.mjs";
 
 describe("src/unicode-properties.mjs is the pinned UCD", () => {
   it("renders a module exporting exactly the derived tables", async () => {
@@ -82,10 +83,10 @@ const PINNED = [
 // Only a runtime on the pinned version can witness the package: membership moves
 // BOTH ways between versions, so another runtime skips by name. CI's Node 22 is
 // on the pin.
-const witnessSkip =
-  runtime === pinned
-    ? false
-    : `this Node's Unicode ${runtime} is not the pinned ${pinned}`;
+const witnessSkip = skipUnless(
+  runtime === pinned,
+  `this Node's Unicode ${runtime} is not the pinned ${pinned}`,
+);
 
 describe(`pinned properties equal this Node's Unicode ${process.versions.unicode}`, () => {
   for (const [escape, cps] of PINNED)

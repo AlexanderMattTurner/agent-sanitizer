@@ -1034,8 +1034,8 @@ function launchWithoutNode(t, plugin, env = {}) {
  * degrades identically and the set can grow without a new code path.
  *
  * Not a member: a bundle that writes nothing and exits 0. That is
- * indistinguishable from a healthy hook with nothing to say — which all four
- * of them are on a clean payload — so it is an accepted false negative, pinned
+ * indistinguishable from a healthy hook with nothing to say — which every
+ * hook is on a clean payload — so it is an accepted false negative, pinned
  * from the other side by "a clean run stays silent" below.
  */
 const BUNDLE_BREAKAGES = Object.freeze({

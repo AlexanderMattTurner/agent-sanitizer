@@ -18,7 +18,9 @@
  */
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync as probeSpawn } from "node:child_process";
 import { rmSync } from "node:fs";
+import { skipUnless } from "./helpers/skip.mjs";
 
 const { claudeAdapter } = await import("agent-control-plane-core/claude");
 const { Decision } = await import("agent-control-plane-core");
@@ -60,6 +62,14 @@ const { failClosedContext } =
   await import("../claude-hooks/sanitize-output.mjs");
 
 const HOST_REMEDY = "run ./setup.sh in the project root and retry.";
+
+// Probed once, outside the test bodies, so a failure of the real work is
+// never read as a missing flock(1).
+const NO_FLOCK = skipUnless(
+  probeSpawn("sh", ["-c", "command -v flock"], { stdio: "ignore" }).status ===
+    0,
+  "flock(1) is not available on this host",
+);
 
 /** @param {Record<string, unknown>} payload */
 const parse = (payload) => claudeAdapter.parse(payload);
@@ -883,96 +893,97 @@ describe("setup-liveness probe", () => {
     assert.equal(setupRunning(marker), false);
   });
 
-  it("judges a lock-declaring marker by the lock, not by its pid", async (t) => {
-    // A pid is reusable: once setup dies, the number in the marker can name an
-    // unrelated live process and the probe reads a dead install as alive for the
-    // whole ceiling. A flock cannot alias — the kernel releases it at death — so
-    // a marker that declares the lock is judged only by whether it is held.
-    const { writeFileSync, mkdtempSync } = await import("node:fs");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const { spawnSync, spawn } = await import("node:child_process");
-    if (spawnSync("flock", ["--version"], { stdio: "ignore" }).error) {
-      t.skip("flock(1) is not available on this host");
-      return;
-    }
-    const marker = join(mkdtempSync(join(tmpdir(), "seam-lock-")), "m");
-    // The pid is this process — alive — so a pid-only reading says "alive" in
-    // BOTH cases below, and only the lock tells them apart.
-    writeFileSync(marker, `${process.pid}\n${SETUP_LOCK_DECLARATION}\n`);
-
-    assert.equal(
-      probeSetupAlive(marker),
-      false,
-      "an unheld lock must read as a setup that has finished or died",
-    );
-
-    const holder = spawn("flock", ["--exclusive", marker, "sleep", "30"], {
-      stdio: "ignore",
-    });
-    t.after(() => holder.kill());
-    // Wait for the lock to actually be taken; the spawn returns before flock has
-    // opened the file.
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline && probeSetupAlive(marker) === false)
-      await new Promise((r) => setTimeout(r, 25));
-    assert.equal(
-      probeSetupAlive(marker),
-      true,
-      "a held lock must read as a live setup",
-    );
-  });
-
-  it("never re-creates a marker the writer unlinked mid-probe", async (t) => {
-    // The writer's last act is to unlink the marker; a reader that read it a
-    // moment earlier then probes the lock. Probing BY PATH (`flock <path>`)
-    // opens O_CREAT and resurrects the marker as an empty file we own, which
-    // every later reader takes for a live setup with an unparseable pid. A
-    // stand-in flock on PATH performs that unlink at exactly the probe's
-    // moment, then hands its arguments to the real one, so the race is
-    // deterministic rather than a timing window.
-    const { writeFileSync, mkdtempSync, existsSync, chmodSync } =
-      await import("node:fs");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const { spawnSync } = await import("node:child_process");
-    const which = spawnSync("sh", ["-c", "command -v flock"], {
-      encoding: "utf8",
-    });
-    const realFlock = which.stdout.trim();
-    if (which.status !== 0 || realFlock === "") {
-      t.skip("flock(1) is not available on this host");
-      return;
-    }
-    const dir = mkdtempSync(join(tmpdir(), "seam-unlink-race-"));
-    const marker = join(dir, "m");
-    const bin = join(dir, "bin");
-    const { mkdirSync } = await import("node:fs");
-    mkdirSync(bin);
-    const shim = join(bin, "flock");
-    writeFileSync(
-      shim,
-      `#!/bin/sh\nrm -f "$RACE_MARKER"\nexec "${realFlock}" "$@"\n`,
-    );
-    chmodSync(shim, 0o755);
-    const saved = { PATH: process.env.PATH, RACE: process.env.RACE_MARKER };
-    process.env.PATH = `${bin}:${process.env.PATH}`;
-    process.env.RACE_MARKER = marker;
-    t.after(() => {
-      process.env.PATH = saved.PATH;
-      if (saved.RACE === undefined) delete process.env.RACE_MARKER;
-      else process.env.RACE_MARKER = saved.RACE;
-    });
-    for (const probe of [probeSetupAlive, setupRunning]) {
+  it(
+    "judges a lock-declaring marker by the lock, not by its pid",
+    { skip: NO_FLOCK },
+    async (t) => {
+      // A pid is reusable: once setup dies, the number in the marker can name an
+      // unrelated live process and the probe reads a dead install as alive for the
+      // whole ceiling. A flock cannot alias — the kernel releases it at death — so
+      // a marker that declares the lock is judged only by whether it is held.
+      const { writeFileSync, mkdtempSync } = await import("node:fs");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      const { spawnSync, spawn } = await import("node:child_process");
+      const marker = join(mkdtempSync(join(tmpdir(), "seam-lock-")), "m");
+      // The pid is this process — alive — so a pid-only reading says "alive" in
+      // BOTH cases below, and only the lock tells them apart.
       writeFileSync(marker, `${process.pid}\n${SETUP_LOCK_DECLARATION}\n`);
-      assert.equal(probe(marker), false, `${probe.name}: the writer is gone`);
+
       assert.equal(
-        existsSync(marker),
+        probeSetupAlive(marker),
         false,
-        `${probe.name} re-created the unlinked marker`,
+        "an unheld lock must read as a setup that has finished or died",
       );
-    }
-  });
+
+      const holder = spawn("flock", ["--exclusive", marker, "sleep", "30"], {
+        stdio: "ignore",
+      });
+      t.after(() => holder.kill());
+      // Wait for the lock to actually be taken; the spawn returns before flock has
+      // opened the file.
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline && probeSetupAlive(marker) === false)
+        await new Promise((r) => setTimeout(r, 25));
+      assert.equal(
+        probeSetupAlive(marker),
+        true,
+        "a held lock must read as a live setup",
+      );
+    },
+  );
+
+  it(
+    "never re-creates a marker the writer unlinked mid-probe",
+    { skip: NO_FLOCK },
+    async (t) => {
+      // The writer's last act is to unlink the marker; a reader that read it a
+      // moment earlier then probes the lock. Probing BY PATH (`flock <path>`)
+      // opens O_CREAT and resurrects the marker as an empty file we own, which
+      // every later reader takes for a live setup with an unparseable pid. A
+      // stand-in flock on PATH performs that unlink at exactly the probe's
+      // moment, then hands its arguments to the real one, so the race is
+      // deterministic rather than a timing window.
+      const { writeFileSync, mkdtempSync, existsSync, chmodSync } =
+        await import("node:fs");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      const { spawnSync } = await import("node:child_process");
+      const which = spawnSync("sh", ["-c", "command -v flock"], {
+        encoding: "utf8",
+      });
+      const realFlock = which.stdout.trim();
+      assert.notEqual(realFlock, "", "flock(1) resolved to no path");
+      const dir = mkdtempSync(join(tmpdir(), "seam-unlink-race-"));
+      const marker = join(dir, "m");
+      const bin = join(dir, "bin");
+      const { mkdirSync } = await import("node:fs");
+      mkdirSync(bin);
+      const shim = join(bin, "flock");
+      writeFileSync(
+        shim,
+        `#!/bin/sh\nrm -f "$RACE_MARKER"\nexec "${realFlock}" "$@"\n`,
+      );
+      chmodSync(shim, 0o755);
+      const saved = { PATH: process.env.PATH, RACE: process.env.RACE_MARKER };
+      process.env.PATH = `${bin}:${process.env.PATH}`;
+      process.env.RACE_MARKER = marker;
+      t.after(() => {
+        process.env.PATH = saved.PATH;
+        if (saved.RACE === undefined) delete process.env.RACE_MARKER;
+        else process.env.RACE_MARKER = saved.RACE;
+      });
+      for (const probe of [probeSetupAlive, setupRunning]) {
+        writeFileSync(marker, `${process.pid}\n${SETUP_LOCK_DECLARATION}\n`);
+        assert.equal(probe(marker), false, `${probe.name}: the writer is gone`);
+        assert.equal(
+          existsSync(marker),
+          false,
+          `${probe.name} re-created the unlinked marker`,
+        );
+      }
+    },
+  );
 
   it("falls back to the pid for a marker that declares no lock", async () => {
     // The old data shape: writers adopt the lock declaration on their own
