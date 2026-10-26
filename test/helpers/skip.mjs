@@ -5,9 +5,9 @@ import { spawnSync } from "node:child_process";
  * lack (python3, uv, a pinned Unicode runtime).
  *
  * PROBLEM CLASS — a skip that turns a broken cross-check green in CI. A test
- * that skips itself when its toolchain is missing is right on a laptop and
- * wrong in CI, which installs every toolchain: there a "missing" one means the
- * install or the probe broke, and a skip reports that as a pass. So the skip
+ * that skips itself when its precondition is missing is right on a laptop and
+ * wrong in CI, which is set up to satisfy every one: there a missing one means
+ * the setup or the probe broke, and a skip reports that as a pass. So the skip
  * is honoured only outside CI, and CI throws with the reason instead.
  *
  * Use as `it(name, { skip: skipUnless(probe, reason) }, fn)`, with the probe
@@ -21,7 +21,7 @@ export function skipUnless(available, reason) {
   if (available) return false;
   if (process.env.CI)
     throw new Error(
-      `${reason} — CI installs every toolchain this suite needs, so this skip would hide a broken cross-check`,
+      `${reason} — CI is expected to satisfy this, so a skip here would hide a broken cross-check`,
     );
   return reason;
 }
