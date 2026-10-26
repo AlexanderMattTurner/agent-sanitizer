@@ -105,7 +105,7 @@ jobs:
       # Rung 1 is the metered key, spent before any subscription tier, under the
       # template's secret name. The OAuth tiers keep this repository's order
       # behind it. An unset rung is skipped.
-      rung_1: ${{ secrets.ANTHROPIC_API_KEY }}
+      rung_1: ${{ secrets.FAR_ANTHROPIC_API_KEY }}
       rung_2: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       rung_3: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK }}
       rung_4: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_2 }}
