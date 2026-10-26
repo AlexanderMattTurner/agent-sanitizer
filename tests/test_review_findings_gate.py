@@ -766,6 +766,7 @@ def test_the_evaluate_job_actually_posts_a_verdict_on_the_head() -> None:
 # re-posts on it: the `recheck-review-gate` label and the hold-clear cron cover
 # that side.
 
+
 def test_the_reviewer_call_reposts_the_gate_on_the_head() -> None:
     # The `review` job is a call into the upstream reviewer, which runs its
     # `post-review-command` after the review lands, with REPORT_SHA set to the
@@ -792,9 +793,7 @@ def test_the_skipped_class_is_cleared_under_the_same_context() -> None:
     # The auto-approve job clears it by posting the SAME required context — a
     # rename here (or in the gate script) would silently re-block the class.
     jobs = yaml.safe_load(
-        (REPO_ROOT / ".github/workflows/claude-review.yaml").read_text(
-            encoding="utf-8"
-        )
+        (REPO_ROOT / ".github/workflows/claude-review.yaml").read_text(encoding="utf-8")
     )["jobs"]
     job = jobs["auto-approve-skipped"]
     clearing = [s for s in job["steps"] if "/statuses/" in (s.get("run") or "")]
