@@ -78,13 +78,13 @@ jobs:
       statuses: write # the post-review command re-posts the review-findings gate
       actions: read # the owed-review re-check lists this workflow's in-flight runs
       checks: read # the reviewer's jobs may read another check run on the head
-    uses: AlexanderMattTurner/agent-review/.github/workflows/review.yaml@8fd4317a10020e28b8e721a11a2c9857b0027fc3 # pin-comment-ok: agent-review cuts no release yet; re-pin at its first vX.Y
+    uses: AlexanderMattTurner/agent-review/.github/workflows/review.yaml@667f5f240c84496a55b09763a03c94927878733b # pin-comment-ok: agent-review cuts no release yet; re-pin at its first vX.Y
     with:
       reviewer-repository: AlexanderMattTurner/agent-review
       # The SAME sha the `uses:` line pins; move both in one edit. Unset, the
       # called workflow reads `github.job_workflow_sha`, which is empty on a
       # cross-repository call, and its clone step refuses to run.
-      reviewer-ref: 8fd4317a10020e28b8e721a11a2c9857b0027fc3
+      reviewer-ref: 667f5f240c84496a55b09763a03c94927878733b
       review-prompt: .github/prompts/claude-pr-review.md
       # Drop the generated files a required check already re-derives, so the
       # reviewer reads the hand-written change. The reviewer passes the raw diff
@@ -102,16 +102,16 @@ jobs:
         RUN_URL='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
         bash .github/scripts/review-findings-gate.sh
     secrets:
-      # Subscription OAuth tokens only: no rung is a metered API key, so a
-      # review that exhausts every tier fails instead of billing. An unset
-      # rung is skipped.
-      rung_1: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-      rung_2: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK }}
-      rung_3: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_2 }}
-      rung_4: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_3 }}
-      rung_5: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_4 }}
-      rung_6: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_5 }}
-      rung_7: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_6 }}
+      # Every repository that calls the reviewer passes these seven
+      # subscription tokens in this order. No rung holds a metered API key, so
+      # a review never bills; the reviewer tries one last if a rung ever does.
+      rung_1: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK }}
+      rung_2: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_2 }}
+      rung_3: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_3 }}
+      rung_4: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_4 }}
+      rung_5: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_5 }}
+      rung_6: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_6 }}
+      rung_7: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
   # ────────────────────────────────────────────────────────────────────────────
   # Auto-approve the PRs the reviewer deliberately SKIPS, and clear the
