@@ -471,12 +471,18 @@ import {
   scanInstructionFiles,
   cleanFile,
 } from "agent-sanitizer/instructions";
-const findings = scanInstructionFiles(["CLAUDE.md", "**/SKILL.md"], {
-  cwd: projectDir,
-  // Skip what git says is not this checkout's source: ignored directories and
-  // nested worktrees. Ignored FILES (CLAUDE.local.md) are still scanned.
-  exclude: contextScanExclude(projectDir),
-});
+const { findings, skipped } = scanInstructionFiles(
+  ["CLAUDE.md", "**/SKILL.md"],
+  {
+    cwd: projectDir,
+    // Skip what git says is not this checkout's source: ignored directories and
+    // nested worktrees. Ignored FILES (CLAUDE.local.md) are still scanned.
+    exclude: contextScanExclude(projectDir),
+  },
+);
+// `skipped` lists files that exist but could not be read ({ file, reason }).
+// Treat them as unvetted: they were never checked.
+if (skipped.length) console.warn("not scanned:", skipped);
 // `root` is required: a rewrite whose realpath leaves it throws instead.
 for (const { file } of findings)
   cleanFile(`${projectDir}/${file}`, { root: projectDir });

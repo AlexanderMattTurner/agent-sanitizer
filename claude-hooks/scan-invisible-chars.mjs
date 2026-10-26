@@ -69,6 +69,7 @@ import {
   CLAUDE_CONTEXT_SUBDIRS,
   CLAUDE_INSTRUCTION_GLOBS,
   CLAUDE_LAUNCH_GLOBS,
+  classifyReadFailure,
   displayUntrusted,
   isInsideDir,
 } from "../src/claude-context.mjs";
@@ -219,12 +220,11 @@ function decodeRun(run) {
   return instrDecodeRun(run);
 }
 
-// Target discovery stays hook-local glue, NOT a copy of the SSOT's
-// containment-checked `findInstructionFiles`: the two have different contracts.
-// The SSOT finder drops every target it cannot resolve, which is right for a
-// pure scan API; this hook must instead bucket it (see classifyReadFailure).
-// The write-side symlink hazard the SSOT finder guards against is covered here
-// by cleanFile's own root containment and O_NOFOLLOW open.
+// Target discovery stays hook-local glue, NOT a call to the library's
+// `findInstructionFiles`: this hook walks the bounded LAUNCH scope, the library
+// the whole-tree one. Both bucket an unreadable target through
+// classifyReadFailure. The write-side symlink hazard is covered by cleanFile's
+// own root containment and O_NOFOLLOW open.
 
 /**
  * Every file Claude Code loads as model context AT LAUNCH: `dir`'s own
@@ -285,35 +285,6 @@ export {
 };
 
 // Main (skip when imported for testing)
-
-/**
- * PROBLEM CLASS — how a failed instruction-file read is classified. Every
- * consumer reads this one bucketing; nothing re-derives it from an errno.
- *
- * The scan is the only thing between a poisoned `CLAUDE.md` and a session that
- * loads it as instructions, and its caller announces "clean" on the trace
- * channel, whose whole purpose is that a MISSING announcement is loud. So a
- * read failure is never swallowed into an empty findings list — that turns "we
- * could not read this file" into "this file is fine". Three buckets:
- *
- *   - SKIPPED — the file exists and this uid cannot read it (EACCES, EISDIR,
- *     ELOOP…). Unvetted context: reported to the operator and it arms the gate.
- *   - ABSENT — ENOENT. The path resolves to nothing, and Claude Code loads
- *     instruction files through the same open, so no bytes can reach the model.
- *     Announced on the trace channel only; naming a risk that does not exist
- *     teaches the operator to dismiss the gate.
- *   - THROWN — no errno at all, i.e. a bug (a TypeError from an unloaded
- *     binding). Nothing here can be trusted, so it goes to the caller's
- *     declared failure posture. Same errno-vs-bug split {@link
- *     autoCleanFindings} uses.
- * @param {unknown} err
- * @returns {"absent" | "skipped"}  never returns for a non-errno throw
- */
-function classifyReadFailure(err) {
-  const code = /** @type {NodeJS.ErrnoException} */ (err).code;
-  if (code === undefined) throw err;
-  return code === "ENOENT" ? "absent" : "skipped";
-}
 
 /**
  * Scan every instruction file under the project, bucketing each unreadable

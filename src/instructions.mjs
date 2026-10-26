@@ -39,7 +39,11 @@ import {
   payloadVerdict,
   stripInvisible,
 } from "./invisible.mjs";
-import { excludeNodeModules, isInsideDir } from "./claude-context.mjs";
+import {
+  classifyReadFailure,
+  excludeNodeModules,
+  isInsideDir,
+} from "./claude-context.mjs";
 import { compatGlobs } from "./glob-compat.mjs";
 
 // The library's public door onto Claude Code's context scope. The definitions
@@ -56,6 +60,7 @@ export {
   CLAUDE_INSTRUCTION_GLOBS,
   CLAUDE_LAUNCH_GLOBS,
   CLAUDE_MEMORY_FILES,
+  classifyReadFailure,
   contextScopeContradiction,
   excludeFromContextScan,
   USER_GLOBAL_EVENT_NAMED_GLOBS,
@@ -310,47 +315,30 @@ function containedWritePath(absPath, root) {
 }
 
 /**
- * Classify a glob match for containment: resolve it to a real (symlink-
- * followed) path and decide whether to keep, drop, or reject it. Three
- * outcomes are kept distinct:
+ * Refuse a glob match the caller's PATTERN carried outside the scan root.
  *
- *   - The realpath is contained in `realRoot` → KEEP.
- *   - The match is contained LEXICALLY (the glob pattern itself, followed
- *     literally with no symlink resolution, never leaves `literalRoot`) but its
- *     REALPATH escapes `realRoot` — an in-tree symlink (e.g. a planted
- *     `CLAUDE.md -> /etc/passwd`) whose target lives outside the tree → SKIP.
- *     One planted symlink must not abort scanning every other instruction
- *     file; treat it like the existing dangling-symlink case.
- *   - The match ESCAPES LEXICALLY — the glob pattern itself reaches outside
- *     `literalRoot` via `..` or an absolute path outside the tree, with no
- *     symlink involved → THROW. That is a caller misconfiguration (a scanner
- *     pointed outside its own tree) that must surface loudly, not be silently
- *     skipped.
- *   - The path cannot be resolved at all (ENOENT/EACCES — a dangling symlink or
- *     unreadable entry that still lives inside the tree) → return false to SKIP
- *     it, matching scanInstructionFiles' existing skip-on-unreadable behavior.
- *
- * A genuine resolution failure is never allowed to masquerade as a
- * containment pass: an unresolvable path is skipped, only a successfully
- * resolved path is classified as kept/skipped/thrown above.
+ * A match whose literal path stays inside `literalRoot` is kept whatever it
+ * resolves to: an in-tree symlink to a file outside the tree (a planted
+ * `CLAUDE.md -> /tmp/payload.md`), or a dangling one. The host loads such a
+ * file through the same path, so dropping it reported an unscanned file as
+ * clean. Scanning it is a read; {@link cleanFile} still refuses to write
+ * through it. A match that ESCAPES LEXICALLY — `..` or an absolute glob outside
+ * the tree, no symlink involved — is a caller misconfiguration and throws.
  * @param {string} absPath  absolute path to a glob match
  * @param {string} realRoot  realpath of the scan root
  * @param {string} literalRoot  `cwd`, resolved but NOT symlink-followed
  * @param {string} pattern  the glob that produced this match
- * @returns {boolean} true to keep the match, false to skip it
  */
-function keepContained(absPath, realRoot, literalRoot, pattern) {
+function assertContained(absPath, realRoot, literalRoot, pattern) {
+  if (isContained(literalRoot, absPath)) return;
   let real;
   try {
     real = realpathSync(absPath);
-  } catch {
-    return false; // dangling/unreadable in-cwd match: skip, do not abort
+  } catch (err) {
+    classifyReadFailure(err);
+    real = null;
   }
-  if (isContained(realRoot, real)) return true;
-  // The glob pattern itself never left the scan root lexically, so the escape
-  // is caused by an in-tree symlink resolving outside the tree, not by the
-  // caller's glob configuration. Skip this one match, do not abort the scan.
-  if (isContained(literalRoot, absPath)) return false;
+  if (real !== null && isContained(realRoot, real)) return;
   throw new Error(
     `instruction-file path escapes scan root: pattern ${JSON.stringify(
       pattern,
@@ -422,14 +410,12 @@ function ancestorEntries(rel) {
  * Expand `globs` (relative to `cwd`) to absolute file paths, skipping
  * `node_modules`. The glob set is the caller's instruction-file convention.
  *
- * Containment is enforced per match (see {@link keepContained}): a match whose
- * glob pattern itself escapes `cwd` — via `..` or an absolute-path glob
+ * Containment is enforced per match (see {@link assertContained}): a match
+ * whose glob pattern itself escapes `cwd` — via `..` or an absolute-path glob
  * outside the tree — THROWS, since reaching outside the tree is a caller
- * misconfiguration. A match that lexically stays inside `cwd` but resolves
- * (via an in-tree symlink) to a target outside the tree, or that simply
- * cannot be resolved (a dangling symlink or unreadable entry inside the
- * tree), is SKIPPED, so one bad symlink never aborts scanning the rest of the
- * project.
+ * misconfiguration. A match that lexically stays inside `cwd` is RETURNED even
+ * when an in-tree symlink resolves it outside the tree or to nothing, so the
+ * reader decides what an unreadable one means.
  *
  * `exclude` prunes the walk via {@link walkContextGlobs}, so it is handed one
  * root-relative, `/`-separated path per entry. It is composed with, never
@@ -450,37 +436,50 @@ export function findInstructionFiles(
   // One pattern at a time, so a containment failure can name the glob that
   // reached outside the tree.
   for (const pattern of globs)
-    for (const absPath of walkContextGlobs([pattern], cwd, exclude))
-      if (keepContained(absPath, realRoot, literalRoot, pattern))
-        seen.add(absPath);
+    for (const absPath of walkContextGlobs([pattern], cwd, exclude)) {
+      assertContained(absPath, realRoot, literalRoot, pattern);
+      seen.add(absPath);
+    }
   return [...seen];
 }
 
 /**
- * Scan every instruction file matched by `globs` and return only those with
- * findings, each path reported relative to `cwd`. Unreadable/missing files are
- * skipped. Pure scan — no mutation; pair with {@link cleanFile} to strip.
+ * Scan every instruction file matched by `globs`. `findings` lists only the
+ * files with findings; `skipped` lists every file that exists but could not be
+ * read, so a caller never reports an unread file as clean. A missing file
+ * (ENOENT, a dangling symlink) is in neither: no bytes of it can load. Paths
+ * are relative to `cwd`. Pure scan — no mutation; pair with {@link cleanFile}.
  * @param {string[]} globs
  * @param {{ cwd?: string, exclude?: (entry: string) => boolean }} [options]
  *   `exclude` is forwarded to {@link findInstructionFiles}
- * @returns {Array<{ file: string, findings: ReturnType<typeof scanText> }>}
+ * @returns {{
+ *   findings: Array<{ file: string, findings: ReturnType<typeof scanText> }>,
+ *   skipped: Array<{ file: string, reason: string }>,
+ * }}
  */
 export function scanInstructionFiles(
   globs,
   { cwd = process.cwd(), exclude } = {},
 ) {
-  const out = [];
+  const findings = [];
+  const skipped = [];
   for (const file of findInstructionFiles(globs, { cwd, exclude })) {
     let content;
     try {
       content = readFileSync(file, "utf-8");
-    } catch {
-      continue; // missing or unreadable
+    } catch (err) {
+      if (classifyReadFailure(err) === "skipped")
+        skipped.push({
+          file: relative(cwd, file),
+          reason: /** @type {NodeJS.ErrnoException} */ (err).code ?? "",
+        });
+      continue;
     }
-    const findings = scanText(content);
-    if (findings.length > 0) out.push({ file: relative(cwd, file), findings });
+    const fileFindings = scanText(content);
+    if (fileFindings.length > 0)
+      findings.push({ file: relative(cwd, file), findings: fileFindings });
   }
-  return out;
+  return { findings, skipped };
 }
 
 /**

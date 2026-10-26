@@ -299,15 +299,18 @@ def test_scan_and_clean_instruction_files(tmp_path: Path) -> None:
     payload = f"intro {ZERO_WIDTH_SPACE * 100} outro\n"
     (tmp_path / "NOTES.md").write_text(payload, encoding="utf-8")
     (tmp_path / "CLEAN.md").write_text("nothing hidden here\n", encoding="utf-8")
+    (tmp_path / "DIR.md").mkdir()
 
-    findings = scan_instruction_files(["*.md"], cwd=str(tmp_path))
-    assert [f.file for f in findings] == ["NOTES.md"]
-    assert findings[0].findings  # non-empty hidden-Unicode hits
+    scan = scan_instruction_files(["*.md"], cwd=str(tmp_path))
+    assert [f.file for f in scan.findings] == ["NOTES.md"]
+    assert scan.findings[0].findings  # non-empty hidden-Unicode hits
+    # A match that exists but cannot be read is reported, never read as clean.
+    assert scan.skipped == [{"file": "DIR.md", "reason": "EISDIR"}]
 
     assert clean_file(str(tmp_path / "NOTES.md")) is True
     assert clean_file(str(tmp_path / "NOTES.md")) is False  # already clean now
     assert clean_file(str(tmp_path / "CLEAN.md")) is False
-    assert scan_instruction_files(["*.md"], cwd=str(tmp_path)) == []
+    assert scan_instruction_files(["*.md"], cwd=str(tmp_path)).findings == []
 
 
 def test_sanitize_text_uses_shared_worker_for_html() -> None:

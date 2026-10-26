@@ -98,6 +98,7 @@ const FUZZ_EXEMPT = Object.freeze({
   // ── predicates and lookups: no parse or transform step of their own ──────
   announcedByInstructionsLoaded:
     "splits one path on its separators and looks the tail up in the kind table",
+  classifyReadFailure: "maps one errno code to a bucket, with no parse",
   closingTagName: "reads one tag name out of an already-tokenized HTML value",
   contextScanExclude:
     "composes excludeFromContextScan with a set of paths git listed; its one parse, the NUL-delimited listing, is pinned by the quoted-directory case in repo-scope.test.mjs",
