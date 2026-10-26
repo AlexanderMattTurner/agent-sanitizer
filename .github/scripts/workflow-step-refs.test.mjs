@@ -243,11 +243,11 @@ test("the call-site sweep is non-empty and names the actions it reached", () => 
   const ladderCalls = calls.filter((call) =>
     call.action.endsWith("/claude-run"),
   );
-  // Four since the orphaned claude-conflict-resolve composite was deleted with
-  // the resolver it wrapped. The floor is what stops the sweep passing vacuously
-  // on an empty parse, so it tracks the tree rather than staying above it.
+  // Three since the first-pass reviewer moved to the upstream agent-review
+  // reusable workflow. The floor is what stops the sweep passing vacuously on
+  // an empty parse, so it tracks the tree rather than staying above it.
   assert.ok(
-    ladderCalls.length >= 4,
+    ladderCalls.length >= 3,
     `only ${ladderCalls.length} claude-run calls`,
   );
   for (const call of ladderCalls) {

@@ -1,6 +1,6 @@
-"""The trust gate on claude-pr-review.yaml's title-driven skip path.
+"""The trust gate on claude-review.yaml's title-driven skip path.
 
-A PR title is written by the PR author. Two jobs key on it: `decide` skips the
+A PR title is written by the PR author. Two jobs key on it: `review` skips the
 model review for a `chore:`/`style:`/`release:` title, and `auto-approve-skipped`
 answers that same skip with an approving review and a green "Review findings
 resolved" status. Two merge levers, chosen by a string the author controls — so
@@ -29,9 +29,9 @@ import yaml
 
 from tests._helpers import REPO_ROOT
 
-WORKFLOW = REPO_ROOT / ".github" / "workflows" / "claude-pr-review.yaml"
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "claude-review.yaml"
 JOBS = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
-DECIDE_IF = JOBS["decide"]["if"]
+REVIEW_IF = JOBS["review"]["if"]
 AUTO_APPROVE_IF = JOBS["auto-approve-skipped"]["if"]
 
 # The titles the skip path recognizes, plus ordinary ones it must not.
@@ -134,12 +134,14 @@ def _github(
     user_type: str = "User",
     association: str = "CONTRIBUTOR",
     head_repo: str = BASE_REPO,
+    label: str | None = None,
 ) -> dict:
     """The `github` context of a pull_request_target event, as GitHub sends it."""
     return {
         "repository": BASE_REPO,
         "event": {
             "action": action,
+            **({"label": {"name": label}} if label is not None else {}),
             "pull_request": {
                 "title": title,
                 "draft": draft,
@@ -186,7 +188,7 @@ def test_both_gates_actually_read_the_trust_signals() -> None:
     # A positive marker: the conditions must mention the payload fields the
     # tests below rely on, so a rewrite that drops the guard entirely fails
     # here rather than passing on some accidentally-equivalent shape.
-    for condition in (DECIDE_IF, AUTO_APPROVE_IF):
+    for condition in (REVIEW_IF, AUTO_APPROVE_IF):
         assert "author_association" in condition
         assert "head.repo.full_name" in condition
 
@@ -210,8 +212,8 @@ def test_a_cross_repository_pr_is_reviewed_whatever_it_calls_itself(
     title: str, trust: dict
 ) -> None:
     # The other half of the fix: guarding only the approval would leave this PR
-    # skipped by `decide` AND unapproved — stranded on both gates forever.
-    assert _evaluate(DECIDE_IF, _github(title, **trust))
+    # skipped by `review` AND unapproved — stranded on both gates forever.
+    assert _evaluate(REVIEW_IF, _github(title, **trust))
 
 
 @pytest.mark.parametrize("title", SKIP_TITLES)
@@ -221,7 +223,7 @@ def test_a_cross_repository_pr_is_reviewed_whatever_it_calls_itself(
 def test_a_trusted_low_risk_pr_still_skips_the_review_and_is_approved(
     title: str, trust: dict
 ) -> None:
-    assert not _evaluate(DECIDE_IF, _github(title, **trust))
+    assert not _evaluate(REVIEW_IF, _github(title, **trust))
     assert _evaluate(AUTO_APPROVE_IF, _github(title, **trust))
 
 
@@ -229,14 +231,14 @@ def test_a_same_repo_bot_pr_still_skips_the_review_and_is_approved() -> None:
     # Dependabot pushes its branch to this repo, so it stays in the skipped
     # class the auto-approve job exists to unblock.
     github = _github("Bump acorn from 8.0.0 to 8.0.1", user_type="Bot")
-    assert not _evaluate(DECIDE_IF, github)
+    assert not _evaluate(REVIEW_IF, github)
     assert _evaluate(AUTO_APPROVE_IF, github)
 
 
 @pytest.mark.parametrize("title", REVIEWED_TITLES)
 def test_an_ordinary_title_is_reviewed_and_never_auto_approved(title: str) -> None:
     github = _github(title, association="MEMBER")
-    assert _evaluate(DECIDE_IF, github)
+    assert _evaluate(REVIEW_IF, github)
     assert not _evaluate(AUTO_APPROVE_IF, github)
 
 
@@ -244,7 +246,7 @@ def test_an_ordinary_title_is_reviewed_and_never_auto_approved(title: str) -> No
 def test_a_draft_reaches_neither_job(title: str) -> None:
     # Drafts cannot merge; they are picked up on `ready_for_review`.
     github = _github(title, action="opened", draft=True, association="MEMBER")
-    assert not _evaluate(DECIDE_IF, github)
+    assert not _evaluate(REVIEW_IF, github)
     assert not _evaluate(AUTO_APPROVE_IF, github)
 
 
@@ -265,4 +267,14 @@ def test_every_non_draft_pr_is_reviewed_or_approved_never_neither(
     # approval to clear the review-required ruleset, and no later event
     # produces either — it is stuck, silently.
     github = _github(title, user_type=user_type, **trust)
-    assert _evaluate(DECIDE_IF, github) or _evaluate(AUTO_APPROVE_IF, github)
+    assert _evaluate(REVIEW_IF, github) or _evaluate(AUTO_APPROVE_IF, github)
+
+
+@pytest.mark.parametrize("title", SKIP_TITLES)
+def test_only_the_review_label_buys_a_read_on_a_skipped_pr(title: str) -> None:
+    # The label is the on-demand escape hatch for a PR the skip set drops. Every
+    # other label edit fires the same shared trigger and must not start a read.
+    labeled = {"action": "labeled", "association": "MEMBER"}
+    assert _evaluate(REVIEW_IF, _github(title, label="needs-auto-review", **labeled))
+    assert not _evaluate(REVIEW_IF, _github(title, label="docs", **labeled))
+    assert not _evaluate(REVIEW_IF, _github("feat: x", label="docs", **labeled))

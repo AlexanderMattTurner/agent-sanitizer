@@ -59,7 +59,7 @@ GATING_ICONS = [SEVERITY_CONFIG["icons"][sev] for sev in GATING]
 
 
 def _marker(severity: str) -> str:
-    """The hidden severity marker post-pr-review.mjs stamps on a finding."""
+    """The hidden severity marker the upstream reviewer stamps on a finding."""
     return f"<!-- severity: {severity} -->"
 
 
@@ -766,39 +766,24 @@ def test_the_evaluate_job_actually_posts_a_verdict_on_the_head() -> None:
 # re-posts on it: the `recheck-review-gate` label and the hold-clear cron cover
 # that side.
 
-REPOST_JOBS = [
-    (".github/workflows/claude-pr-review.yaml", "review"),
-]
-
-
-@pytest.mark.parametrize(("workflow", "job"), REPOST_JOBS)
-def test_every_predicate_changing_job_reposts_the_gate_on_the_head(
-    workflow: str, job: str
-) -> None:
-    jobs = yaml.safe_load((REPO_ROOT / workflow).read_text(encoding="utf-8"))["jobs"]
-    steps = jobs[job]["steps"]
-    gate_steps = [s for s in steps if "review-findings-gate.sh" in (s.get("run") or "")]
-    assert len(gate_steps) == 1, (
-        f"job '{job}' in {workflow} must re-post the gate verdict exactly once "
-        f"after its review/thread write; found {len(gate_steps)} gate step(s)"
-    )
-    env = gate_steps[0].get("env") or {}
-    # REPORT_SHA on the PR head is what routes the verdict to the required
-    # check's context — without it the script runs in exit-status mode and posts
-    # nothing.
-    assert env.get("REPORT_SHA") == "${{ github.event.pull_request.head.sha }}"
+def test_the_reviewer_call_reposts_the_gate_on_the_head() -> None:
+    # The `review` job is a call into the upstream reviewer, which runs its
+    # `post-review-command` after the review lands, with REPORT_SHA set to the
+    # head it reviewed. That command is the only re-post this review gets.
+    job = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows/claude-review.yaml").read_text(encoding="utf-8")
+    )["jobs"]["review"]
+    assert job["uses"].startswith("AlexanderMattTurner/agent-review/")
+    command = job["with"]["post-review-command"]
+    assert command.split()[-2:] == ["bash", ".github/scripts/review-findings-gate.sh"]
     # A red description is cut at the 140-char status cap, so target_url is the
-    # only place the rest of the finding list survives — a site that posts the
-    # verdict without RUN_URL truncates with nothing to link to.
-    assert env.get("RUN_URL") == (
-        "${{ github.server_url }}/${{ github.repository }}/actions/runs/"
-        "${{ github.run_id }}"
+    # only place the rest of the finding list survives.
+    assert command.startswith(
+        "RUN_URL='${{ github.server_url }}/${{ github.repository }}/actions/runs/"
+        "${{ github.run_id }}'"
     )
-    # The re-post must come AFTER the write it reports on, or it reads the
-    # pre-write state and posts a stale verdict.
-    assert gate_steps[0] is not steps[0]
-    # Posting the verdict needs statuses:write, or the re-post 403s at runtime.
-    assert jobs[job]["permissions"].get("statuses") == "write"
+    # Posting the verdict needs statuses:write in the ceiling the call inherits.
+    assert job["permissions"].get("statuses") == "write"
 
 
 def test_the_skipped_class_is_cleared_under_the_same_context() -> None:
@@ -807,7 +792,7 @@ def test_the_skipped_class_is_cleared_under_the_same_context() -> None:
     # The auto-approve job clears it by posting the SAME required context — a
     # rename here (or in the gate script) would silently re-block the class.
     jobs = yaml.safe_load(
-        (REPO_ROOT / ".github/workflows/claude-pr-review.yaml").read_text(
+        (REPO_ROOT / ".github/workflows/claude-review.yaml").read_text(
             encoding="utf-8"
         )
     )["jobs"]

@@ -1,5 +1,5 @@
 {
-  "comment": "SSOT for the review-finding severity model. `gating` lists the severities whose unresolved threads red the review-findings merge gate; `icons` maps every severity to the emoji its posted finding leads with (the gate's fallback signal for threads posted before the hidden marker existed). Consumers: post-pr-review.mjs (renders findings, stamps the hidden `<!-- severity: ... -->` marker), review-findings-gate.sh (builds its thread predicate from this file at runtime).",
+  "comment": "SSOT for the review-finding severity model. `gating` lists the severities whose unresolved threads red the review-findings merge gate; `icons` maps every severity to the emoji its posted finding leads with (the gate's fallback signal for threads posted before the hidden marker existed). Consumer: review-findings-gate.sh (builds its thread predicate from this file at runtime). The upstream reviewer (AlexanderMattTurner/agent-review, called from claude-review.yaml) stamps the hidden `<!-- severity: ... -->` marker from its own copy of this model.",
   "gating": ["blocking", "warning"],
   "icons": {
     "blocking": "🔴",
