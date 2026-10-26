@@ -20,49 +20,6 @@ set -uo pipefail
 GITHUB_ENV="${GITHUB_ENV:-/dev/null}"
 REPORT_PATH="${REPORT_PATH:-/tmp/security-report.md}"
 
-<<<<<<< local
-# Append a section heading + `gh api` result to the report. `gh api` has no
-# `--arg` flag (passing one aborts the call, so the report would only ever hold
-# the fallback), so pipe its JSON through the real `jq`, which does support it:
-# $REPO is passed as data via `--arg repo`, keeping parsing safe even if the repo
-# name contains jq metacharacters. `set -o pipefail` makes a failure in either
-# `gh` or `jq` trip the fallback.
-# echo-fallback-ok: this is a best-effort, per-section aggregator — one alert
-# source failing must not abort the whole report. The fallback text names the
-# failure explicitly ("could not fetch ... check repo permissions") rather than
-# rendering as clean/empty data, and the report's only consumer (a human or the
-# downstream Claude triage step) already reads that placeholder as "no signal
-# available", never as "no alerts exist".
-gh_api_section() {
-  local heading="$1" endpoint="$2" jq_expr="$3" fallback="$4"
-  {
-    echo ""
-    echo "$heading"
-  } >>"$REPORT_PATH"
-  # echo-fallback-ok: best-effort aggregator, see the function-level comment above.
-  gh api "$endpoint" 2>>"$REPORT_PATH" |
-    jq -r --arg repo "$REPO" "$jq_expr" >>"$REPORT_PATH" ||
-    echo "$fallback" >>"$REPORT_PATH"
-||||||| base
-# Append a section heading + `gh api` result to the report. Passes $REPO into
-# jq via `--arg repo` (not string interpolation) to keep jq parsing safe even
-# if the repo name later contains special characters.
-# echo-fallback-ok: this is a best-effort, per-section aggregator — one alert
-# source failing must not abort the whole report. The fallback text names the
-# failure explicitly ("could not fetch ... check repo permissions") rather than
-# rendering as clean/empty data, and the report's only consumer (a human or the
-# downstream Claude triage step) already reads that placeholder as "no signal
-# available", never as "no alerts exist".
-gh_api_section() {
-  local heading="$1" endpoint="$2" jq_expr="$3" fallback="$4"
-  {
-    echo ""
-    echo "$heading"
-  } >>"$REPORT_PATH"
-  # echo-fallback-ok: best-effort aggregator, see the function-level comment above.
-  gh api "$endpoint" --arg repo "$REPO" --jq "$jq_expr" \
-    >>"$REPORT_PATH" 2>&1 || echo "$fallback" >>"$REPORT_PATH"
-=======
 # Append one alert section: a `## <name>` heading, then one line per alert.
 #
 # PROBLEM CLASS — a failed fetch rendered as "no alerts". A missing scope or a
@@ -85,30 +42,13 @@ alert_section() {
   else
     echo "_Could not fetch ${name} (check the token's security scopes and whether the feature is enabled)._" >>"$REPORT_PATH"
   fi
->>>>>>> template
 }
 
-<<<<<<< local
-echo "## Dependabot Alerts" >"$REPORT_PATH"
-# echo-fallback-ok: same best-effort-section reasoning as gh_api_section above.
-gh api "repos/${REPO}/dependabot/alerts?state=open&per_page=100" 2>>"$REPORT_PATH" |
-  jq -r --arg repo "$REPO" '.[] | "- **\(.security_advisory.severity | ascii_upcase)**: [\(.security_advisory.summary)](https://github.com/\($repo)/security/dependabot/\(.number)) in `\(.dependency.package.name)` (\(.dependency.package.ecosystem))"' \
-    >>"$REPORT_PATH" ||
-  echo "_Could not fetch Dependabot alerts (check repo permissions)._" >>"$REPORT_PATH"
-||||||| base
-echo "## Dependabot Alerts" >"$REPORT_PATH"
-# echo-fallback-ok: same best-effort-section reasoning as gh_api_section above.
-gh api "repos/${REPO}/dependabot/alerts?state=open&per_page=100" \
-  --arg repo "$REPO" \
-  --jq '.[] | "- **\(.security_advisory.severity | ascii_upcase)**: [\(.security_advisory.summary)](https://github.com/\($repo)/security/dependabot/\(.number)) in `\(.dependency.package.name)` (\(.dependency.package.ecosystem))"' \
-  >>"$REPORT_PATH" 2>&1 || echo "_Could not fetch Dependabot alerts (check repo permissions)._" >>"$REPORT_PATH"
-=======
 : >"$REPORT_PATH"
 alert_section \
   "Dependabot Alerts" \
   "repos/${REPO}/dependabot/alerts?state=open&per_page=100" \
   '.[] | "- **\(.security_advisory.severity | ascii_upcase)**: [\(.security_advisory.summary)](https://github.com/\($repo)/security/dependabot/\(.number)) in `\(.dependency.package.name)` (\(.dependency.package.ecosystem))"'
->>>>>>> template
 
 alert_section \
   "Code Scanning Alerts" \

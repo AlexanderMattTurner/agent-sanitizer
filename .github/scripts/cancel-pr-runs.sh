@@ -1,26 +1,13 @@
 #!/usr/bin/env bash
 # Cancel the queued/in-progress Actions runs still executing on a closed PR's
-<<<<<<< local
-# head SHA. Invoked by pr-meta-privileged.yaml's `cancel` job with REPO, HEAD_REF, HEAD_SHA,
-# GH_TOKEN in the environment. Reclaims runner slots a merge/close would
-# otherwise leave held — GitHub cancels superseded runs only when a newer push
-# arrives, never on close.
-||||||| base
-# head SHA. Invoked by pr-meta-privileged.yaml's cancel job with REPO, HEAD_REF, HEAD_SHA,
-# GH_TOKEN in the environment; RUN_SWEEP_LIMIT (default 100) caps how many runs
-# on that branch one call lists. Reclaims runner slots a merge/close would
-# otherwise leave held — GitHub cancels superseded runs only when a newer push
-# arrives, never on close.
-=======
-# head SHA. Invoked by pr-meta-privileged.yaml's cancel job with REPO, HEAD_REF,
+# head SHA. Invoked by pr-meta-privileged.yaml's `cancel` job with REPO, HEAD_REF,
 # HEAD_SHA, CLOSED_AT, GH_TOKEN in the environment, plus the runner's own
-# GITHUB_RUN_ID; RUN_SWEEP_LIMIT (default 100)
-# caps how many runs on that branch one call lists. Reclaims runner slots a
-# merge/close would otherwise leave held — GitHub cancels superseded runs only
-# when a newer push arrives, never on close. Only runs created before CLOSED_AT
-# are cancelled, so the handlers dispatched for the close event itself (which
-# share the head SHA) and this job's own run survive.
->>>>>>> template
+# GITHUB_RUN_ID; RUN_SWEEP_LIMIT (default 100) caps how many runs on that branch
+# one call lists. Reclaims runner slots a merge/close would otherwise leave held
+# — GitHub cancels superseded runs only when a newer push arrives, never on
+# close. Only runs created before CLOSED_AT are cancelled, so the handlers
+# dispatched for the close event itself (which share the head SHA) and this
+# job's own run survive.
 set -euo pipefail
 
 # shellcheck source=.github/scripts/lib-ci-retry.sh

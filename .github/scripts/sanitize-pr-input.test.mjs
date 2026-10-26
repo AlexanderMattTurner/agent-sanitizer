@@ -44,7 +44,6 @@ describe("sanitize-pr-input: neutralizes injection vectors", () => {
     assert.equal(report, "");
   });
 });
-<<<<<<< local
 
 describe("sanitize-pr-input: exfil-URL scan is non-destructive", () => {
   it("reports an exfil-shaped markdown link but leaves the bytes intact", () => {
@@ -70,8 +69,6 @@ describe("sanitize-pr-input: exfil-URL scan is non-destructive", () => {
     assert.equal(report, "");
   });
 });
-||||||| base
-=======
 
 describe("sanitize-pr-input --model-text: model output opens no HTML comment", () => {
   // A poster splices model text between its own `<!-- … -->` delimiters, so an echoed
@@ -89,4 +86,3 @@ describe("sanitize-pr-input --model-text: model output opens no HTML comment", (
     assert.equal(out, "<!-- a comment in a changed file -->");
   });
 });
->>>>>>> template

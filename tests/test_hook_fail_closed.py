@@ -8,10 +8,13 @@ than skips. Positive controls (the escape hatch works; the command gate skips
 non-push commands) keep the suite from passing vacuously.
 """
 
+import json
 import os
 import shutil
 import subprocess
 from pathlib import Path
+
+import pytest
 
 from tests._helpers import (
     GIT_LOCATION_VARS_CONFIG,
@@ -116,8 +119,8 @@ def test_commit_msg_escape_hatch_allows_skip(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# pre-push-check: Node project without jq → refuse (K3); non-push command is
-# skipped by the stdin gate (K4).
+# pre-push-check: Node project without jq → refuse (K3). push-gate.mjs runs the
+# checks only for a push or a PR create, and denies when they fail (K4).
 # --------------------------------------------------------------------------- #
 
 
@@ -150,8 +153,7 @@ def _run_pre_push_check(
 
 def test_pre_push_check_fails_closed_without_jq(tmp_path: Path) -> None:
     repo = _sandbox_pre_push_check(tmp_path)
-    # python3 present so the gate recognizes "git push"; jq absent so the
-    # package.json script lookup has no parser and must fail closed.
+    # jq absent, so the package.json script lookup has no parser and must fail closed.
     path = curated_path(tmp_path, BASE_TOOLS + ["python3"])
     result = _run_pre_push_check(
         repo, path, '{"tool_input":{"command":"git push origin HEAD"}}'
@@ -160,13 +162,34 @@ def test_pre_push_check_fails_closed_without_jq(tmp_path: Path) -> None:
     assert "jq is required" in result.stderr
 
 
-def test_pre_push_check_gate_skips_non_push(tmp_path: Path) -> None:
-    repo = _sandbox_pre_push_check(tmp_path)
-    path = curated_path(tmp_path, BASE_TOOLS + ["python3"])  # jq still absent
-    result = _run_pre_push_check(repo, path, '{"tool_input":{"command":"ls -la"}}')
-    # A non-push command exits 0 without ever reaching the (jq-guarded) checks —
-    # proves the gate fires and that fail-closed only applies to gated commands.
-    assert result.returncode == 0, result.stderr
+_JUDGE_PUSH = """
+import { judgePush } from "./.claude/hooks/push-gate.mjs";
+const verdict = await judgePush(
+  { tool_name: "Bash", tool_input: { command: process.argv[1] } },
+  { runChecks: () => "jq is required", now: () => 0 },
+);
+process.stdout.write(JSON.stringify(verdict));
+"""
+
+
+@pytest.mark.parametrize(
+    "command, denied",
+    [("ls -la", False), ("git push origin HEAD", True), ("gh pr create", True)],
+)
+def test_push_gate_runs_the_checks_only_for_a_push_or_pr(
+    command: str, denied: bool
+) -> None:
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", _JUDGE_PUSH, command],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    verdict = json.loads(result.stdout)
+    assert (verdict is not None) == denied, result.stdout
+    if denied:
+        assert "jq is required" in json.dumps(verdict)
 
 
 # --------------------------------------------------------------------------- #
@@ -527,10 +550,9 @@ def test_the_guard_pair_runner_strips_an_inherited_git_dir(tmp_path: Path) -> No
     """The runner's own children get no GIT_DIR, whatever the hook exported.
 
     Fixing each suite one module at a time leaves the next one to be written
-    exposed, so the strip belongs where the suites are spawned. The probe is the
-    suite that actually did the damage: with GIT_DIR inherited,
-    tests/test_template_sync.py checked out fixture refs in the developer's own
-    repository and rewound the working tree in the middle of a commit.
+    exposed, so the strip belongs where the suites are spawned. The probe is a
+    suite that commits in its own fixture repositories: with GIT_DIR inherited,
+    those commits land in whatever repository GIT_DIR names.
     """
     decoy = init_repo(tmp_path, "decoy")
     (decoy / "kept.txt").write_text("do not touch\n", encoding="utf-8")
@@ -542,7 +564,7 @@ def test_the_guard_pair_runner_strips_an_inherited_git_dir(tmp_path: Path) -> No
         [
             "node",
             str(REPO_ROOT / ".hooks" / "run-guard-pairs.mjs"),
-            "tests/test_template_sync.py",
+            "tests/test_version_bump_tag_placement.py",
         ],
         cwd=REPO_ROOT,
         env={**os.environ, "GIT_DIR": str(decoy / ".git")},
@@ -552,5 +574,5 @@ def test_the_guard_pair_runner_strips_an_inherited_git_dir(tmp_path: Path) -> No
     assert result.returncode == 0, result.stderr
     # Positive marker: the suite really ran, so the untouched decoy below is not
     # the result of the runner scheduling nothing at all.
-    assert "tests/test_template_sync.py" in result.stderr
+    assert "tests/test_version_bump_tag_placement.py" in result.stderr
     assert _head(decoy) == head, "a guard suite wrote into the repo GIT_DIR named"

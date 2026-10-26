@@ -70,30 +70,6 @@ on:
 
 permissions: {}
 
-<<<<<<< local
-# WHERE THE RESOLVER COMES FROM, named once for both jobs that need it. `discover`
-# clones it below; `resolve` passes the same pair to the reusable workflow, which
-# cannot read these (a `with:` value may not reference `env`), so the two literals
-# there must match these. A consumer repository points both at this repository and
-# pins `ref` to the SHA its `uses:` line names, so the workflow and the scripts it
-# runs come from one commit.
-env:
-  RESOLVER_REPOSITORY: AlexanderMattTurner/agent-resolve-merge-conflicts
-  RESOLVER_REF: ca9a3fa872a9c06ade766de9bf69ff7b0329247f
-
-||||||| base
-# WHERE THE RESOLVER COMES FROM, named once for both jobs that need it. `discover`
-# clones it below; `resolve` passes the same pair to the reusable workflow, which
-# cannot read these (a `with:` value may not reference `env`), so the two literals
-# there must match these. A consumer repository points both at this repository and
-# pins `ref` to the SHA its `uses:` line names, so the workflow and the scripts it
-# runs come from one commit.
-env:
-  RESOLVER_REPOSITORY: AlexanderMattTurner/agent-resolve-merge-conflicts
-  RESOLVER_REF: 6e8ef6110fd27a4402a964d4c65c596a0ce7e938
-
-=======
->>>>>>> template
 jobs:
   discover:
     name: Discover PRs to auto-resolve
@@ -226,20 +202,10 @@ jobs:
     # pull requests to hand it and what this repository can do.
     #
     # Pinned by SHA, never by tag: the resolver runs with this repository's
-<<<<<<< local
-    # secrets, so a moving ref would let its owner change what runs here. The
-    # same sha goes to `resolver-ref` below, so the workflow and the scripts it
-    # runs come from one commit.
-||||||| base
-    # secrets, so a moving ref would let its owner change what runs here. That
-    # sha is written TWICE — here and in `env.RESOLVER_REF` above, which
-    # `discover` checks out before any called workflow exists to read
-    # `github.job_workflow_sha`. Move both, or the two jobs run different code.
-=======
     # secrets, so a moving ref would let its owner change what runs here. This
     # line is the ONLY place the pin is written: `discover`, the merge-conflict
-    # labeler and template-sync all read it through .github/scripts/resolver-ref.py.
->>>>>>> template
+    # labeler and template-sync all read it through .github/scripts/resolver-ref.py,
+    # so the workflow and the scripts it runs come from one commit.
     # The CEILING on what the called workflow may hold, not a grant to this file.
     # It must cover the UNION of the resolver's two jobs, because a calling job that
     # names less silently narrows them: this workflow sets `permissions: {}` at the
@@ -253,20 +219,10 @@ jobs:
       issues: write # `gh label create` for auto-resolve-blocked rides the issues API
       statuses: write # the per-head attempt mark is a commit status
       actions: write # `land` re-dispatches the resolver after a lost race
-<<<<<<< local
-    uses: AlexanderMattTurner/agent-resolve-merge-conflicts/.github/workflows/auto-resolve.yaml@ca9a3fa872a9c06ade766de9bf69ff7b0329247f # pin-comment-ok: that repository has cut no release yet, so there is no version for this SHA to name
-||||||| base
-    uses: AlexanderMattTurner/agent-resolve-merge-conflicts/.github/workflows/auto-resolve.yaml@6e8ef6110fd27a4402a964d4c65c596a0ce7e938 # v1.13.5
-=======
     uses: AlexanderMattTurner/agent-resolve-merge-conflicts/.github/workflows/auto-resolve.yaml@f6dea60f29ba915171ac9bf96e7dbcdcc4c819a0 # v1.40.2
->>>>>>> template
     with:
       pr: ${{ matrix.pr.number }}
-<<<<<<< local
-      # The literals from this file's `env:` block, repeated because a reusable
-      # workflow's `with:` cannot read `env`. Change both together.
-      resolver-repository: AlexanderMattTurner/agent-resolve-merge-conflicts
-      resolver-ref: ca9a3fa872a9c06ade766de9bf69ff7b0329247f
+      resolver-repository: ${{ needs.discover.outputs.resolver-repository }}
       # This repository DOES declare regen rules (config/auto-resolve-regen-rules.json),
       # so the deterministic pre-pass runs: pre-pass-command re-derives every
       # conflicted generated file/lockfile from the PR's own tree, and
@@ -277,23 +233,6 @@ jobs:
       # are none) would reach the model whole.
       resolver-mjs: .github/scripts/resolve-generated.mjs
       pre-pass-command: node .github/scripts/resolve-generated.mjs
-||||||| base
-      # The literals from this file's `env:` block, repeated because a reusable
-      # workflow's `with:` cannot read `env`. Change both together.
-      resolver-repository: AlexanderMattTurner/agent-resolve-merge-conflicts
-      # This repository ships no scripts/lib_marked_region.py, and its regen rule
-      # table (config/auto-resolve-regen-rules.json) ships EMPTY — so the
-      # generated-region pre-pass and the deterministic pre-pass both stay off and
-      # every conflict reaches the model whole. A consumer that declares rules
-      # passes `marked-regions: true`, `resolver-mjs` and `pre-pass-command`.
-=======
-      resolver-repository: ${{ needs.discover.outputs.resolver-repository }}
-      # This repository ships no scripts/lib_marked_region.py, and its regen rule
-      # table (config/auto-resolve-regen-rules.json) ships EMPTY — so the
-      # generated-region pre-pass and the deterministic pre-pass both stay off and
-      # every conflict reaches the model whole. A consumer that declares rules
-      # passes `marked-regions: true`, `resolver-mjs` and `pre-pass-command`.
->>>>>>> template
       #
       # `log-redactor` is unset, which publishes NO fan-out logs. That is the
       # fail-closed default: an agent transcript carries whatever the merge

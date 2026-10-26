@@ -6,62 +6,10 @@ This directory contains configuration and skills for Claude Code.
 
 ```text
 .claude/
-<<<<<<< local
 ├── settings.json   # Claude Code hooks configuration
 ├── agents/         # Subagents — currently code-reviewer, a read-only (Read/Grep/Glob) reviewer
-├── hooks/          # Session, pre-push, and PreToolUse hooks (see the directory for the full list)
+├── hooks/          # Session, PreToolUse, PostToolUse, UserPromptSubmit, and Stop hooks (see the directory for the full list)
 └── skills/         # Reusable workflows, one directory per skill (see the directory for the full list)
-||||||| base
-├── settings.json              # Claude Code hooks configuration
-├── agents/
-│   └── code-reviewer.md       # Read-only reviewer subagent (Read/Grep/Glob)
-├── hooks/
-│   ├── session-setup.sh          # Runs on session start (installs tools, configures git)
-│   ├── pre-push-check.sh         # Runs before git push / gh pr (build, lint, typecheck)
-│   ├── parallelism-nudge.mjs     # PostToolUse: nudges once per turn on a long serial streak
-│   ├── drop-superseded-ci-events.mjs  # UserPromptSubmit: drops non-actionable PR webhook turns
-│   ├── lib-checks.sh             # Shared bash helpers (exists, has_script)
-│   ├── lib-hook-io.mjs           # Shared JS hook I/O (isMain, bounded stdin read, JSON parse)
-│   ├── lib-control-plane.mjs     # Shared control-plane client for the JS hooks
-│   ├── safe-launch.sh            # Wraps PreToolUse hooks so a parse error can't lock the session
-│   └── safe-launch-parse.py      # Helper: extracts tool_name/target path from the PreToolUse payload
-└── skills/
-    ├── pr-creation/           # PR creation workflow with self-critique
-    ├── update-pr/             # Update an existing PR with new changes
-    ├── peer-review/           # Drive the code-reviewer subagent, then triage/fix
-    ├── explore-plan/          # Explore → Plan → Critique → Review → Verify discipline
-    ├── ci-triage/             # How to respond when a check goes red (diagnose, never assume flake)
-    ├── writing-tests/         # Writing/changing/reviewing tests — behavior, not source text
-    ├── conventional-commits/  # Conventional Commits helper (invoke with /commit)
-    └── markdown-block/        # Emit copyable raw markdown in a fenced block
-=======
-├── settings.json              # Claude Code hooks configuration
-├── agents/
-│   └── code-reviewer.md       # Read-only reviewer subagent (Read/Grep/Glob)
-├── hooks/
-│   ├── session-setup.sh          # Runs on session start (installs tools, configures git)
-│   ├── push-gate.mjs             # PreToolUse: denies a push or PR create whose checks fail
-│   ├── pre-push-check.sh         # The checks push-gate runs (build, lint, typecheck, tests, ruff)
-│   ├── parallelism-nudge.mjs     # PostToolUse: nudges once per turn on a long serial streak
-│   ├── bullshit-check.mjs        # PostToolUse + UserPromptSubmit: one self-audit question per window
-│   ├── completion-check.mjs      # Stop: after a push, asks once whether ALL the work is done
-│   ├── drop-superseded-ci-events.mjs  # UserPromptSubmit: drops non-actionable PR webhook turns
-│   ├── lib-checks.sh             # Shared bash helpers (exists, has_script)
-│   ├── lib-hook-io.mjs           # Shared JS hook I/O (stdin, state paths, response bodies)
-│   ├── lib-shell-intent.mjs      # Shared judge: does this tool call push or open a PR?
-│   ├── lib-control-plane.mjs     # Shared control-plane client for the JS hooks
-│   ├── safe-launch.sh            # Wraps PreToolUse hooks so a parse error can't lock the session
-│   └── safe-launch-parse.py      # Helper: extracts tool_name/target path from the PreToolUse payload
-└── skills/
-    ├── pr-creation/           # PR creation workflow with self-critique
-    ├── update-pr/             # Update an existing PR with new changes
-    ├── peer-review/           # Drive the code-reviewer subagent, then triage/fix
-    ├── explore-plan/          # Explore → Plan → Critique → Review → Verify discipline
-    ├── ci-triage/             # How to respond when a check goes red (diagnose, never assume flake)
-    ├── writing-tests/         # Writing/changing/reviewing tests — behavior, not source text
-    ├── conventional-commits/  # Conventional Commits helper (invoke with /commit)
-    └── markdown-block/        # Emit copyable raw markdown in a fenced block
->>>>>>> template
 ```
 
 The hooks the prose below explains are `session-setup.sh` (session start),
@@ -118,12 +66,7 @@ Before a push or a new pull request, `push-gate.mjs` runs `pre-push-check.sh` an
 - **build** (`pnpm build`): Catches type errors in TypeScript projects (this repo has no `build` script—types build via `build:types` at pack time—so this check is skipped here)
 - **lint** (`pnpm lint`): Catches code quality issues
 - **typecheck** (`pnpm check`): Additional type checking if configured
-<<<<<<< local
 - **tests** (`pnpm test`): Runs the test suite
-||||||| base
-=======
-- **tests** (`pnpm test`): The test suite if configured
->>>>>>> template
 - **ruff**: Python linting if applicable
 
 Only runs scripts that are actually configured in `package.json`—skips placeholder scripts.

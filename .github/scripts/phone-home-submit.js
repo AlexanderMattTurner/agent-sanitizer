@@ -36,47 +36,6 @@ module.exports = async ({ github }) => {
   // A job re-run (e.g. after a transient createLabel/addLabels failure) would
   // otherwise re-submit the same PR's lessons as a second, duplicate issue —
   // dedup on open issues with the same title before creating a new one.
-<<<<<<< local
-  try {
-    const openIssues = await github.paginate(github.rest.issues.listForRepo, {
-      owner: templateOwner,
-      repo: templateRepoName,
-      state: "open",
-      labels: "phone-home",
-      per_page: 100,
-    });
-    const existing = openIssues.find(
-      (issue) => !issue.pull_request && issue.title === title,
-    );
-    if (existing) {
-      console.log(`Issue already exists for this PR: ${existing.html_url}`);
-      return;
-    }
-  } catch (error) {
-    console.log(`Could not check for an existing issue: ${error.message}`);
-    console.log(
-      "This is expected if TEMPLATE_SYNC_TOKEN_ORG is not configured.",
-    );
-||||||| base
-  try {
-    const openIssues = await github.paginate(github.rest.issues.listForRepo, {
-      owner: templateOwner,
-      repo: templateRepoName,
-      state: "open",
-      labels: "phone-home",
-      per_page: 100,
-    });
-    const existing = openIssues.find(
-      (issue) => !issue.pull_request && issue.title === title,
-    );
-    if (existing) {
-      console.log(`Issue already exists for this PR: ${existing.html_url}`);
-      return;
-    }
-  } catch (error) {
-    console.log(`Could not check for an existing issue: ${error.message}`);
-    console.log("This is expected if TEMPLATE_SYNC_TOKEN is not configured.");
-=======
   const openIssues = await github.paginate(github.rest.issues.listForRepo, {
     owner: templateOwner,
     repo: templateRepoName,
@@ -90,7 +49,6 @@ module.exports = async ({ github }) => {
   if (existing) {
     console.log(`Issue already exists for this PR: ${existing.html_url}`);
     return;
->>>>>>> template
   }
 
   const issueBody = [
@@ -107,45 +65,6 @@ module.exports = async ({ github }) => {
     `*Automatically submitted by the phone-home workflow from \`${repo}\`.*`,
   ].join("\n");
 
-<<<<<<< local
-  let issue;
-  try {
-    issue = await github.rest.issues.create({
-      owner: templateOwner,
-      repo: templateRepoName,
-      title,
-      body: issueBody,
-    });
-    console.log(`Created issue on template repo: ${issue.data.html_url}`);
-  } catch (error) {
-    console.log(`Could not create issue on ${templateRepo}: ${error.message}`);
-    console.log(
-      "This is expected if TEMPLATE_SYNC_TOKEN_ORG is not configured.",
-    );
-    console.log(
-      "To enable phone-home, add a TEMPLATE_SYNC_TOKEN_ORG secret with",
-    );
-    console.log("permission to create issues on the template repository.");
-    return;
-  }
-||||||| base
-  let issue;
-  try {
-    issue = await github.rest.issues.create({
-      owner: templateOwner,
-      repo: templateRepoName,
-      title,
-      body: issueBody,
-    });
-    console.log(`Created issue on template repo: ${issue.data.html_url}`);
-  } catch (error) {
-    console.log(`Could not create issue on ${templateRepo}: ${error.message}`);
-    console.log("This is expected if TEMPLATE_SYNC_TOKEN is not configured.");
-    console.log("To enable phone-home, add a TEMPLATE_SYNC_TOKEN secret with");
-    console.log("permission to create issues on the template repository.");
-    return;
-  }
-=======
   const issue = await github.rest.issues.create({
     owner: templateOwner,
     repo: templateRepoName,
@@ -153,7 +72,6 @@ module.exports = async ({ github }) => {
     body: issueBody,
   });
   console.log(`Created issue on template repo: ${issue.data.html_url}`);
->>>>>>> template
 
   // GitHub creates a label that does not exist yet, so a failure here is real.
   // Without the phone-home label, a re-run's dedup above cannot see this issue.

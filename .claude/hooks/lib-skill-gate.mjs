@@ -36,27 +36,19 @@ export const WRITE_TOOLS = new Set(["Write", "Edit"]);
  * the other's.
  * @param {unknown} sessionId @param {string} skill @returns {string|null}
  */
-function markerPath(sessionId, skill) {
+export function markerPath(sessionId, skill) {
   if (!SAFE_NAME_RE.test(skill)) return null;
-<<<<<<< local
   // Namespaced by uid: a shared $TMPDIR means another account can own
   // `skill-gate` first, and the 0700 dir it creates makes every marker write
   // EACCES. The write is best-effort, but the marker is the ONLY evidence the
   // skill ran, so that state denies every gated action for the rest of the
   // session with no reachable remedy.
-  const dir =
-    process.env.CLAUDE_SKILL_GATE_DIR ||
-    join(tmpdir(), `skill-gate-${process.getuid?.() ?? "nouid"}`);
-||||||| base
-  const dir = process.env.CLAUDE_SKILL_GATE_DIR || join(tmpdir(), "skill-gate");
-=======
->>>>>>> template
-  // Per skill, not per session: one gate's invocation must not satisfy another's.
-  return sessionStatePath(
-    sessionId,
-    hookStateDir("CLAUDE_SKILL_GATE_DIR", "skill-gate"),
-    `.${skill}.marker`,
+  const dir = hookStateDir(
+    "CLAUDE_SKILL_GATE_DIR",
+    `skill-gate-${process.getuid?.() ?? "nouid"}`,
   );
+  // Per skill, not per session: one gate's invocation must not satisfy another's.
+  return sessionStatePath(sessionId, dir, `.${skill}.marker`);
 }
 
 /**
