@@ -224,6 +224,7 @@ test("the call-site sweep is non-empty and names the actions it reached", () => 
   // its own tree, so this repo's action files hold none of that call.
   const called = [...new Set(calls.map((call) => call.action))].sort();
   assert.deepEqual(called, [
+    ".github/actions/build-python-dist",
     ".github/actions/claude-run",
     ".github/actions/notify-ntfy",
     ".github/actions/report-job-result",
