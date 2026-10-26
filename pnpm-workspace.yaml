@@ -39,12 +39,21 @@ minimumReleaseAgeExclude:
 # soon as it ships one. Drop an entry once `pnpm why <name>` shows every path
 # already above the floor.
 overrides:
-  # GHSA-7p8r-x3mc-p8w7 — host confusion via a backslash. Via @commitlint/cli.
-  fast-uri@>=3.0.0 <3.1.5: "^3.1.5"
-  # GHSA-rgw5-rvv9-x895 — denial of service from unbounded expansion. Via eslint.
-  brace-expansion@>=4.0.0 <5.0.9: "^5.0.9"
-  # GHSA-5p4m-2wfm-xmqj — quadratic CPU use parsing !!omap. Via @commitlint/cli.
-  js-yaml@>=4.0.0 <4.3.1: "^4.3.1"
-  # GHSA-q8mj-m7cp-5q26 — remotely triggerable denial of service in qs.stringify.
+  # GHSA-7p8r-x3mc-p8w7/GHSA-qw65-cvwx-89v3/GHSA-58mr-gqgx-xq4g — authority
+  # injection and host confusion. Via @commitlint/cli and @stryker-mutator/core.
+  fast-uri@>=3.0.0 <3.1.7: "^3.1.7"
+  # GHSA-rgw5-rvv9-x895/GHSA-qhr7-859c-m2p7 — denial of service from unbounded
+  # expansion. Via eslint and @stryker-mutator/core.
+  brace-expansion@>=4.0.0 <5.0.11: "^5.0.11"
+  # GHSA-5p4m-2wfm-xmqj/GHSA-2883-xcg3-v3hh — quadratic CPU via !!omap and
+  # empty merge keys. Via @commitlint/cli.
+  js-yaml@>=4.0.0 <4.3.2: "^4.3.2"
+  # GHSA-68fv-2mgg-jv7q — event-loop DoS via indexed source-map offsets. Via
+  # css-tree (production dep).
+  source-map-js@>=1.0.0 <1.2.2: "^1.2.2"
+  # GHSA-mrhx-c7xc-m3w5 — memory exhaustion validating oversized collections.
   # Via @stryker-mutator/core.
-  qs@>=6.11.1 <=6.15.1: "^6.15.2"
+  zod@<4.6.6: "^4.6.6"
+  # GHSA-q8mj-m7cp-5q26/GHSA-x5fp-wj9c-mxmx/GHSA-4mjr-xmp4-gh2g — DoS and
+  # array-limit bypass. Via @stryker-mutator/core.
+  qs@>=2.2.5 <6.16.0: "^6.16.0"
