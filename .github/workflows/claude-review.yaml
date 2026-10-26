@@ -102,9 +102,10 @@ jobs:
         RUN_URL='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
         bash .github/scripts/review-findings-gate.sh
     secrets:
-      # Rung 1 is the metered key, spent before any subscription tier. The OAuth
-      # tiers keep this repository's order behind it. An unset rung is skipped.
-      rung_1: ${{ secrets.FAR_ANTHROPIC_API_KEY }}
+      # Rung 1 is the metered key, spent before any subscription tier, under the
+      # template's secret name. The OAuth tiers keep this repository's order
+      # behind it. An unset rung is skipped.
+      rung_1: ${{ secrets.ANTHROPIC_API_KEY }}
       rung_2: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       rung_3: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK }}
       rung_4: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_FALLBACK_2 }}
