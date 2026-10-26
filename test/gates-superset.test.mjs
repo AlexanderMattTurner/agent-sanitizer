@@ -27,6 +27,7 @@ import {
   needsMarkdownPipeline,
   needsUrlScan,
 } from "../src/gates.mjs";
+import { credentialNames } from "../src/credential-names.mjs";
 
 const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
   encoding: "utf8",
@@ -236,4 +237,31 @@ describe("matchesSecretHint covers the engine's newline-collapsed view", () => {
       [],
     );
   });
+});
+
+describe("matchesSecretHint covers every field-value credential noun", () => {
+  // The redactor cuts `<noun> = <value>` for every noun the vocabulary marks
+  // `field-value`. A pre-gate that misses one keeps that line away from the
+  // redactor entirely, so the gate must open for each rendering of each noun.
+  const patterns = credentialNames().fieldNamePatterns;
+  it("iterates a non-empty vocabulary", () => {
+    assert.ok(patterns.length >= 10, `only ${patterns.length} patterns`);
+    assert.ok(patterns.includes("passphrase"));
+  });
+  for (const pattern of patterns) {
+    const nounParts = pattern.split("[_-]?");
+    for (const name of new Set([
+      nounParts.join("_"),
+      nounParts.join("-"),
+      nounParts.join(""),
+      nounParts.join("_").toUpperCase(),
+    ])) {
+      it(`opens for ${name} = <value>`, () => {
+        assert.equal(
+          matchesSecretHint(`${name} = s3cr3tDiceWareValue99xyz`),
+          true,
+        );
+      });
+    }
+  }
 });

@@ -5,13 +5,16 @@
  * These are pulled out of `html.mjs` so the package root can re-export them
  * without dragging in the heavy remark/rehype/unified graph: a static
  * `export … from "./html.mjs"` would eagerly evaluate that ~200ms module on
- * every root import, defeating the lazy-load design. This module imports
- * nothing, so re-exporting it is free.
+ * every root import, defeating the lazy-load design. This module imports only
+ * the credential vocabulary (a JSON file and its dependency-free parser), so
+ * re-exporting it is free.
  *
  * INVARIANT: every gate is a SUPERSET of its parser (a narrower one silently
  * turns its layer off; a needless fire only costs a parse), checked by
  * test/gates-superset.test.mjs.
  */
+import credentialNamesSpec from "../python/agent_sanitizer/secrets/data/credential-names.json" with { type: "json" };
+import { parseCredentialNames } from "./credential-names.mjs";
 
 // ─── Cheap pre-gates ─────────────────────────────────────────────────────────
 
@@ -117,17 +120,43 @@ export const SECRET_HINT =
 export const SECRET_HINT_EXT =
   /(?:AC|SK)[a-z0-9]{32}|SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}|sq0csp-[0-9A-Za-z_-]{43}|(?<![0-9])[0-9]{8,10}:[0-9A-Za-z_-]{35}|(?<![0-9a-z])[0-9a-z]{32}-us[0-9]{1,2}|(?<![A-Za-z0-9_-])[MNO][A-Za-z0-9_-]{23,25}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}|T3BlbkFJ|pypi-AgE|(?<![A-Za-z0-9])AKC[A-Za-z0-9]{10}|(?<![A-Za-z0-9])AP[0-9A-Fa-f][A-Za-z0-9]{8}|:\/\/[^\s:/@]{1,64}:[^\s:/@]{1,64}@|(?:key|pw|pass)["']?[\s:=>]+["']?[A-Za-z0-9_/+-]{20}/i;
 
+/** @type {RegExp | undefined} */
+let _fieldNameHint;
 /**
- * Either alternation against `text` exactly as written.
+ * Every noun the redactor cuts as `<noun> = <value>`, rendered from the same
+ * vocabulary the redactor reads.
+ *
+ * PROBLEM CLASS — a secret pre-gate narrower than the redactor behind it. A
+ * hand-written keyword list misses each noun added to the vocabulary later
+ * (`passphrase = …` reached the model unredacted), so this arm is generated
+ * from credential-names.json and is a superset of the field-value redactor by
+ * construction. Each part is `[a-z0-9]+`, so the alternation holds only
+ * bounded literals and stays linear. Built on first use, never at load: a
+ * malformed vocabulary then throws inside the caller's fail-closed catch.
+ * @returns {RegExp}
+ */
+function fieldNameHint() {
+  return (_fieldNameHint ??= new RegExp(
+    parseCredentialNames(credentialNamesSpec).fieldNamePatterns.join("|"),
+    "i",
+  ));
+}
+
+/**
+ * Any hint arm against `text` exactly as written.
  * @param {string} text
  * @returns {boolean}
  */
 function hintMatchesView(text) {
-  return SECRET_HINT.test(text) || SECRET_HINT_EXT.test(text);
+  return (
+    SECRET_HINT.test(text) ||
+    SECRET_HINT_EXT.test(text) ||
+    fieldNameHint().test(text)
+  );
 }
 
 /**
- * True when either pre-gate alternation shape-matches `text`, or the same text
+ * True when any pre-gate arm shape-matches `text`, or the same text
  * with every `\n` removed (the view the engine's `_redact_cross_line` scans, so
  * this stays a superset of the redactor). Two literals OR'd so neither grows
  * into a polynomial-backtracking shape (see SECRET_HINT).
