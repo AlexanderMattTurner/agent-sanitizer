@@ -904,7 +904,7 @@ describe("setup-liveness probe", () => {
       const { writeFileSync, mkdtempSync } = await import("node:fs");
       const { tmpdir } = await import("node:os");
       const { join } = await import("node:path");
-      const { spawnSync, spawn } = await import("node:child_process");
+      const { spawn } = await import("node:child_process");
       const marker = join(mkdtempSync(join(tmpdir(), "seam-lock-")), "m");
       // The pid is this process — alive — so a pid-only reading says "alive" in
       // BOTH cases below, and only the lock tells them apart.
