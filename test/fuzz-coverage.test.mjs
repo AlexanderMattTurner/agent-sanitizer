@@ -107,6 +107,11 @@ const FUZZ_EXEMPT = Object.freeze({
   escapesPreservable:
     "conjunction of isBenignAnsiKinds and sgrCarriesPayload, with no parse of its own",
   excludeFromContextScan: "path-prefix predicate over one scan entry name",
+  fieldValues:
+    "reads one or more properties off a parsed tool_input, with no parse",
+  isFileWriteTool: "table lookup on one tool name",
+  parseFieldSpec:
+    "splits a field spec from the package's own trusted table, never input",
   hasNonAscii: "code-unit range predicate over one string",
   isAsciiPretender:
     "code-point class predicate over one glyph, driven through selectFoldableFindings",

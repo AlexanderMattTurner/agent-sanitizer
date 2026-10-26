@@ -5,7 +5,7 @@
  * (build an input, read the value back) have to agree about that shape.
  */
 
-const NESTED_SPEC = /^(?<arr>\w+)\[\]\.(?<sub>\w+)$/u;
+import { parseFieldSpec } from "../../src/file-write-tools.mjs";
 
 /**
  * A tool_input carrying `value` in the field `spec` addresses.
@@ -14,9 +14,9 @@ const NESTED_SPEC = /^(?<arr>\w+)\[\]\.(?<sub>\w+)$/u;
  * @returns {Record<string, unknown>}
  */
 export function inputFor(spec, value) {
-  const nested = NESTED_SPEC.exec(spec);
-  if (!nested) return { [spec]: value };
-  return { [nested.groups.arr]: [{ [nested.groups.sub]: value }] };
+  const parsed = parseFieldSpec(spec);
+  if ("key" in parsed) return { [parsed.key]: value };
+  return { [parsed.arr]: [{ [parsed.sub]: value }] };
 }
 
 /**
@@ -26,7 +26,7 @@ export function inputFor(spec, value) {
  * @returns {unknown}
  */
 export function readField(spec, input) {
-  const nested = NESTED_SPEC.exec(spec);
-  if (!nested) return input[spec];
-  return input[nested.groups.arr][0][nested.groups.sub];
+  const parsed = parseFieldSpec(spec);
+  if ("key" in parsed) return input[parsed.key];
+  return input[parsed.arr][0][parsed.sub];
 }
