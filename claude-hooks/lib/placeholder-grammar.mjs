@@ -15,6 +15,7 @@ import {
   UNPARSEABLE_PLACEHOLDER,
 } from "../../src/layer2-placeholder.mjs";
 import { spanPath, revealDir } from "./reveal.mjs";
+import { isFileWriteTool } from "../../src/file-write-tools.mjs";
 
 // Re-exported under this module's published names: consumers of the hooks
 // surface import the Layer-2 grammar from here.
@@ -69,16 +70,6 @@ export function layer2KeysIn(value, depth = 0) {
     for (const key of layer2KeysIn(child, depth + 1)) keys.add(key);
   return [...keys];
 }
-
-// Tools whose inputs the rehydration layer itself resolves (or, for
-// MultiEdit/NotebookEdit, refuses with guidance). Both advisories stay silent
-// on these: their placeholder handling is a verdict, not a note.
-export const REHYDRATED_TOOLS = new Set([
-  "Edit",
-  "Write",
-  "MultiEdit",
-  "NotebookEdit",
-]);
 
 /**
  * Depth-capped walk: does any string in `value` carry secret-placeholder-shaped
@@ -197,7 +188,9 @@ function tokenList(found) {
  * @returns {string | null}
  */
 export function placeholderNotice(tool, toolInput) {
-  if (REHYDRATED_TOOLS.has(tool)) return null;
+  // The rehydration layer resolves (or refuses) a file-write tool's
+  // placeholders itself: there the handling is a verdict, not a note.
+  if (isFileWriteTool(tool)) return null;
   const { secret } = collectPlaceholders(toolInput);
   if (secret.length === 0) return null;
   return (
@@ -233,7 +226,9 @@ export function placeholderNotice(tool, toolInput) {
  * @returns {string | null}
  */
 export function layer2PlaceholderNotice(tool, toolInput) {
-  if (REHYDRATED_TOOLS.has(tool)) return null;
+  // The rehydration layer resolves (or refuses) a file-write tool's
+  // placeholders itself: there the handling is a verdict, not a note.
+  if (isFileWriteTool(tool)) return null;
   const { layer2 } = collectPlaceholders(toolInput);
   if (layer2.length === 0) return null;
   // Both routes can be named at once: an input can mix keyed placeholders

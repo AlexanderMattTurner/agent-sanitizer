@@ -40,13 +40,14 @@ esac
 """
 
 
-def test_seeded_dependabot_alert_is_surfaced(tmp_path: Path, copy_script) -> None:
+def _run_report(tmp_path: Path, copy_script, fake_gh_body: str) -> str:
+    """Run the script with ``gh`` stubbed by ``fake_gh_body``; return the report."""
     script = copy_script("fetch-security-report.sh", tmp_path)
 
     bindir = tmp_path / "bin"
     bindir.mkdir()
     fake_gh = bindir / "gh"
-    fake_gh.write_text(FAKE_GH, encoding="utf-8")
+    fake_gh.write_text(fake_gh_body, encoding="utf-8")
     fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
     report = tmp_path / "report.md"
@@ -62,7 +63,11 @@ def test_seeded_dependabot_alert_is_surfaced(tmp_path: Path, copy_script) -> Non
         ["bash", str(script)], cwd=tmp_path, env=env, capture_output=True, text=True
     )
     assert result.returncode == 0, result.stderr
-    text = report.read_text(encoding="utf-8")
+    return report.read_text(encoding="utf-8")
+
+
+def test_seeded_dependabot_alert_is_surfaced(tmp_path: Path, copy_script) -> None:
+    text = _run_report(tmp_path, copy_script, FAKE_GH)
     # Positive marker: the seeded advisory (summary + severity + package) is
     # actually rendered, proving the gh->jq pipeline reads real alert data.
     assert SEEDED_SUMMARY in text, text
@@ -70,4 +75,36 @@ def test_seeded_dependabot_alert_is_surfaced(tmp_path: Path, copy_script) -> Non
     assert "`lodash` (npm)" in text, text
     # And the fallback text must NOT be present — its appearance would mean the
     # call failed and we regressed to the swallowed-error behavior.
-    assert "Could not fetch Dependabot alerts" not in text, text
+    assert "Could not fetch Dependabot Alerts" not in text, text
+
+
+# A `gh` that fails every alert API call the way a missing scope does.
+FAILING_GH = """#!/usr/bin/env bash
+case "$2" in
+  *pulls*) : ;;
+  *) echo "HTTP 403: Resource not accessible by integration" >&2; exit 1 ;;
+esac
+"""
+
+
+@pytest.mark.parametrize(
+    "section",
+    ["Dependabot Alerts", "Code Scanning Alerts", "Secret Scanning Alerts"],
+)
+def test_a_failed_fetch_never_reads_as_no_alerts(
+    tmp_path: Path, copy_script, section: str
+) -> None:
+    # A 403 is "we do not know", not "there are none". Rendering it as
+    # "_No ... alerts_" told the triage step the repository was clean.
+    text = _run_report(tmp_path, copy_script, FAILING_GH)
+    body = text.split(f"## {section}\n", 1)[1].split("\n## ", 1)[0]
+    assert f"_Could not fetch {section}" in body, text
+    assert "_No " not in body, text
+
+
+def test_an_empty_section_says_so(tmp_path: Path, copy_script) -> None:
+    # The positive half: a successful fetch with no alerts still says so, so an
+    # empty section is never mistaken for a section that failed silently.
+    text = _run_report(tmp_path, copy_script, FAKE_GH)
+    body = text.split("## Code Scanning Alerts\n", 1)[1].split("\n## ", 1)[0]
+    assert body.strip() == "_No open alerts._", text

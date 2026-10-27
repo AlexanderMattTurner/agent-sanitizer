@@ -44,10 +44,12 @@ for (const [name, exists, want] of CASES)
       rmSync(dir, { recursive: true, force: true });
     });
     // Both candidate launchers record their argv; which one runs is the result.
+    // The rename makes `argv` appear only once it holds the line: `>` creates
+    // the file before echo writes, so the poll below could read it empty.
     for (const bin of ["python3", "agent-secret-redactor-daemon"]) {
       writeFileSync(
         join(dir, bin),
-        `#!/bin/sh\necho "${bin} $*" > "${dir}/argv"\n`,
+        `#!/bin/sh\necho "${bin} $*" > "${dir}/argv.tmp" && mv "${dir}/argv.tmp" "${dir}/argv"\n`,
       );
       chmodSync(join(dir, bin), 0o755);
     }

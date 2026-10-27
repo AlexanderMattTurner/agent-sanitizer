@@ -17,7 +17,7 @@
  *   sanitize           { text, html? }            -> { cleaned, found, warnings, notes, splices? }
  *   sanitizeText       { text, html?, exfilScan?, flagDigestValues? } -> { cleaned, warnings, notes, modified, sgrNote }
  *   classifyPrompt     { text }                    -> { action, reason? }
- *   scanInstructionFiles { globs, cwd? }           -> { findings: [{ file, findings }] }
+ *   scanInstructionFiles { globs, cwd? }           -> { findings: [{ file, findings }], skipped: [{ file, reason }] }
  *     Skips `node_modules`, the directories git ignores wholesale, and any
  *     nested worktree — none of them is the scanned checkout's own source.
  *   cleanFile          { path, root? }             -> { changed }
@@ -166,12 +166,10 @@ export const OPS = {
     // Whole-tree scope: a gitignored build directory and a nested worktree are
     // not this checkout's source, so a finding from one names a file the caller
     // does not own — and `cleanFile` would rewrite it.
-    return {
-      findings: scanInstructionFiles(globs, {
-        cwd,
-        exclude: contextScanExclude(cwd),
-      }),
-    };
+    return scanInstructionFiles(globs, {
+      cwd,
+      exclude: contextScanExclude(cwd),
+    });
   },
 
   /** @param {Record<string, unknown>} req */

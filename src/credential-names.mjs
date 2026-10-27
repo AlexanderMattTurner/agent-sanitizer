@@ -34,20 +34,15 @@
  * — the same file the Python renderings read and the same file the
  * `agent-sanitizer/credential-names` subpath exports, so the ecosystems cannot
  * drift apart on the words either.
+ *
+ * PROBLEM CLASS — the vocabulary loaded by more than one reader. This module is
+ * the ONE JavaScript loader: a static JSON import, which a bundler inlines into
+ * every bundle that reaches it (the plugin ships no `python/` directory, so a
+ * module-relative file read there finds nothing). Every consumer — the secret
+ * pre-gate, the hooks' env-var matcher — calls {@link credentialNames} instead
+ * of importing the file again.
  */
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const DATA_FILE = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "python",
-  "agent_sanitizer",
-  "secrets",
-  "data",
-  "credential-names.json",
-);
+import packagedSpec from "../python/agent_sanitizer/secrets/data/credential-names.json" with { type: "json" };
 
 const FILE_LABEL = "credential-names.json";
 const ENV_NAME_USE = "env-name";
@@ -158,15 +153,14 @@ export function parseCredentialNames(spec) {
 let _packaged;
 /** The validated renderings of the packaged vocabulary, memoized.
  *
- * Read lazily, never at module load: a static importer that crashed at LOAD would
- * abort before its own fail-closed catch installs, and a guardrail that fails to
- * load is a guardrail that fails OPEN. Deferring to first use routes a missing or
- * corrupt data file into the caller's catch instead.
+ * The data arrives with the module (the one static import above, so bundles
+ * carry it), but it is VALIDATED lazily, never at module load: a malformed
+ * vocabulary then throws on first use, inside the caller's fail-closed catch. A
+ * throw at load would abort before that catch installs, and a guardrail that
+ * fails to load is a guardrail that fails OPEN.
  * @returns {CredentialNames} */
 export function credentialNames() {
-  return (_packaged ??= parseCredentialNames(
-    JSON.parse(readFileSync(DATA_FILE, "utf8")),
-  ));
+  return (_packaged ??= parseCredentialNames(packagedSpec));
 }
 
 /** @typedef {"trailing" | "any-segment"} CredentialNameScope */

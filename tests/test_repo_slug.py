@@ -96,9 +96,12 @@ NON_REPO_PATHS = {
 #: own key — a fork must leave both the owner-mention shape and the pinned
 #: source pointing at the upstream ci-truth-serum, not at the fork's own
 #: rename, since it is a genuinely separate project this repo consumes.
+#: agent-review is the PR reviewer claude-review.yaml calls as a reusable
+#: workflow.
 OTHER_REPOS_UNDER_THIS_OWNER = {
     "claude-automation-template",
     "agent-resolve-merge-conflicts",
+    "agent-review",
     "ci-truth-serum",
 }
 

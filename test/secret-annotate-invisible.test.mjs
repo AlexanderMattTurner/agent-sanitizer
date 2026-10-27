@@ -16,7 +16,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { envValueRegex } from "../claude-hooks/lib/secret-annotate.mjs";
+import {
+  envValueRegex,
+  hasEnvBoundSecret,
+} from "../claude-hooks/lib/secret-annotate.mjs";
 
 const charset = JSON.parse(
   readFileSync(
@@ -122,5 +125,22 @@ describe("envValueRegex with a value that itself holds an invisible", () => {
     const re = envValueRegex(`${ZWSP}${ZWSP}`);
     assert.equal(re.test("ordinary text"), false);
     assert.ok(re.test(`x${ZWSP}${ZWSP}y`));
+  });
+});
+
+describe("hasEnvBoundSecret reads names and values from the SAME env", () => {
+  // A credential-shaped name that exists only in the passed env must be
+  // checked. Reading the names from process.env and the values from `env`
+  // let a caller's snapshot hold a secret the gate never looked at.
+  const name = "AIS_TEST_ONLY_DEPLOY_TOKEN";
+  it("fires on a value bound only in the passed env", () => {
+    assert.equal(process.env[name], undefined);
+    assert.equal(
+      hasEnvBoundSecret(`out ${VALUE} put`, { [name]: VALUE }),
+      true,
+    );
+  });
+  it("stays shut when the passed env does not hold the value", () => {
+    assert.equal(hasEnvBoundSecret(`out ${VALUE} put`, {}), false);
   });
 });

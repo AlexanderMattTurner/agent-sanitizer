@@ -224,6 +224,7 @@ test("the call-site sweep is non-empty and names the actions it reached", () => 
   // its own tree, so this repo's action files hold none of that call.
   const called = [...new Set(calls.map((call) => call.action))].sort();
   assert.deepEqual(called, [
+    ".github/actions/build-python-dist",
     ".github/actions/claude-run",
     ".github/actions/notify-ntfy",
     ".github/actions/report-job-result",
@@ -243,11 +244,11 @@ test("the call-site sweep is non-empty and names the actions it reached", () => 
   const ladderCalls = calls.filter((call) =>
     call.action.endsWith("/claude-run"),
   );
-  // Four since the orphaned claude-conflict-resolve composite was deleted with
-  // the resolver it wrapped. The floor is what stops the sweep passing vacuously
-  // on an empty parse, so it tracks the tree rather than staying above it.
+  // Three since the first-pass reviewer moved to the upstream agent-review
+  // reusable workflow. The floor is what stops the sweep passing vacuously on
+  // an empty parse, so it tracks the tree rather than staying above it.
   assert.ok(
-    ladderCalls.length >= 4,
+    ladderCalls.length >= 3,
     `only ${ladderCalls.length} claude-run calls`,
   );
   for (const call of ladderCalls) {

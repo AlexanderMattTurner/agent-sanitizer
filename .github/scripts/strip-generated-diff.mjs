@@ -4,10 +4,10 @@
 //
 // PROBLEM CLASS — a review budget spent on bytes nobody wrote. A repo that
 // commits a build output (a bundle, a generated table) sees a 25-line source
-// edit arrive as a ~30k-line diff. That is over
-// prepare-pr-review-input.sh's MAX_DIFF_LINES, so the review is skipped
-// entirely and the source edit gets no automated read at all — the opposite of
-// what the size guard is for. The artifacts need no review anyway: CI rebuilds
+// edit arrive as a ~30k-line diff, which spends the reviewer's line budget and
+// can push the PR past the size where it gets any automated read at all.
+// claude-review.yaml passes this script to the upstream reviewer as its
+// `elide-command`. The artifacts need no review anyway: CI rebuilds
 // each one and fails on any difference, so the diff cannot disagree with its
 // sources.
 //

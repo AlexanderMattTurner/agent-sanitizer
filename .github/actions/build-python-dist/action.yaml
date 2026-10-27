@@ -1,0 +1,66 @@
+name: "Build the Python distribution"
+description: >-
+  Check out one release commit and build python/dist/ (sdist + wheel) from it,
+  stamped with that release's version. Needs Node and pnpm on PATH and the
+  checkout's full history.
+# PROBLEM CLASS — a wheel built from one commit and versioned from another.
+# Both release paths (auto-version.yaml and the publish-python.yaml break-glass)
+# build here, from the commit the caller names. Building from whatever the job
+# left checked out published main's code under an older tag's version.
+inputs:
+  ref:
+    description: "The commit to build: the published SHA, or the release tag."
+    required: true
+  version:
+    description: "The release version to stamp into python/pyproject.toml."
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    # --force: the release job leaves package.json dirty (npm's version lives
+    # in the registry, never in a commit), and none of it belongs in the wheel.
+    - name: Check out the release commit
+      shell: bash
+      env:
+        REF: ${{ inputs.ref }}
+      run: git -c advice.detachedHead=false checkout --force --detach "$REF"
+
+    # The release commit's own lockfile, never the job's earlier install. No
+    # store cache: a poisoned cache could tamper with what PyPI ships.
+    - name: Install Node dependencies
+      shell: bash
+      run: pnpm install --frozen-lockfile
+
+    # Generated, git-ignored inputs the wheel ships or the CLI bundle inlines.
+    # Regenerated explicitly so the build depends on no install side effect,
+    # and so a pinned upstream that no longer matches the patch fails loudly.
+    - name: Generate the Unicode tables and the patched GFM autolink module
+      shell: bash
+      run: |
+        node scripts/gen-unicode.mjs
+        node scripts/gen-gfm-autolink.mjs
+
+    - name: Bundle the CLI into the Python package
+      shell: bash
+      run: node scripts/bundle-python-cli.mjs
+
+    - name: Set the wheel version
+      shell: bash
+      env:
+        RELEASE_VERSION: ${{ inputs.version }}
+      run: bash scripts/set-pyproject-version.sh "$RELEASE_VERSION"
+
+    - name: Set up uv
+      uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+      with:
+        enable-cache: false
+
+    - name: Build sdist and wheel
+      shell: bash
+      working-directory: python
+      run: uv build
+
+    - name: Check distribution metadata
+      shell: bash
+      run: uvx twine check python/dist/*

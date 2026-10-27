@@ -122,20 +122,10 @@ env:
   # The security-vulnerability-scan workflow + prompt are intentionally NOT
   # propagated to downstream repos; each consumer owns its own security-scan
   # cadence and model pin, so the template stops overwriting them on sync.
-  #
-  # allow-workflow-ref: claude-review.yaml names the UPSTREAM template repo's
-  # workflow file, not one of this repo's own — this repo runs the reviewer as
-  # two split workflows
-  # (claude-pr-review, claude-merge-delta-review) that between them produce the
-  # jobs the template's single file does — same job names, same job-level
-  # concurrency groups, so the two copies cancelled each other on every push. It was deleted here in #218, and the sync's "new
-  # file in template" case would copy it straight back. The declined-files check
-  # (was_deleted_here) now honours that delete on its own, so this entry is the
-  # explicit, belt-and-braces record of it rather than the only thing stopping it.
   # .github/scripts/auto-resolve is the retired shell resolver. A consumer that
   # still carries it keeps its own copy rather than having sync delete it out
   # from under a caller that has not converted yet.
-  EXCLUDE_PATHS: ".github/workflows/security-vulnerability-scan.yaml .github/prompts/security-vulnerability-scan.md .github/workflows/claude-review.yaml .github/scripts/auto-resolve"
+  EXCLUDE_PATHS: ".github/workflows/security-vulnerability-scan.yaml .github/prompts/security-vulnerability-scan.md .github/scripts/auto-resolve"
   # Files the sync UPDATES but never INTRODUCES. Absent from the child repo they
   # are skipped; present, they sync like anything else. This is the opt-in half
   # of EXCLUDE_PATHS: opting in is creating the file once, opting out is deleting

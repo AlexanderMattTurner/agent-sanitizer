@@ -20,6 +20,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repoRoot } from "./helpers/repo-root.mjs";
+import { skipUnless } from "./helpers/skip.mjs";
 
 const pythonDir = join(repoRoot, "python");
 const UV_PYTHON = ["run", "--extra", "dev", "--frozen", "python", "-c"];
@@ -28,11 +29,11 @@ const probe = spawnSync("uv", [...UV_PYTHON, "import detect_secrets"], {
   cwd: repoRoot,
   encoding: "utf8",
 });
-const skip =
-  probe.error || probe.status !== 0
-    ? `the Python engine is unavailable: \`uv ${UV_PYTHON.join(" ")} "import detect_secrets"\` ` +
-      `failed (${probe.error?.message ?? `exit ${probe.status}: ${probe.stderr.trim()}`})`
-    : false;
+const skip = skipUnless(
+  !probe.error && probe.status === 0,
+  `the Python engine is unavailable: \`uv ${UV_PYTHON.join(" ")} "import detect_secrets"\` ` +
+    `failed (${probe.error?.message ?? `exit ${probe.status}: ${probe.stderr?.trim()}`})`,
+);
 
 // The client reads its socket path at module load, so it is set before the
 // hook is imported; an empty project dir keeps the invisible-char gate quiet.

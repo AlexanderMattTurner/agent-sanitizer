@@ -445,7 +445,7 @@ describe("guarded-data scan (the map is derived from the tests)", () => {
 
   it("pins the reads that actually broke main", () => {
     // Both incidents this mechanism exists for, re-pointed at the derived map.
-    // auto-version.yaml's six PyPI-publish steps gate on `steps.release.outputs`
+    // auto-version.yaml's PyPI-publish steps gate on `steps.release.outputs`
     // and a sync once dropped the `id: release` that defines it — an unknown
     // step id renders empty rather than erroring, so the whole coupled half
     // no-opped silently. And the generated fail-open shell lib landed on main

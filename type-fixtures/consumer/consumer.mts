@@ -99,9 +99,12 @@ const _normalized: { updatedInput: any; normalized: string[] } | null =
     { scan: (_text: string) => ({ findings: [] }) },
   );
 
-// /instructions — scanInstructionFiles returns one entry per file with hits.
-const _instructionFindings: Array<{ file: string; findings: unknown[] }> =
-  scanInstructionFiles([]);
+// /instructions — scanInstructionFiles returns one entry per file with hits,
+// and names each file it could not read rather than reporting it clean.
+const _instructionScan: {
+  findings: Array<{ file: string; findings: unknown[] }>;
+  skipped: Array<{ file: string; reason: string }>;
+} = scanInstructionFiles([]);
 
 // /prompt — classifyPrompt's action is a closed pass/note/block union.
 const _verdict = classifyPrompt("hello");
@@ -175,7 +178,7 @@ export const _assertions = [
   _defaultHintNotAny,
   _nonAscii,
   _normalized,
-  _instructionFindings,
+  _instructionScan,
   _action,
   _textCleaned,
   _textModified,

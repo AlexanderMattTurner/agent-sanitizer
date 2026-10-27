@@ -175,15 +175,11 @@ test("no workflow or composite action hands Claude an API key, except claude-run
     "no scanned file references CLAUDE_CODE_OAUTH_TOKEN — the scan is not reading the Claude workflows",
   );
 
-  // claude-run/action.yaml's metered rung, and claude-pr-review.yaml (the one
-  // caller that wires it), are the sole deliberate exception: an opt-in
-  // credential tried FIRST, with the primary OAuth token and its six
-  // fallbacks as the free backstop if it fails. Everything else stays held to
-  // zero — a new file matching the pattern is a real regression, not a rung
-  // this repo already accepted.
+  // claude-run/action.yaml declares an optional metered input that no caller
+  // here wires, so it is the sole exemption. Every workflow, the reviewer's
+  // included, stays held to zero: a match anywhere else is a path that bills.
   const EXEMPT = new Set([
     join(".github", "actions", "claude-run", "action.yaml"),
-    join(".github", "workflows", "claude-pr-review.yaml"),
   ]);
   const offenders = files
     .filter((f) => /ANTHROPIC_API_KEY|anthropic_api_key/.test(f.body))

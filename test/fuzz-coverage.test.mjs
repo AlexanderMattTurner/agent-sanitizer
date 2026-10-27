@@ -98,6 +98,7 @@ const FUZZ_EXEMPT = Object.freeze({
   // ── predicates and lookups: no parse or transform step of their own ──────
   announcedByInstructionsLoaded:
     "splits one path on its separators and looks the tail up in the kind table",
+  classifyReadFailure: "maps one errno code to a bucket, with no parse",
   closingTagName: "reads one tag name out of an already-tokenized HTML value",
   contextScanExclude:
     "composes excludeFromContextScan with a set of paths git listed; its one parse, the NUL-delimited listing, is pinned by the quoted-directory case in repo-scope.test.mjs",
@@ -106,6 +107,11 @@ const FUZZ_EXEMPT = Object.freeze({
   escapesPreservable:
     "conjunction of isBenignAnsiKinds and sgrCarriesPayload, with no parse of its own",
   excludeFromContextScan: "path-prefix predicate over one scan entry name",
+  fieldValues:
+    "reads one or more properties off a parsed tool_input, with no parse",
+  isFileWriteTool: "table lookup on one tool name",
+  parseFieldSpec:
+    "splits a field spec from the package's own trusted table, never input",
   hasNonAscii: "code-unit range predicate over one string",
   isAsciiPretender:
     "code-point class predicate over one glyph, driven through selectFoldableFindings",

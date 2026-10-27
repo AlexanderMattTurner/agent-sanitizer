@@ -53,6 +53,10 @@
  */
 import { lazyImport } from "./hook-io.mjs";
 import { readKnob } from "./knobs.mjs";
+import {
+  FILE_WRITE_TOOLS,
+  parseFieldSpec,
+} from "../../src/file-write-tools.mjs";
 
 // Bound via lazyImport (see its doc for the fail-OPEN hazard of a bare static
 // npm import — here the load crash would fire inside pretooluse-sanitize.mjs's
@@ -68,25 +72,24 @@ const { payloadVerdict, stripInvisibleWithReport } =
     await lazyImport("agent-sanitizer/invisible")
   );
 
-// Content fields the model authors, per tool. Paths and confusables are the
-// confusable layer's domain; here we target the free-text fields that carry
-// model-authored prose / code / data out into persisted or displayed artifacts.
-// A "key[].sub" entry addresses `sub` on every element of the array at `key`
-// (MultiEdit batches its writes as edits[].new_string), so the nested authored
-// content is sanitized too — not just the top-level fields.
-//
-// Null-prototype: `tool` comes from the payload, and on a plain object literal
-// `FIELDS["constructor"]` answers a truthy inherited value that the field loop
-// below would then try to iterate.
-/** @type {Record<string, string[]>} */
+// Content fields the model authors, per tool: every file-write tool's
+// `authored` fields from the one table, plus Bash's command. Paths and
+// confusables are the confusable layer's domain; here we target the free-text
+// fields that carry model-authored prose / code / data out into persisted or
+// displayed artifacts. Null-prototype: `tool` comes from the payload, and on a
+// plain object `FIELDS["constructor"]` answers a truthy inherited value.
+/** @type {Readonly<Record<string, readonly string[]>>} */
 export const AUTHORED_FIELDS = Object.freeze(
-  Object.assign(Object.create(null), {
-    Write: ["content"],
-    Edit: ["new_string"],
-    MultiEdit: ["edits[].new_string"],
-    NotebookEdit: ["new_source"],
-    Bash: ["command"],
-  }),
+  Object.assign(
+    Object.create(null),
+    Object.fromEntries(
+      Object.entries(FILE_WRITE_TOOLS).map(([tool, { authored }]) => [
+        tool,
+        authored,
+      ]),
+    ),
+    { Bash: Object.freeze(["command"]) },
+  ),
 );
 
 // The other half of the partition: tools this layer has LOOKED AT and decided
@@ -131,7 +134,7 @@ export const EXEMPT_TOOL_PATTERNS = Object.freeze([
  * fatigue, and the doctrine here is precision over recall. The signal is the
  * partition test, which reads this function.
  * @param {string} tool
- * @returns {{ kind: "covered", fields: string[] } | { kind: "exempt", reason: string } | { kind: "undeclared" }}
+ * @returns {{ kind: "covered", fields: readonly string[] } | { kind: "exempt", reason: string } | { kind: "undeclared" }}
  */
 export function authoredScopeDecision(tool) {
   const fields = AUTHORED_FIELDS[tool];
@@ -279,12 +282,9 @@ export function sanitizeAuthoredContent(tool, toolInput) {
   // every own field (including a literal `__proto__`) as a plain own property.
   const updatedInput = Object.assign(Object.create(null), toolInput);
   for (const k of keys) {
-    // Named groups satisfy prefer-named-capture-group; reading the numeric
-    // indices keeps the values typed as string (match.groups is optional).
-    const nested = k.match(/^(?<arr>\w+)\[\]\.(?<sub>\w+)$/);
-    if (nested) {
-      const arrKey = nested[1];
-      const subKey = nested[2];
+    const spec = parseFieldSpec(k);
+    if ("arr" in spec) {
+      const { arr: arrKey, sub: subKey } = spec;
       const arr = toolInput[arrKey];
       if (!Array.isArray(arr)) continue;
       let nestedChanged = false;

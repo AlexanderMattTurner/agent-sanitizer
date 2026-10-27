@@ -8,8 +8,8 @@
 # a stale state as the live one.
 #
 # Consumers: review-findings-gate.sh, approve-if-reviewer-hold-clear.sh.
-# (decide-pr-review-trigger.sh answers a different question — the latest review's
-# STATE, over the REST endpoint — and does not share this document.)
+# (The upstream reviewer's decide script answers a different question over the
+# REST endpoint and does not share this document.)
 
 # retry_stdout and the reviewer predicate: sourced here rather than assumed, so a
 # consumer gets both by sourcing this file alone. Each is idempotent under a

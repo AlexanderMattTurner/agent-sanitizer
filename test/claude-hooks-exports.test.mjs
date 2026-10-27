@@ -136,7 +136,6 @@ const PUBLISHED_EXPORTS = {
   "pretooluse-sanitize": [
     "PRE_TOOL_USE_MESSAGES",
     "REDACTION_HINT",
-    "WRITE_SHAPED_TOOLS",
     "buildPreToolUseResponse",
     "cliMain",
     "depLoadHint",
