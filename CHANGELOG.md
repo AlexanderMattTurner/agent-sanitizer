@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.66.7] - 2026-10-27
+
+### Fixed
+
+- Restore resolved sync behavior over scheduled re-sync in template synchronization.
+
 ## [2.66.6] - 2026-10-22
 
 ### Fixed
