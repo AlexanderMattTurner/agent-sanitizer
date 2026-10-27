@@ -8,6 +8,30 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.67.0] - 2026-10-27
+
+### Added
+- Export `credentialNames()` function for use inside bundles via static vocabulary import.
+- New `file-write-tools.mjs` module consolidating file-write tool definitions.
+- PyPI wheel build now sourced from the npm-published commit for consistency.
+
+### Changed
+- `errMessage` unified into a single definition shared across library and hooks.
+
+### Fixed
+- `credentialNames()` now works correctly inside bundles.
+- Redactor-pyz stub now writes argv atomically.
+- Release workflow now builds PyPI wheel from the commit npm published.
+- Failed security alert fetches now report as "could not fetch" instead of "no alerts".
+
+### Removed
+- Dropped `WRITE_SHAPED_TOOLS` export in favor of consolidated file-write tool table.
+- Removed separate PR review workflows; consolidated into unified review workflow.
+- Removed review cost tracking and metered API key credential ladder management.
+
+### Security
+- Updated credential handling in review workflows to use unified FAR_ANTHROPIC_API_KEY secret configuration.
+
 ## [2.66.7] - 2026-10-27
 
 ### Fixed
