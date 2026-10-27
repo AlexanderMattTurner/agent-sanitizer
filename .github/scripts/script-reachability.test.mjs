@@ -45,6 +45,17 @@ function tracked(...patterns) {
 // it and none should have to.
 const IMPLICIT = new Set([".github/scripts/package.json"]);
 
+// Delivered by the sync (SYNC_PATHS covers .github/scripts) but run only from
+// the template's own checkout by the reusable sync workflow that
+// template-sync.yaml calls, so no workflow in this repo names them.
+const RUN_BY_TEMPLATE_SYNC = [
+  ".github/scripts/check-token-scope.sh",
+  ".github/scripts/show-sync-diff.sh",
+  ".github/scripts/template-sync-marker-gate.sh",
+  ".github/scripts/template-sync-pr-body.sh",
+  ".github/scripts/template-sync-preflight.sh",
+];
+
 const SCRIPTS = tracked(".github/scripts").filter((p) => !IMPLICIT.has(p));
 const SUITES = SCRIPTS.filter((p) => p.endsWith(".test.mjs"));
 const ROOTS = [
@@ -76,7 +87,7 @@ function reachable() {
       readFileSync(join(REPO_ROOT, path), "utf8"),
     ]),
   );
-  const live = new Set(ROOTS);
+  const live = new Set([...ROOTS, ...RUN_BY_TEMPLATE_SYNC]);
   for (;;) {
     const before = live.size;
     for (const script of SCRIPTS) {
