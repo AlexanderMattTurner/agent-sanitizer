@@ -13,7 +13,13 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { fileURLToPath } from "node:url";
-import { mkdtempSync, writeFileSync, readFileSync, symlinkSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  writeFileSync,
+  readFileSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import fc from "fast-check";
@@ -349,10 +355,13 @@ describe("CLI: op dispatch mirrors the in-process entry point", () => {
     const notes = path.join(dir, "NOTES.md");
     writeFileSync(notes, `intro ${ZWS.repeat(100)} outro\n`, "utf8");
     writeFileSync(path.join(dir, "CLEAN.md"), "nothing hidden\n", "utf8");
+    mkdirSync(path.join(dir, "DIR.md"));
 
+    const scanned = scanInstructionFiles(["*.md"], { cwd: dir });
+    assert.deepEqual(scanned.skipped, [{ file: "DIR.md", reason: "EISDIR" }]);
     assertOpMirrors(
       { op: "scanInstructionFiles", globs: ["*.md"], cwd: dir },
-      { findings: scanInstructionFiles(["*.md"], { cwd: dir }) },
+      scanned,
     );
 
     // cleanFile mutates the file, so the oracle can't run on the same path after
@@ -364,7 +373,7 @@ describe("CLI: op dispatch mirrors the in-process entry point", () => {
     assert.ok(!readFileSync(notes, "utf8").includes(ZWS));
     assert.equal(clean(notes), false);
     assert.equal(clean(path.join(dir, "CLEAN.md")), false);
-    assert.deepEqual(scanInstructionFiles(["*.md"], { cwd: dir }), []);
+    assert.deepEqual(scanInstructionFiles(["*.md"], { cwd: dir }).findings, []);
   });
 
   it("scanInstructionFiles rejects a present-but-non-string cwd loudly", () => {

@@ -488,8 +488,8 @@ fi
 # plugin/test/plugin-bundle.test.mjs:
 #
 #   1. A bundle that writes nothing and exits 0. That is byte-identical to a
-#      healthy hook with nothing to say, which all four of them are on a clean
-#      payload, so gating on it would fire a degraded warning on ordinary
+#      healthy hook with nothing to say, which every hook this shim launches
+#      is on a clean payload, so gating on it would fire a degraded warning on ordinary
 #      traffic.
 #   2. A bundle that exits non-zero after writing a well-formed JSON object that
 #      is not a verdict. The gate checks the SHAPE of what came back (a single

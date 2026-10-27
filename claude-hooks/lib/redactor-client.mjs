@@ -37,6 +37,7 @@ import {
 } from "./redactor-wire.mjs";
 import {
   currentUid,
+  errMessage,
   isPrivateDir,
   ownedByCurrentUser,
   privateDirAt,
@@ -200,9 +201,8 @@ function isRespawnable(err) {
  * @returns {Error}
  */
 function failClosed(cause) {
-  const detail = cause instanceof Error ? cause.message : String(cause);
   return new Error(
-    `secret redaction unavailable (${detail}); secret-shaped output could not be vetted`,
+    `secret redaction unavailable (${errMessage(cause)}); secret-shaped output could not be vetted`,
   );
 }
 

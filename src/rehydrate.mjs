@@ -55,6 +55,7 @@
  * {@link rehydrateRedacted}).
  */
 import { applyLayer1, normalizeLoneSurrogates } from "./layer1.mjs";
+import { FILE_WRITE_TOOLS, fieldValues } from "./file-write-tools.mjs";
 import {
   occurrences,
   overlapAwareCount,
@@ -772,41 +773,44 @@ function multiEditDeny(filePath) {
 }
 
 /**
+ * Every string a placeholder can sit in, per one {@link FILE_WRITE_TOOLS}
+ * entry, or null when the input is not well-formed for it: a placeholder field
+ * that is not a string, or a nested field over an absent or empty array.
+ * @param {import("./file-write-tools.mjs").FileWriteTool} entry
+ * @param {any} ti
+ * @returns {string[] | null}
+ */
+function placeholderFields(entry, ti) {
+  const values = [];
+  for (const spec of entry.placeholders) {
+    const found = fieldValues(spec, ti);
+    if (found === null || found.some((v) => typeof v !== "string")) return null;
+    values.push(.../** @type {string[]} */ (found));
+  }
+  return values;
+}
+
+/**
  * True when this tool call could need re-anchoring against the target file's
- * sanitized view: any well-formed Edit or Write (the view may differ from
- * disk even without placeholders, via stripped invisible characters — a
- * hint-free whole-file Write of such a file would silently persist the
- * stripped bytes), and any well-formed MultiEdit (gated on the same
- * grounds).
+ * sanitized view: any well-formed call to a tool whose table entry
+ * `rehydrates`. An Edit or Write qualifies even without placeholders: the view
+ * may differ from disk via stripped invisible characters, and a hint-free
+ * whole-file Write of such a file would silently persist the stripped bytes.
+ *
+ * MultiEdit applies its edits SEQUENTIALLY, each against the result of the
+ * previous, so the span machinery below (which maps one old_string against
+ * one static view) cannot re-anchor it. It is still a candidate: on a
+ * divergent file an unguarded pass-through is both a silent clobber and the
+ * same char-extraction oracle R1 closes for Edit. The dispatch at the bottom
+ * passes the clean-file case through and denies the divergent one.
  * @param {string} tool
  * @param {any} ti
  */
 function isCandidate(tool, ti) {
   if (typeof ti?.file_path !== "string") return false;
-  if (tool === "Edit")
-    return (
-      typeof ti.old_string === "string" && typeof ti.new_string === "string"
-    );
-  if (tool === "Write") return typeof ti.content === "string";
-  // MultiEdit applies its edits SEQUENTIALLY, each against the result of the
-  // previous, so the span machinery below (which maps one old_string against
-  // one static view) cannot re-anchor it. It is still a candidate: on a
-  // divergent file an unguarded pass-through is both a silent clobber (a
-  // placeholder in new_string persisted verbatim) and the same char-extraction
-  // oracle R1 closes for Edit (an old_string matching bytes inside a redacted
-  // span). The dispatch at the bottom pass-throughs the clean-file case and
-  // denies the divergent one with use-single-Edit guidance.
-  if (tool === "MultiEdit")
-    return (
-      Array.isArray(ti.edits) &&
-      ti.edits.length > 0 &&
-      ti.edits.every(
-        (/** @type {any} */ edit) =>
-          typeof edit?.old_string === "string" &&
-          typeof edit?.new_string === "string",
-      )
-    );
-  return false;
+  const entry = FILE_WRITE_TOOLS[tool];
+  if (!entry?.rehydrates) return false;
+  return placeholderFields(entry, ti) !== null;
 }
 
 /**
@@ -838,8 +842,9 @@ export async function rehydrateRedacted(
   // secret; mapping .ipynb JSON is not supported, so refuse with guidance.
   if (
     tool === "NotebookEdit" &&
-    typeof toolInput?.new_source === "string" &&
-    toolInput.new_source.includes(hint)
+    placeholderFields(FILE_WRITE_TOOLS.NotebookEdit, toolInput)?.some((v) =>
+      v.includes(hint),
+    )
   )
     return {
       deny:
@@ -848,16 +853,9 @@ export async function rehydrateRedacted(
         `the secret-bearing cell unchanged, or ask the user to edit it.`,
     };
   if (!isCandidate(tool, toolInput)) return null;
-  const hinted =
-    tool === "Write"
-      ? toolInput.content.includes(hint)
-      : tool === "MultiEdit"
-        ? toolInput.edits.some(
-            (/** @type {{old_string: string, new_string: string}} */ edit) =>
-              edit.old_string.includes(hint) || edit.new_string.includes(hint),
-          )
-        : toolInput.old_string.includes(hint) ||
-          toolInput.new_string.includes(hint);
+  const hinted = /** @type {string[]} */ (
+    placeholderFields(FILE_WRITE_TOOLS[tool], toolInput)
+  ).some((v) => v.includes(hint));
 
   let content;
   try {

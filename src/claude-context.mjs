@@ -251,6 +251,28 @@ export function displayUntrusted(text) {
 }
 
 /**
+ * PROBLEM CLASS — how a failed instruction-file read is classified. Every
+ * scanner reads this one bucketing; nothing re-derives it from an errno.
+ *
+ * A read failure is never swallowed into an empty findings list — that turns
+ * "we could not read this file" into "this file is fine". Three buckets:
+ *
+ *   - SKIPPED — the file exists and this uid cannot read it (EACCES, EISDIR,
+ *     ELOOP…). Unvetted context, which the caller must report.
+ *   - ABSENT — ENOENT. The path resolves to nothing, and the host loads
+ *     instruction files through the same open, so no bytes can reach the model.
+ *   - THROWN — no errno at all, i.e. a bug. Nothing can be trusted, so the
+ *     error propagates to the caller's failure posture.
+ * @param {unknown} err
+ * @returns {"absent" | "skipped"}  never returns for a non-errno throw
+ */
+export function classifyReadFailure(err) {
+  const code = /** @type {NodeJS.ErrnoException} */ (err).code;
+  if (code === undefined) throw err;
+  return code === "ENOENT" ? "absent" : "skipped";
+}
+
+/**
  * The one directory no instruction-file walk ever descends into. Its own
  * function so the name is spelled once, and so the two predicates that need it
  * (a plain glob walk, and {@link excludeFromContextScan}) cannot disagree.

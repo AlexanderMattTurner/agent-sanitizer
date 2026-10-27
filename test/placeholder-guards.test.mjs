@@ -23,6 +23,7 @@ import {
   UNPARSEABLE_MARKER,
 } from "../claude-hooks/lib/placeholder-grammar.mjs";
 import { mkView } from "./helpers/redact-view.mjs";
+import { python3Available, skipUnless } from "./helpers/skip.mjs";
 
 // Keyed Layer-2 placeholders, minted by the engine's single producer so these
 // carry real keys rather than hand-typed ones.
@@ -89,23 +90,24 @@ describe("PLACEHOLDER_RE: contract with placeholders.py", () => {
     );
   });
 
-  it("agrees with the live Python regex on a positive/negative corpus", function () {
-    const corpus = [
-      "[REDACTED]",
-      "[REDACTED: ANTHROPIC_API_KEY]",
-      "[REDACTED: Public IP (ipv4)]",
-      "[REDACTED: a.b-c_d 9]",
-      "x=[REDACTED] embedded in text",
-      "[REDACTED…]", // hint-prefixed prose (the ellipsis form the docs use)
-      "[REDACTED:missing-space]",
-      "[REDACTED: bad:colon]",
-      "[REDACTED: line\nbreak]",
-      `[REDACTED: ${"a".repeat(65)}]`,
-      "REDACTED] alone",
-    ];
-    let pyVerdicts;
-    try {
-      pyVerdicts = JSON.parse(
+  it(
+    "agrees with the live Python regex on a positive/negative corpus",
+    { skip: skipUnless(python3Available(), "no python3 on this runner") },
+    () => {
+      const corpus = [
+        "[REDACTED]",
+        "[REDACTED: ANTHROPIC_API_KEY]",
+        "[REDACTED: Public IP (ipv4)]",
+        "[REDACTED: a.b-c_d 9]",
+        "x=[REDACTED] embedded in text",
+        "[REDACTED…]", // hint-prefixed prose (the ellipsis form the docs use)
+        "[REDACTED:missing-space]",
+        "[REDACTED: bad:colon]",
+        "[REDACTED: line\nbreak]",
+        `[REDACTED: ${"a".repeat(65)}]`,
+        "REDACTED] alone",
+      ];
+      const pyVerdicts = JSON.parse(
         execFileSync(
           "python3",
           [
@@ -124,19 +126,14 @@ describe("PLACEHOLDER_RE: contract with placeholders.py", () => {
           },
         ).toString(),
       );
-    } catch {
-      // No python3 on this runner: the source-literal contract above still
-      // pins the grammar; skip only the live cross-check.
-      this.skip();
-      return;
-    }
-    assert.deepEqual(
-      corpus.map((c) => PLACEHOLDER_RE.test(c)),
-      pyVerdicts,
-    );
-    // Non-vacuous in both directions.
-    assert.ok(pyVerdicts.includes(true) && pyVerdicts.includes(false));
-  });
+      assert.deepEqual(
+        corpus.map((c) => PLACEHOLDER_RE.test(c)),
+        pyVerdicts,
+      );
+      // Non-vacuous in both directions.
+      assert.ok(pyVerdicts.includes(true) && pyVerdicts.includes(false));
+    },
+  );
 
   it("matches only full placeholder shapes, not the bare hint prefix", () => {
     assert.equal(PLACEHOLDER_RE.test("[REDACTED]"), true);

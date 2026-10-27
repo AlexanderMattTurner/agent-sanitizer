@@ -49,6 +49,9 @@ import {
   defaultOpen,
 } from "./lib/hook-fault.mjs";
 import { runLayerPipeline } from "./lib/layer-pipeline.mjs";
+// Relative, like src/claude-context.mjs: the fault path reads this table and
+// must work when the agent-sanitizer package failed to load.
+import { isFileWriteTool } from "../src/file-write-tools.mjs";
 import { controlPlane, runJudgeCli } from "./lib/control-plane.mjs";
 import {
   invisibleCharAlert,
@@ -764,18 +767,6 @@ export function failClosedFields(parsedOk, err, opts = {}) {
 // DEFAULT_HINT) failed to load. Exported so test/claude-hooks-fail-open.test.mjs
 // can pin the two spellings together.
 export const REDACTION_HINT = "[REDACTED";
-// The file-editing tools whose input fields ARE the bytes persisted to disk.
-// Deliberately NOT exhaustive over every clobber path: Bash can also write a
-// placeholder to disk (`>`, `tee`, `sed -i`, a heredoc), but command strings
-// mention "[REDACTED" benignly far too often — grepping for it, discussing
-// it — for an ask to hold precision there. That is an accepted gap, named in
-// THREAT-MODEL.md's carve-out paragraph, not a completeness claim.
-export const WRITE_SHAPED_TOOLS = new Set([
-  "Write",
-  "Edit",
-  "MultiEdit",
-  "NotebookEdit",
-]);
 
 /**
  * True when a faulting PreToolUse call is the one case the OPEN posture must
@@ -786,8 +777,13 @@ export const WRITE_SHAPED_TOOLS = new Set([
  * view; with the sanitizer down, rehydration cannot translate it back, so
  * letting the call through would persist the literal placeholder text over the
  * real secret on disk — a destructive clobber, not a missed scan.
- * Package-free by construction (a Set lookup and a walk of the already-parsed
+ * Package-free by construction (a table lookup and a walk of the already-parsed
  * payload), so it holds when the failure IS the missing package.
+ *
+ * Deliberately NOT exhaustive over every clobber path: Bash can also write a
+ * placeholder to disk (`>`, `tee`, `sed -i`, a heredoc), but command strings
+ * mention "[REDACTED" benignly far too often for an ask to hold precision
+ * there. That is an accepted gap, named in THREAT-MODEL.md's carve-out.
  * @param {unknown} input raw parsed PreToolUse payload (undefined if unparsed)
  * @returns {boolean}
  */
@@ -797,7 +793,7 @@ export function hintedWriteFault(input) {
       input
     );
   return (
-    WRITE_SHAPED_TOOLS.has(/** @type {string} */ (payload?.tool_name)) &&
+    isFileWriteTool(payload?.tool_name) &&
     containsPlaceholder(payload?.tool_input)
   );
 }

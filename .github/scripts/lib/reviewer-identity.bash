@@ -43,7 +43,7 @@ export REVIEWER_LOGIN REVIEWER_LOGIN_BARE
 # standalone review-comment POST (any reply on a review thread), so a
 # "has the reviewer spoken?" gate that counts one is satisfied vacuously on
 # exactly the PRs that carry threads. Every real writer passes a non-empty body
-# (post-pr-review.mjs falls back to "Automated review."), so the test is free.
+# (the upstream reviewer falls back to "Automated review."), so the test is free.
 # shellcheck disable=SC2034 # spliced into the sourcing scripts' jq programs
 REVIEWER_JQ='def bare_login: (. // "") | sub("\\[bot\\]$"; "");
 def is_reviewer: (.author.login // .user.login) | bare_login == env.REVIEWER_LOGIN_BARE;

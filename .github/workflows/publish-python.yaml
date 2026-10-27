@@ -41,6 +41,17 @@ jobs:
           # rebuild) is reachable by git describe.
           fetch-depth: 0
 
+      # The committed pyproject version is a 0.0.0 placeholder, so the version
+      # comes from the latest release tag, and the code is built FROM that tag:
+      # the tag sits on the SHA npm published. Fails loudly if no tag exists.
+      - name: Resolve the latest release tag
+        id: tag
+        run: |
+          set -euo pipefail
+          tag="$(git describe --tags --match 'v*' --abbrev=0)"
+          echo "tag=${tag}" >>"$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >>"$GITHUB_OUTPUT"
+
       # Node + pnpm are needed to bundle the self-contained CLI into the wheel.
       # No dependency caching anywhere in this job: a poisoned cache could tamper
       # with the artifact we ship to PyPI (zizmor cache-poisoning).
@@ -54,45 +65,11 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
-      - name: Install Node dependencies
-        run: pnpm install
-
-      # The charset JSON uv build force-includes (hatch `artifacts`) is
-      # git-ignored build output and hatchling runs no Node, so generate it
-      # explicitly rather than rely on `pnpm install`'s `prepare` having run.
-      - name: Generate the Unicode tables the wheel ships
-        run: node scripts/gen-unicode.mjs
-
-      # The CLI bundle inlines src/vendor/gfm-autolink-literal.mjs, git-ignored
-      # output of the patch generator; generate it explicitly for the same reason.
-      - name: Generate the patched GFM autolink module the bundle inlines
-        run: node scripts/gen-gfm-autolink.mjs
-
-      # Regenerate the bundled CLI from src/; uv build force-includes it into the
-      # sdist/wheel (see python/pyproject.toml).
-      - name: Bundle the CLI into the Python package
-        run: node scripts/bundle-python-cli.mjs
-
-      # Rebuild at the latest release tag so this republishes the SAME version the
-      # coupled release computed (the committed pyproject version is a 0.0.0
-      # placeholder). Fails loudly if no vX.Y.Z tag exists yet.
-      - name: Set the wheel version to the latest release tag
-        run: |
-          set -euo pipefail
-          tag="$(git describe --tags --match 'v*' --abbrev=0)"
-          bash scripts/set-pyproject-version.sh "${tag#v}"
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+      - name: Build the distribution at the release tag
+        uses: ./.github/actions/build-python-dist
         with:
-          enable-cache: false
-
-      - name: Build sdist and wheel
-        run: uv build
-        working-directory: python
-
-      - name: Check distribution metadata
-        run: uvx twine check python/dist/*
+          ref: refs/tags/${{ steps.tag.outputs.tag }}
+          version: ${{ steps.tag.outputs.version }}
 
       - name: Upload distributions
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0

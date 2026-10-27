@@ -94,7 +94,7 @@ const ENV_VALUE_REGEX_CACHE = new Map();
  */
 export function hasEnvBoundSecret(text, env = process.env) {
   const minLen = minEnvSecretLen();
-  return envBoundSecretVars().some((name) => {
+  return envBoundSecretVars(env).some((name) => {
     const value = env[name];
     // Code-point length to match envValueRegex's code-point split — an astral
     // char counts once, not as two UTF-16 units, so minLen means the same thing

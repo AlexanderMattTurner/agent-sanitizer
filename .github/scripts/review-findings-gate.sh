@@ -10,16 +10,15 @@
 # checks finish in about ninety seconds while an LLM review takes minutes, so a
 # PR gated only on those merges first and the reviewer's findings arrive on a
 # merged PR. It is PR-SCOPED, not head-scoped, and that is load-bearing:
-# decide-pr-review-trigger.sh answers run=false for a plain `synchronize`, so a
+# the upstream reviewer (claude-review.yaml) skips a plain `synchronize`, so a
 # head-scoped clause would hold a reviewed PR at unreviewed forever the moment a
 # push produced a head nothing will review.
 #
 # The severity of a thread is read from the root comment the reviewer posted:
-# the hidden `<!-- severity: … -->` marker post-pr-review.mjs stamps on every
-# finding, with the finding's leading 🔴/🟡 icon as a fallback for threads
-# posted before the marker existed. Which severities gate — and which icon each
-# renders as — comes from config/review-severities.json, the same SSOT
-# post-pr-review.mjs stamps from.
+# the hidden `<!-- severity: … -->` marker the upstream reviewer stamps on
+# every finding, with the finding's leading 🔴/🟡 icon as a fallback for
+# threads posted before the marker existed. Which severities gate comes from
+# config/review-severities.json; the reviewer stamps from its own copy of it.
 #
 # Two modes, one predicate:
 #   * REPORT_SHA set — post the verdict as a COMMIT STATUS under the context

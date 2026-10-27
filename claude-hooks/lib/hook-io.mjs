@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { errMessage } from "../../src/err-message.mjs";
 import { excludeProvisioning } from "./hook-timing.mjs";
 import { readKnob } from "./knobs.mjs";
 
@@ -637,18 +638,9 @@ export function scrubUntrustedText(raw, layer1, cap = UNTRUSTED_TEXT_CAP) {
     : cleaned;
 }
 
-/**
- * Message from a caught value, which is `unknown` under strict mode. Appends
- * the cause chain (one level) when the cause is itself an Error so callers
- * get "outer: root" instead of just "outer" when an error wraps another.
- * @param {unknown} err
- * @returns {string}
- */
-export function errMessage(err) {
-  if (!(err instanceof Error)) return String(err);
-  const cause = err.cause instanceof Error ? `: ${err.cause.message}` : "";
-  return err.message + cause;
-}
+// Published from this module as part of the hooks' I/O surface; defined once
+// beside the library that renders the same failures.
+export { errMessage };
 
 /**
  * errMessage() for an error whose message may embed attacker-chosen bytes: V8

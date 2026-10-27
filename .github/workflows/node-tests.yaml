@@ -52,7 +52,7 @@ jobs:
         env:
           FC_REPRODUCIBLE: "1"
 
-      # post-pr-review.mjs imports agent-sanitizer by name, and
+      # sanitize-pr-input.mjs imports agent-sanitizer by name, and
       # .github/scripts/package.json ends the package scope there, so the
       # self-reference never resolves — the import needs the same
       # .github/scripts/node_modules install the review workflow does. It has to

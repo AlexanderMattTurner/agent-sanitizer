@@ -74,7 +74,7 @@ jobs:
           setup-python: true
 
       - name: Bump version and publish if commits warrant a release
-        # `id: release` is load-bearing, not decoration: six steps below gate on
+        # `id: release` is load-bearing, not decoration: the steps below gate on
         # `steps.release.outputs.released`, and an undefined step id renders to
         # the empty string rather than erroring — so without it the whole coupled
         # PyPI half of the release silently no-ops on every publish.
@@ -95,52 +95,18 @@ jobs:
 
       # Coupled PyPI release (PRIMARY path). When version-bump.sh actually
       # published a new npm version (released=true), build and publish the
-      # matching Python wheel at the SAME version from the SAME commit. These
-      # steps no-op on the far-more-common "no release this push" path.
+      # matching Python wheel at the SAME version from the SAME commit:
+      # `published_sha`, never the tree the release-docs push left checked out,
+      # which a rebase onto a racing merge can carry past what npm shipped.
+      # These steps no-op on the far-more-common "no release this push" path.
       # publish-python.yaml is the manual break-glass for when a step below
       # fails after npm has already published.
-      # The CLI bundle inlines src/vendor/gfm-autolink-literal.mjs, which is
-      # git-ignored output of the patch generator. `pnpm install` already wrote
-      # it; regenerating here keeps the bundle independent of that, and fails
-      # loudly if the pinned upstream no longer matches the patch.
-      - name: Generate the patched GFM autolink module the bundle inlines
+      - name: Build the distribution at the published commit
         if: steps.release.outputs.released == 'true'
-        run: node scripts/gen-gfm-autolink.mjs
-
-      - name: Bundle the CLI into the Python package
-        if: steps.release.outputs.released == 'true'
-        run: node scripts/bundle-python-cli.mjs
-
-      # The charset JSON the wheel force-includes (hatch `artifacts`) is
-      # git-ignored build output, and hatchling runs no Node. `pnpm install`
-      # above already generated it; regenerating here makes the wheel's contents
-      # independent of that, and of anything version-bump.sh did to the tree.
-      - name: Generate the Unicode tables the wheel ships
-        if: steps.release.outputs.released == 'true'
-        run: node scripts/gen-unicode.mjs
-
-      - name: Set the wheel version to the released version
-        if: steps.release.outputs.released == 'true'
-        env:
-          RELEASE_VERSION: ${{ steps.release.outputs.version }}
-        run: bash scripts/set-pyproject-version.sh "$RELEASE_VERSION"
-
-      - name: Set up uv
-        if: steps.release.outputs.released == 'true'
-        # No dependency cache: a poisoned cache could tamper with the artifact
-        # shipped to PyPI (zizmor cache-poisoning).
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        uses: ./.github/actions/build-python-dist
         with:
-          enable-cache: false
-
-      - name: Build sdist and wheel
-        if: steps.release.outputs.released == 'true'
-        run: uv build
-        working-directory: python
-
-      - name: Check distribution metadata
-        if: steps.release.outputs.released == 'true'
-        run: uvx twine check python/dist/*
+          ref: ${{ steps.release.outputs.published_sha }}
+          version: ${{ steps.release.outputs.version }}
 
       - name: Publish to PyPI
         if: steps.release.outputs.released == 'true'

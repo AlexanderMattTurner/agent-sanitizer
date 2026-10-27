@@ -5,7 +5,7 @@
 # review-required ruleset the Claude review IS the approval for the PRs it reads
 # (looks_good -> APPROVE); a class it never reads would otherwise carry no
 # approving review and could never auto-merge. This supplies that approval so the
-# ruleset lets it through. The caller (claude-pr-review.yaml's auto-approve-skipped
+# ruleset lets it through. The caller (claude-review.yaml's auto-approve-skipped
 # job `if:`) has already decided this PR is in the skip set — the script just
 # posts the review via the shared retry-as-COMMENT helper
 # (lib-post-review-with-retry.sh), since an APPROVE can 422 here the same way it

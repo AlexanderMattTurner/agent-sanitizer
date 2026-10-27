@@ -129,7 +129,7 @@ describe("post-merge failure-notification roster", () => {
       ["Auto-resolve merge conflicts", true], // push: branches: [main]
       ["Nightly unseeded fuzz", true], // schedule only, and exempt below
       ["PR meta", false], // pull_request only
-      ["Claude PR review", false], // pull_request_target only
+      ["Claude reviewers", false], // pull_request_target only
       ["Decide (reusable)", false], // workflow_call only
       ["CI failure notify", false], // workflow_run only — it IS the listener
     ]) {

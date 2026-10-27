@@ -29,8 +29,8 @@ log() { echo "$@" >&2; }
 PLUGIN_MANIFEST="plugin/.claude-plugin/plugin.json"
 
 # Publish a step output for the workflow (no-op outside GitHub Actions). The
-# auto-version workflow reads `released`/`version` to decide whether — and at
-# what version — to also build and publish the coupled Python wheel to PyPI.
+# auto-version workflow reads `released`/`version`/`published_sha` to decide
+# whether, at what version and from which commit to build the coupled wheel.
 emit_output() {
   if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     printf '%s\n' "$1" >>"$GITHUB_OUTPUT"
@@ -467,8 +467,16 @@ log "✅ Published $PACKAGE_NAME@$NEW_VERSION"
 # early-exits above), so PyPI is published exactly when npm is. If a later step
 # in this script fails, npm is already out and the workflow's manual break-glass
 # (publish-python.yaml) can push the matching wheel.
+#
+# The SHA whose tree was published, captured BEFORE the release-docs commit and
+# before any rebase can move that commit. The tag and the Python wheel must both
+# record it, and topology cannot carry it: push_with_rebase replays the docs
+# commit onto whatever tip it finds, so after a racing merge the docs commit's
+# position says nothing about what shipped.
+PUBLISHED_SHA=$(git rev-parse HEAD)
 emit_output "released=true"
 emit_output "version=$NEW_VERSION"
+emit_output "published_sha=$PUBLISHED_SHA"
 
 # Promote "## Unreleased" to a dated version section in CHANGELOG.md, using the
 # drafted body. The helper exits 0 even on its own errors: the package is
@@ -613,12 +621,6 @@ push_with_rebase() {
 # the branch name — that would push to the bogus ref "HEAD:HEAD". GITHUB_REF_NAME
 # is the actual triggering branch in Actions; only fall back to git for local runs.
 RELEASE_DOCS_PUSH_FAILED=0
-# The SHA whose tree was published, captured BEFORE the release-docs commit and
-# before any rebase can move that commit. This is the one fact the tag must
-# record, and topology cannot carry it: push_with_rebase replays the docs commit
-# onto whatever tip it finds, so after a racing merge the docs commit's position
-# says nothing about what shipped.
-PUBLISHED_SHA=$(git rev-parse HEAD)
 DEFAULT_BRANCH="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}"
 git_bot_identity
 # Only pass paths that exist: `git add` (unlike `git diff`) fails hard on a
