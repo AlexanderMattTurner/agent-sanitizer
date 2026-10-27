@@ -18,16 +18,16 @@
  * must run on a bare `node` from a fresh clone.
  */
 import { createHash } from "node:crypto";
-import {
-  closeSync,
-  existsSync,
-  fstatSync,
-  openSync,
-  readSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isMain } from "./lib-hook-io.mjs";
+import {
+  hookSpecificOutput,
+  isMain,
+  readStdinJson,
+  readTranscriptTail,
+  writeFileNoFollow,
+} from "./lib-hook-io.mjs";
 
 /** Serial tool-turns (assistant messages with >=1 tool call, no delegation
  * anywhere in the segment) after which the nudge fires. High enough that a
@@ -45,34 +45,6 @@ export const TURN_CADENCE_THRESHOLD = 8;
  * (`Task` is the Claude Code CLI's native name for the sub-agent tool;
  * `Agent` is the remote harness's name for the same tool.) */
 export const DELEGATION_TOOLS = new Set(["Task", "Agent", "Workflow"]);
-
-/** Bound on how much transcript is read per invocation. A window this size
- * always covers the current user-turn segment in practice; when it doesn't,
- * stats are computed over the window alone, which only under-counts. */
-export const TRANSCRIPT_TAIL_BYTES = 8 * 1024 * 1024;
-
-/**
- * Last `maxBytes` of the file at `path`, trimmed to whole JSONL lines (the
- * leading partial line after a mid-file start is dropped).
- * @param {string} path
- * @param {number} [maxBytes]
- * @returns {string}
- */
-export function readTranscriptTail(path, maxBytes = TRANSCRIPT_TAIL_BYTES) {
-  const fd = openSync(path, "r");
-  try {
-    const size = fstatSync(fd).size;
-    const start = Math.max(0, size - maxBytes);
-    const buf = Buffer.alloc(size - start);
-    readSync(fd, buf, 0, buf.length, start);
-    const text = buf.toString("utf8");
-    if (start === 0) return text;
-    const nl = text.indexOf("\n");
-    return nl === -1 ? "" : text.slice(nl + 1);
-  } finally {
-    closeSync(fd);
-  }
-}
 
 /**
  * The tool_use blocks of one main-thread assistant transcript line, or [] when
@@ -256,7 +228,7 @@ export function nudgeSentinel(sessionId, segmentKey, dir) {
  *   alreadyNudged: (sessionId: string, segmentKey: string) => boolean,
  *   recordNudged: (sessionId: string, segmentKey: string) => void,
  * }} deps
- * @returns {{ hookSpecificOutput: { hookEventName: string, additionalContext: string } } | null}
+ * @returns {ReturnType<typeof hookSpecificOutput> | null}
  */
 export function judgeParallelism(payload, deps) {
   if (typeof payload !== "object" || payload === null) return null;
@@ -271,35 +243,23 @@ export function judgeParallelism(payload, deps) {
   if (message === null) return null;
   if (deps.alreadyNudged(sessionId, stats.segmentKey)) return null;
   deps.recordNudged(sessionId, stats.segmentKey);
-  return {
-    hookSpecificOutput: {
-      hookEventName: "PostToolUse",
-      additionalContext: message,
-    },
-  };
-}
-
-async function readStdin() {
-  const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
-  return Buffer.concat(chunks).toString("utf8");
+  return hookSpecificOutput("PostToolUse", { additionalContext: message });
 }
 
 if (isMain(import.meta.url)) {
   try {
-    const payload = JSON.parse(await readStdin());
-    const sentinelDir = process.env.TMPDIR || "/tmp";
+    const payload = await readStdinJson();
+    const sentinelDir = tmpdir();
     const response = judgeParallelism(payload, {
       readTranscript: (path) => readTranscriptTail(path),
       alreadyNudged: (sessionId, segmentKey) =>
         existsSync(nudgeSentinel(sessionId, segmentKey, sentinelDir)),
-      recordNudged: (sessionId, segmentKey) => {
-        try {
-          writeFileSync(nudgeSentinel(sessionId, segmentKey, sentinelDir), "");
-        } catch {
-          // A read-only /tmp just means the note may repeat — never a reason to fail.
-        }
-      },
+      // A failed write just means the note may repeat — never a reason to fail.
+      recordNudged: (sessionId, segmentKey) =>
+        writeFileNoFollow(
+          nudgeSentinel(sessionId, segmentKey, sentinelDir),
+          "",
+        ),
     });
     if (response !== null) process.stdout.write(JSON.stringify(response));
   } catch (err) {

@@ -92,9 +92,11 @@ inputs:
     default: ""
   model:
     description: >-
-      Model slug (e.g. claude-opus-5). Rendered into the action's --model flag
-      here, ahead of claude_args, so every attempt pins the tier explicitly and the
-      action never rides its Opus default; keep the slug OUT of claude_args.
+      Model slug (e.g. claude-opus-5), or an alias (opus, sonnet or haiku) that
+      follows the newest model of that tier. Rendered into the action's --model
+      flag here, ahead of claude_args, so every attempt pins the tier explicitly
+      and the action never rides its Opus default; keep the model OUT of
+      claude_args.
     required: true
   claude_args:
     description: "The --effort/--allowedTools/--add-dir/... arg string (NO --model — pass that as `model`)."
@@ -209,7 +211,7 @@ runs:
       id: a0
       if: inputs.anthropic_api_key != ''
       continue-on-error: true
-      uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
+      uses: anthropics/claude-code-action@97c53473391bff1901034d4b454b5bac7ab7a029 # v1.0.239
       env:
         GH_TOKEN: ${{ inputs.gh_token || inputs.github_token }}
       with:
@@ -255,7 +257,7 @@ runs:
       id: a1
       if: steps.s0.outputs.still_needs_attempt == 'true'
       continue-on-error: true
-      uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
+      uses: anthropics/claude-code-action@97c53473391bff1901034d4b454b5bac7ab7a029 # v1.0.239
       env:
         GH_TOKEN: ${{ inputs.gh_token || inputs.github_token }}
       with:
@@ -323,7 +325,7 @@ runs:
       id: a1r
       if: steps.s1.outputs.still_needs_attempt == 'true' && steps.c1.outputs.zero_cost == 'true'
       continue-on-error: true
-      uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
+      uses: anthropics/claude-code-action@97c53473391bff1901034d4b454b5bac7ab7a029 # v1.0.239
       env:
         GH_TOKEN: ${{ inputs.gh_token || inputs.github_token }}
       with:
@@ -380,7 +382,7 @@ runs:
       id: a2
       if: steps.s1r.outputs.still_needs_attempt == 'true' && inputs.oauth_token_fallback != ''
       continue-on-error: true
-      uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
+      uses: anthropics/claude-code-action@97c53473391bff1901034d4b454b5bac7ab7a029 # v1.0.239
       env:
         GH_TOKEN: ${{ inputs.gh_token || inputs.github_token }}
       with:
@@ -432,7 +434,7 @@ runs:
       id: a2b
       if: steps.s2.outputs.still_needs_attempt == 'true' && inputs.oauth_token_fallback_2 != ''
       continue-on-error: true
-      uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
+      uses: anthropics/claude-code-action@97c53473391bff1901034d4b454b5bac7ab7a029 # v1.0.239
       env:
         GH_TOKEN: ${{ inputs.gh_token || inputs.github_token }}
       with:
@@ -478,7 +480,7 @@ runs:
       id: a3
       if: steps.s2b.outputs.still_needs_attempt == 'true' && inputs.oauth_token_fallback_3 != ''
       continue-on-error: true
-      uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
+      uses: anthropics/claude-code-action@97c53473391bff1901034d4b454b5bac7ab7a029 # v1.0.239
       env:
         GH_TOKEN: ${{ inputs.gh_token || inputs.github_token }}
       with:
@@ -524,7 +526,7 @@ runs:
       id: a4
       if: steps.s3.outputs.still_needs_attempt == 'true' && inputs.oauth_token_fallback_4 != ''
       continue-on-error: true
-      uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
+      uses: anthropics/claude-code-action@97c53473391bff1901034d4b454b5bac7ab7a029 # v1.0.239
       env:
         GH_TOKEN: ${{ inputs.gh_token || inputs.github_token }}
       with:
@@ -570,7 +572,7 @@ runs:
       id: a5
       if: steps.s4.outputs.still_needs_attempt == 'true' && inputs.oauth_token_fallback_5 != ''
       continue-on-error: true
-      uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
+      uses: anthropics/claude-code-action@97c53473391bff1901034d4b454b5bac7ab7a029 # v1.0.239
       env:
         GH_TOKEN: ${{ inputs.gh_token || inputs.github_token }}
       with:
@@ -616,7 +618,7 @@ runs:
       id: a6
       if: steps.s5.outputs.still_needs_attempt == 'true' && inputs.oauth_token_fallback_6 != ''
       continue-on-error: true
-      uses: anthropics/claude-code-action@428971d2ecd6e3a7cb0ee0da2a3a8b33fdb3678d # v1.0.157
+      uses: anthropics/claude-code-action@97c53473391bff1901034d4b454b5bac7ab7a029 # v1.0.239
       env:
         GH_TOKEN: ${{ inputs.gh_token || inputs.github_token }}
       with:

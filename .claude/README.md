@@ -8,7 +8,7 @@ This directory contains configuration and skills for Claude Code.
 .claude/
 ├── settings.json   # Claude Code hooks configuration
 ├── agents/         # Subagents — currently code-reviewer, a read-only (Read/Grep/Glob) reviewer
-├── hooks/          # Session, pre-push, and PreToolUse hooks (see the directory for the full list)
+├── hooks/          # Session, PreToolUse, PostToolUse, UserPromptSubmit, and Stop hooks (see the directory for the full list)
 └── skills/         # Reusable workflows, one directory per skill (see the directory for the full list)
 ```
 
@@ -61,7 +61,7 @@ When Claude Code starts a session, it automatically runs `session-setup.sh` whic
 
 ### Pre-Push Check Hook
 
-Before `git push` or `gh pr` commands, `pre-push-check.sh` runs any configured checks:
+Before a push or a new pull request, `push-gate.mjs` runs `pre-push-check.sh` and denies the call when a check fails. It counts `git -C <dir> push`, `GH_TOKEN=x gh pr create`, `env gh -R o/r pr create` and an MCP `create_pull_request` tool. The checks are:
 
 - **build** (`pnpm build`): Catches type errors in TypeScript projects (this repo has no `build` script—types build via `build:types` at pack time—so this check is skipped here)
 - **lint** (`pnpm lint`): Catches code quality issues
@@ -77,11 +77,23 @@ After each tool call, `parallelism-nudge.mjs` measures from the session transcri
 
 **Posture: advisory.** It never blocks (`additionalContext` only), fails open on any internal error, and nudges at most once per user-turn segment, so a long turn is not re-narrated on every call.
 
+`bullshit-check.mjs` also runs here, and on `UserPromptSubmit`. Once per twelve-minute window, at a moment hashed from the session id, it drops one short self-audit question into the agent's context: the evidence check ("name the command whose output backs the claim you are about to make"), "are you taking the principled solution?", or "is any of this unnecessary?", which asks what the work can delete before it is called done. Both events already run the agent, so an idle session is never woken; a window missed while idle is carried to the next tool call, never to a prompt, so the question lands after work exists to audit. State lives under `$TMPDIR/claude-bullshit-check/` (`BULLSHIT_CHECK_STATE_DIR` overrides it).
+
+**Posture: advisory.** `additionalContext` only, one question per window across both events, and every fault exits silently.
+
 ### UserPromptSubmit Hook
 
 `drop-superseded-ci-events.mjs` drops non-actionable PR webhook turns before the model runs. A session subscribed to a PR is woken for every check run and bot comment; two classes carry nothing to act on—a CI-failure event whose head SHA a newer push already superseded, and a `github-actions[bot]` alert carrying the `[ignore-notif]` opt-out marker. The bot-author check reads only the trusted header preceding the first `<untrusted_external_data>` tag, so a forged author line inside an untrusted comment body cannot drive suppression.
 
 **Posture: fail open.** It is a noise filter, not a defense—any uncertainty passes the turn through untouched.
+
+`bullshit-check.mjs` runs on this event too; see the PostToolUse section above.
+
+### Stop Hook
+
+`completion-check.mjs` asks once, after the session has pushed, whether ALL the requested work is finished, and blocks the stop until the agent answers `Yes.` as its last line or `**Resuming work**` as its first. `push-gate.mjs` records the push when its checks let one through, so this hook reads no shell text. The check arms at a moment drawn from the five minutes after the first push, or at one of the first three stops that did real work, and a session that never pushes is never asked.
+
+**Posture: blocking, bounded, fail open.** It asks at most three times (`COMPLETION_CHECK_MAX`, a positive integer), then allows the stop; a turn with nothing to certify is allowed without spending the one shot; a malformed event or an unwritable state directory allows the stop; and `COMPLETION_CHECK=0` disables it. State lives under `$TMPDIR/claude-completion-check/` (`COMPLETION_CHECK_STATE_DIR` overrides it).
 
 ### Skills
 

@@ -161,9 +161,21 @@ while read -r -u 3 _local_ref local_sha remote_ref remote_sha; do
   # CalledProcessError an install raises — to 3. Grepping the output for install
   # signatures instead would be self-defeating, since --show-diff-on-failure can
   # print a diff of THIS file containing those very strings.
+  #
+  # Drop GIT_DIR/GIT_WORK_TREE for the hooks pre-commit drives. git exports both
+  # to its hooks, and from a WORKTREE GIT_DIR is absolute, so a hook that runs git
+  # inside its own cached clone (lychee reads its rev that way) reads THIS repo
+  # instead. Keep them when they are the only way to find the repository, as with
+  # `git --git-dir=… --work-tree=…` run from outside it. `unset` in a subshell,
+  # not `env -u`: the hook PATH may hold no `env`. The command substitution that
+  # captures the output IS that subshell, so the unset cannot leak past the run.
   precommit_rc=0
-  precommit_out=$("${precommit_cmd[@]}" run --from-ref "$from_ref" --to-ref "$local_sha" --show-diff-on-failure </dev/null 2>&1) ||
-    precommit_rc=$?
+  precommit_out=$(
+    if (unset GIT_DIR GIT_WORK_TREE && git rev-parse --git-dir >/dev/null 2>&1); then
+      unset GIT_DIR GIT_WORK_TREE
+    fi
+    "${precommit_cmd[@]}" run --from-ref "$from_ref" --to-ref "$local_sha" --show-diff-on-failure </dev/null 2>&1
+  ) || precommit_rc=$?
   printf '%s\n' "$precommit_out"
   if [[ "$precommit_rc" -eq 3 ]]; then
     echo "pre-push: pre-commit could not PROVISION a hook environment (network/egress blocked, not a lint failure) — SKIPPING the pushed-range run. CI still enforces the full suite on the PR." >&2

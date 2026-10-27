@@ -1,7 +1,7 @@
 """Every data file a CI script reads by path must actually be in the tree.
 
 `.github/scripts/*.sh` scripts run under `set -euo pipefail`, so a `source
-"${here}/../tool-versions.sh"` or a `tr … <"${SCRIPT_DIR}/../claude-cli-version"`
+"${here}/../tool-versions.sh"` or a `jq … "${SCRIPT_DIR}/../claude-cli-default/package.json"`
 against a missing file kills the job on that line. Such a file is invisible to
 every other guard here: it is not a workflow, not an import, and shellcheck's
 `source=` directives only cover shell libraries, not data.
@@ -30,6 +30,11 @@ SELF_RELATIVE_PATH = re.compile(
     r"""\$\{?(?:SCRIPT_DIR|here|HERE|script_dir)\}?(?P<suffix>(?:/\.\.)+/[A-Za-z0-9._/-]+)"""
 )
 
+# `# allow-unsynced: <path>` in a script names a file it reads only when the
+# repository supplies one, such as a consumer-owned override, so its absence is
+# not a missing dependency.
+ALLOW_UNSYNCED = re.compile(r"#\s*allow-unsynced:\s*(?P<path>\S+)")
+
 # Suffixes that name a shell library rather than data. Those are already covered
 # by shellcheck's `source=` resolution, and listing them here would double-report.
 LIB_PREFIX = "/lib/"
@@ -39,7 +44,9 @@ def _referenced_paths() -> list[tuple[str, Path]]:
     """(script name, repo-relative data path) for every self-relative reference."""
     found = []
     for script in sorted(SCRIPT_DIR.rglob("*.sh")):
-        for match in SELF_RELATIVE_PATH.finditer(script.read_text(encoding="utf-8")):
+        text = script.read_text(encoding="utf-8")
+        optional = {m.group("path") for m in ALLOW_UNSYNCED.finditer(text)}
+        for match in SELF_RELATIVE_PATH.finditer(text):
             suffix = match.group("suffix")
             if LIB_PREFIX in suffix:
                 continue
@@ -48,6 +55,8 @@ def _referenced_paths() -> list[tuple[str, Path]]:
             # message below can render it repo-relative even when the checkout
             # sits behind a symlink.
             target = Path(os.path.normpath(script.parent / suffix.lstrip("/")))
+            if str(target.relative_to(REPO_ROOT)) in optional:
+                continue
             found.append((str(script.relative_to(REPO_ROOT)), target))
     return found
 
@@ -62,8 +71,11 @@ def test_references_were_actually_found() -> None:
     assertion below into a loop over an empty list that passes forever.
     """
     assert len(REFERENCES) >= 3, f"found only {len(REFERENCES)} self-relative refs"
-    named = {path.name for _, path in REFERENCES}
-    for expected in {"tool-versions.sh", "claude-cli-version"}:
+    named = {str(path.relative_to(REPO_ROOT)) for _, path in REFERENCES}
+    for expected in {
+        ".github/tool-versions.sh",
+        ".github/claude-cli-default/package.json",
+    }:
         assert expected in named, f"{expected} reference no longer detected"
 
 
