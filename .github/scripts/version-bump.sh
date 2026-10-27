@@ -19,6 +19,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib-ci-retry.sh"
 # shellcheck source=lib/anthropic-ladder.bash disable=SC1091
 source "$SCRIPT_DIR/lib/anthropic-ladder.bash"
+# shellcheck source=lib/git-auth.bash disable=SC1091
+source "$SCRIPT_DIR/lib/git-auth.bash"
 
 log() { echo "$@" >&2; }
 
@@ -618,8 +620,7 @@ RELEASE_DOCS_PUSH_FAILED=0
 # says nothing about what shipped.
 PUBLISHED_SHA=$(git rev-parse HEAD)
 DEFAULT_BRANCH="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}"
-git config user.name "github-actions[bot]"
-git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+git_bot_identity
 # Only pass paths that exist: `git add` (unlike `git diff`) fails hard on a
 # pathspec matching nothing, which would abort the run after a successful
 # publish in a repo that ships no CHANGELOG or no plugin manifest.

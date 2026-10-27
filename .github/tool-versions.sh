@@ -34,3 +34,8 @@ MERGIRAF_SHA256_linux_amd64=4de0986ff9155411dd105958b94362056d0055025db75369eddd
 # install instead of injecting a malicious binary.
 GITLEAKS_VERSION=8.30.1
 GITLEAKS_SHA256_linux_x64=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+
+# PyYAML for the workflow Python that reads YAML (resolver-ref.py, template-sync.sh's SYNC_PATHS
+# reader). run-with-pyyaml.sh installs it through uv at this pin, so no step relies on the runner
+# image shipping it.
+PYYAML_VERSION=6.0.3

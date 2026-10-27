@@ -88,6 +88,12 @@ const scriptTokens = (run) =>
     .filter((word) => /\.sh(["']?)$/.test(word))
     .map((word) => word.replace(/^["']|["']$/g, ""));
 
+/**
+ * `.github/scripts` as a path of its own, not the tail of a staged tree such as
+ * `"${REVIEWED}/.github/scripts"`: start of block, whitespace, a quote or `=`.
+ */
+const WORKING_TREE_SCRIPTS = /(?:^|[\s"'=])\.github\/scripts/;
+
 describe("template-sync.yaml: the sync job runs staged tooling", () => {
   it("declares a sync job with steps that run shell", () => {
     assert.ok(syncJob, `${WORKFLOW}: no \`sync\` job`);
@@ -102,7 +108,7 @@ describe("template-sync.yaml: the sync job runs staged tooling", () => {
   it("names no script in the working tree", () => {
     for (const { step, index } of runSteps)
       assert.ok(
-        !step.run.includes(".github/scripts"),
+        !WORKING_TREE_SCRIPTS.test(step.run),
         `${WORKFLOW}: ${label(step, index)} names .github/scripts — the sync ` +
           `writes conflict markers there, so run it from "$SYNC_TOOLS/…" instead`,
       );

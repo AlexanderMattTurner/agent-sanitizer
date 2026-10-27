@@ -1,55 +1,12 @@
 #!/bin/bash
-# Pre-push/PR hook: Runs configured checks before pushing or creating PRs.
-# Only runs scripts that exist and are properly configured in package.json.
-#
-# Registered in .claude/settings.json as a PreToolUse hook on the "Bash" tool.
-# Claude Code hook matchers filter on the tool NAME only — they do not match
-# command patterns — so settings.json narrows to `git push` / `gh pr create`
-# via each handler's `if` field. This in-script gate stays as defense in depth
-# for Claude Code versions that ignore an unrecognized `if` key and fire the
-# hook on every Bash call: we read the PreToolUse payload from stdin and gate
-# on the command ourselves. Fail closed: if the command cannot be positively
-# identified as something other than a push/PR-create, the checks run anyway.
+# Runs the configured checks (package.json build/lint/check/test, then ruff) and
+# exits 1 when any fails. push-gate.mjs runs it before a push or a PR create and
+# turns that exit into a deny body: an exit 1 from a PreToolUse hook does NOT
+# block in Claude Code, so this script is never registered as a hook itself.
 
 set -uo pipefail
 
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-#######################################
-# Command gate
-#######################################
-
-# stdin carries the PreToolUse payload, already fully buffered by Claude Code
-# (so this read cannot stall). Extract .tool_input.command.
-payload=$(cat)
-command_str=""
-if [[ -n "$payload" ]]; then
-  if command -v jq >/dev/null 2>&1; then
-    command_str=$(printf '%s' "$payload" | jq -r '.tool_input.command // empty' 2>/dev/null)
-  elif command -v python3 >/dev/null 2>&1; then
-    command_str=$(printf '%s' "$payload" |
-      python3 -c 'import json,sys
-try:
-    print(json.load(sys.stdin).get("tool_input", {}).get("command", ""))
-except Exception:
-    pass' 2>/dev/null)
-  fi
-fi
-
-# A non-empty command that is neither a push nor a PR-create needs no checks.
-# An empty command_str means we could not parse it — fall through and run the
-# checks (fail closed).
-if [[ -n "$command_str" ]]; then
-  case "$command_str" in
-  *"git push"* | *"gh pr create"*) : ;;
-  *) exit 0 ;;
-  esac
-fi
-
-#######################################
-# Checks
-#######################################
-
 # shellcheck source=lib-checks.sh
 source "$HOOK_DIR/lib-checks.sh"
 
@@ -78,8 +35,7 @@ else
   has_script test && run_check "tests" pnpm test
 fi
 
-# Python checks. Fail closed: if the project is Python but no runner is
-# available, that is a broken environment, not a reason to silently skip lint.
+# Python checks
 if [[ -f pyproject.toml ]] || [[ -f uv.lock ]]; then
   if [[ -f uv.lock ]] && exists uv; then
     run_check "ruff" uv run ruff check .
@@ -92,4 +48,4 @@ if [[ -f pyproject.toml ]] || [[ -f uv.lock ]]; then
   fi
 fi
 
-exit $FAILED
+exit "$FAILED"

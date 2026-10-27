@@ -1,6 +1,15 @@
 /** Shared I/O helpers for Claude Code hook scripts. */
 
-import { closeSync, openSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  fstatSync,
+  openSync,
+  readSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 /**
@@ -116,4 +125,94 @@ export function errMessage(err) {
   if (!(err instanceof Error)) return String(err);
   const cause = err.cause instanceof Error ? `: ${err.cause.message}` : "";
   return err.message + cause;
+}
+
+/**
+ * Bound on how much transcript a hook reads per invocation. A transcript grows
+ * for the life of a session, so a whole-file read makes every event slower and
+ * can outlive the hook's timeout in exactly the long sessions the hook is for.
+ */
+export const TRANSCRIPT_TAIL_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Last `maxBytes` of the file at `path`, trimmed to whole JSONL lines (the
+ * leading partial line after a mid-file start is dropped).
+ * @param {string} path
+ * @param {number} [maxBytes]
+ * @returns {string}
+ */
+export function readTranscriptTail(path, maxBytes = TRANSCRIPT_TAIL_BYTES) {
+  const fd = openSync(path, "r");
+  try {
+    const size = fstatSync(fd).size;
+    const start = Math.max(0, size - maxBytes);
+    const buf = Buffer.alloc(size - start);
+    readSync(fd, buf, 0, buf.length, start);
+    const text = buf.toString("utf8");
+    if (start === 0) return text;
+    const nl = text.indexOf("\n");
+    return nl === -1 ? "" : text.slice(nl + 1);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** A value that is already a safe filename segment: word characters and `-` only. */
+export const SAFE_NAME_RE = /^[\w-]+$/;
+
+/**
+ * The directory a hook keeps its per-session state in: `$<envVar>` when set and
+ * non-empty (tests point it at a scratch directory), else `<tmpdir>/<name>`.
+ * @param {string} envVar @param {string} name @returns {string}
+ */
+export function hookStateDir(envVar, name) {
+  return process.env[envVar] || join(tmpdir(), name);
+}
+
+/**
+ * The state file a hook keeps for one session, or null when the session id is not
+ * already a safe filename.
+ *
+ * PROBLEM CLASS — a session id used as a path segment in a shared `$TMPDIR`. The id
+ * is validated rather than rewritten: a rewrite is many-to-one, so two sessions
+ * could share one file and one session's state would drive the other's.
+ * @param {unknown} sessionId
+ * @param {string} dir
+ * @param {string} suffix the rest of the filename, such as `.json`
+ * @returns {string|null}
+ */
+export function sessionStatePath(sessionId, dir, suffix) {
+  if (typeof sessionId !== "string" || !SAFE_NAME_RE.test(sessionId))
+    return null;
+  return join(dir, `${sessionId}${suffix}`);
+}
+
+/**
+ * The `hookSpecificOutput` response body for a hook event.
+ *
+ * PROBLEM CLASS — a hook hand-rolling Claude Code's response JSON, so one copy
+ * drifts (a missing `hookEventName`, a misspelt key) and the harness silently
+ * ignores the verdict. The dependency-free hooks build every body here.
+ * `lib-control-plane.mjs` renders through the `agent-control-plane-core` package
+ * instead; that path loads an npm package, so a gate that must hold on a fresh
+ * clone with no `node_modules` cannot use it.
+ * @param {string} hookEventName @param {Record<string, unknown>} fields
+ * @returns {{hookSpecificOutput: Record<string, unknown>}}
+ */
+export function hookSpecificOutput(hookEventName, fields) {
+  return { hookSpecificOutput: { hookEventName, ...fields } };
+}
+
+/**
+ * The PreToolUse body that BLOCKS the tool call. Every gating hook blocks through
+ * this. A non-zero exit is not a block: Claude Code treats exit 1 as a
+ * non-blocking error and runs the tool call anyway; only exit 2 or this body
+ * blocks.
+ * @param {string} reason shown to the agent
+ */
+export function denyToolCall(reason) {
+  return hookSpecificOutput("PreToolUse", {
+    permissionDecision: "deny",
+    permissionDecisionReason: reason,
+  });
 }

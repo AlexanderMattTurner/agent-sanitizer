@@ -16,8 +16,10 @@
 #     is degraded per the posture knob instead. Contract: a wrapped hook signals
 #     denial via JSON permissionDecision, NEVER exit 2; any exit 2 that reaches
 #     this shim is treated as a fault, never as policy.
-#   * Degraded path — if <hook-script> fails `bash -n`, fall back to a policy
-#     instead of exiting non-zero (which Claude Code would treat as a block):
+#   * Degraded path — if <hook-script> fails its syntax check, fall back to a
+#     policy instead of letting the broken hook's exit decide (a bash syntax
+#     error exits 2, which blocks every call; a node one exits 1, which lets
+#     every call through unchecked):
 #       - Edit/Write/MultiEdit/NotebookEdit targeting .claude/hooks/ or
 #         .hooks/ are allowed so the broken hook can be repaired in-session.
 #       - Everything else goes through emit_degraded (below).

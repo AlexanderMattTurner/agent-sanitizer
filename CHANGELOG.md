@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.66.6] - 2026-10-22
+
+### Fixed
+
+- Fixed CI template-sync workflow to properly install the Claude CLI in the model tier and provide BASE_SHA to the marker gate.
+- Fixed CI required-checks sync to apply rules to the correct ruleset on the default branch.
+- Fixed guard-pairs test to list inputs from repository top level for proper Stryker sandbox visibility.
+
 ## [2.66.5] - 2026-10-20
 
 ### Fixed

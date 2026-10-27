@@ -13,7 +13,13 @@
 // them. The warning prose is the sanitizer's own (src/warnings.mjs) — this
 // script no longer carries a copy.
 //
-// Usage: node sanitize-pr-input.mjs < raw.txt > cleaned.txt 2> report.txt
+// `--model-text` is for text a MODEL wrote, bound for a posted body that also holds the
+// poster's own `<!-- … -->` delimiters and markers. It then also turns every `<!--` into
+// `&lt;!--`, so the text opens no HTML comment and forges no marker. The defuse runs AFTER
+// the strip: `<`, U+200B, `!--` holds no `<!--` until the strip removes the U+200B. A diff
+// bound for the model never takes the flag, so its own HTML comments stay byte-faithful.
+//
+// Usage: node sanitize-pr-input.mjs [--model-text] < raw.txt > cleaned.txt 2> report.txt
 // This script runs against the PUBLISHED package, pinned by
 // install-sanitizer.sh — not against src/ in this repo, except inside this repo
 // itself, where the installer points the pin at the working tree. So it may
@@ -40,7 +46,10 @@ const {
   exfilScan: true,
 });
 
-process.stdout.write(cleaned);
+const modelText = process.argv.slice(2).includes("--model-text");
+process.stdout.write(
+  modelText ? cleaned.replaceAll("<!--", "&lt;!--") : cleaned,
+);
 
 // A reviewer's report, not a model's banner, so both severity tiers are printed
 // — the warnings first, because that ordering is the only thing that survives a
