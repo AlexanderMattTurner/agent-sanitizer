@@ -928,10 +928,12 @@ var init_hook_fault = __esm({
 // agent-control-plane-core/src/control-plane.mjs
 var control_plane_exports = {};
 __export(control_plane_exports, {
+  BLOCK_TRANSPORT: () => BLOCK_TRANSPORT,
   CALL_CLASSES: () => CALL_CLASSES,
   CONTROL_PLANE_SCHEMA: () => CONTROL_PLANE_SCHEMA,
   CallClass: () => CallClass,
   CoverageStatus: () => CoverageStatus,
+  DEFAULT_DENY_REASON: () => DEFAULT_DENY_REASON,
   Decision: () => Decision,
   EventKind: () => EventKind,
   IntegrationMode: () => IntegrationMode,
@@ -942,22 +944,27 @@ __export(control_plane_exports, {
   TOOL_ALIASES: () => TOOL_ALIASES,
   UNRENDERED_ON_UNKNOWN: () => UNRENDERED_ON_UNKNOWN,
   VERDICT_CONTENT_FIELDS: () => VERDICT_CONTENT_FIELDS,
+  VETO_IMPOSSIBLE: () => VETO_IMPOSSIBLE,
   asObject: () => asObject,
   asString: () => asString,
   asStringOrNull: () => asStringOrNull,
   assertAliasTargetsModeled: () => assertAliasTargetsModeled,
   assertGatedKinds: () => assertGatedKinds,
   baseMeta: () => baseMeta,
+  blockReason: () => blockReason,
+  blockTransportFor: () => blockTransportFor,
   canonicalTool: () => canonicalTool,
   classifyCallClass: () => classifyCallClass,
   collectPassthrough: () => collectPassthrough,
   coverageAllowsVeto: () => coverageAllowsVeto,
+  gatedResponse: () => gatedResponse,
   isCoverageStatus: () => isCoverageStatus,
   lookup: () => lookup,
   makeEvent: () => makeEvent,
   nativeResponse: () => nativeResponse,
   normalizeVerdict: () => normalizeVerdict,
   readonlySet: () => readonlySet,
+  renderEscalated: () => renderEscalated,
   sanitizeVerdict: () => sanitizeVerdict,
   vetoableFor: () => vetoableFor
 });
@@ -1062,10 +1069,6 @@ function makeEvent({
     throw new TypeError(
       `control-plane: makeEvent this_call_vetoable must be a boolean, got ${typeof this_call_vetoable}`
     );
-  if (event === EventKind.UNKNOWN && this_call_vetoable)
-    throw new Error(
-      "control-plane: makeEvent got a vetoable UNKNOWN event \u2014 an unmodelled event has no host response to veto, so reporting one is a false block"
-    );
   const evt = {
     schema_version: SCHEMA_VERSION,
     event: (
@@ -1078,6 +1081,15 @@ function makeEvent({
     meta
   };
   if (response !== void 0) evt.response = response;
+  if (this_call_vetoable) {
+    const broken = VETO_IMPOSSIBLE.find(
+      ({ path: path2, value }) => path2.reduce((at, key) => at[key], evt) === value
+    );
+    if (broken !== void 0)
+      throw new Error(
+        `control-plane: makeEvent got a vetoable event whose ${broken.path.join(".")} is ${JSON.stringify(broken.value)} \u2014 ${broken.why}`
+      );
+  }
   return evt;
 }
 function normalizeVerdict(verdict) {
@@ -1211,9 +1223,57 @@ function nativeResponse({
   if (stderr !== void 0) out.stderr = stderr;
   return out;
 }
-var CONTROL_PLANE_SCHEMA, SCHEMA_VERSION, EventKind, EVENT_KIND_VALUES, Decision, MODELED_TOOL_INPUT_KEYS, MODELED_TOOLS, MODELED_TOOL_SET, TOOL_ALIASES, IntegrationMode, CallClass, CALL_CLASSES, CoverageStatus, COVERAGE_STATUS_VALUES, GATEABLE_KINDS, VERDICT_CONTENT_FIELDS, UNRENDERED_ON_UNKNOWN, STANDARD_META_FIELDS;
+function blockTransportFor(agent) {
+  const row = lookup(BLOCK_TRANSPORT, agent);
+  if (row === void 0)
+    throw new Error(
+      `control-plane: no BLOCK_TRANSPORT row for agent ${JSON.stringify(agent)}`
+    );
+  return row;
+}
+function blockReason(reason) {
+  return typeof reason === "string" && reason.trim() !== "" ? reason : DEFAULT_DENY_REASON;
+}
+function gatedResponse(agent, { transport, enforced, unblocked_exit_code, stdout, reason }) {
+  if (!enforced)
+    return nativeResponse({
+      transport,
+      exit_code: unblocked_exit_code,
+      enforced,
+      stdout
+    });
+  const row = blockTransportFor(agent);
+  return nativeResponse({
+    transport,
+    exit_code: row.exit_code,
+    enforced,
+    stdout,
+    [row.reason_stream]: blockReason(reason)
+  });
+}
+function renderEscalated(adapter, verdict, event, options = {}) {
+  const { decision, reason } = normalizeVerdict(verdict);
+  if (event.meta.native_event === "" && decision !== Decision.ALLOW)
+    return gatedResponse(adapter.AGENT, {
+      transport: event.meta.integration_mode,
+      // An observe-only parse (a Codex below its enforcing version) has no
+      // veto, so claiming the block was enforced would report a false block.
+      enforced: event.meta.integration_mode !== IntegrationMode.OBSERVE_ONLY,
+      unblocked_exit_code: 0,
+      reason
+    });
+  const response = adapter.render(verdict, event, options);
+  if (response.enforced || decision === Decision.ALLOW || !event.this_call_vetoable || decision === Decision.ASK && adapter.NATIVE_ASK_TIER)
+    return response;
+  return adapter.render(
+    { ...verdict, decision: Decision.DENY },
+    event,
+    options
+  );
+}
+var CONTROL_PLANE_SCHEMA, SCHEMA_VERSION, EventKind, EVENT_KIND_VALUES, Decision, MODELED_TOOL_INPUT_KEYS, MODELED_TOOLS, MODELED_TOOL_SET, TOOL_ALIASES, IntegrationMode, CallClass, CALL_CLASSES, CoverageStatus, COVERAGE_STATUS_VALUES, GATEABLE_KINDS, VERDICT_CONTENT_FIELDS, UNRENDERED_ON_UNKNOWN, VETO_IMPOSSIBLE, STANDARD_META_FIELDS, DEFAULT_DENY_REASON, BLOCK_TRANSPORT;
 var init_control_plane = __esm({
-  "node_modules/.pnpm/agent-control-plane-core@0.8.1/node_modules/agent-control-plane-core/src/control-plane.mjs"() {
+  "node_modules/.pnpm/agent-control-plane-core@0.11.2/node_modules/agent-control-plane-core/src/control-plane.mjs"() {
     CONTROL_PLANE_SCHEMA = "control-plane/v1";
     SCHEMA_VERSION = 1;
     EventKind = Object.freeze({
@@ -1275,12 +1335,47 @@ var init_control_plane = __esm({
       "additional_context"
     ]);
     UNRENDERED_ON_UNKNOWN = readonlySet(VERDICT_CONTENT_FIELDS);
+    VETO_IMPOSSIBLE = Object.freeze([
+      Object.freeze({
+        path: Object.freeze(["event"]),
+        value: EventKind.UNKNOWN,
+        why: "an unmodelled event has no host response to veto, so reporting one is a false block"
+      }),
+      Object.freeze({
+        path: Object.freeze(["meta", "integration_mode"]),
+        value: IntegrationMode.OBSERVE_ONLY,
+        why: "an observe-only transport reads a transcript and cannot pre-empt a call, so reporting a veto is a false block"
+      })
+    ]);
     STANDARD_META_FIELDS = Object.freeze([
       "session_id",
       "cwd",
       "permission_mode",
       "transcript_path"
     ]);
+    DEFAULT_DENY_REASON = "blocked by monitor";
+    BLOCK_TRANSPORT = Object.freeze({
+      claude: Object.freeze({
+        exit_code: 2,
+        reason_stream: "stderr",
+        reason_required: false
+      }),
+      codex: Object.freeze({
+        exit_code: 2,
+        reason_stream: "stderr",
+        reason_required: true
+      }),
+      amp: Object.freeze({
+        exit_code: 2,
+        reason_stream: "stderr",
+        reason_required: false
+      }),
+      gemini: Object.freeze({
+        exit_code: 2,
+        reason_stream: "stderr",
+        reason_required: false
+      })
+    });
   }
 });
 
@@ -1353,20 +1448,12 @@ function render(verdict, event, { soleGate = false } = {}) {
   const isDeny = vd.decision === Decision.DENY;
   const enforced = isDeny && event.this_call_vetoable;
   const stdout = kind2 === EventKind.PRE_TOOL ? gatingBody(hookEventName, vd, soleGate) : nonGatingBody(hookEventName, kind2, vd);
-  return nativeResponse({
+  return gatedResponse(AGENT, {
     transport: INTEGRATION_MODE,
-    exit_code: enforced ? 2 : 0,
+    unblocked_exit_code: 0,
     enforced,
     stdout,
-    // An ENFORCED deny exits 2, and Claude Code parses hook stdout as JSON only
-    // on exit 0: on an exit-2 PreToolUse block it discards the body and reads
-    // STDERR instead. So `permissionDecisionReason` never reached the model on
-    // the one path that actually blocks, and the call was refused with no
-    // rationale. Carry the reason on `NativeResponse.stderr`, which `emit`
-    // writes to fd 2 — the same block-reason channel the Amp and Gemini
-    // adapters use. ONLY the enforced path: an allow, an ask, and a deny this
-    // call cannot veto have blocked nothing, and their exit-0 body is read.
-    ...enforced && vd.reason !== void 0 ? { stderr: vd.reason } : {}
+    reason: vd.reason
   });
 }
 function gatingBody(hookEventName, vd, soleGate) {
@@ -1387,7 +1474,7 @@ function nonGatingBody(hookEventName, kind2, vd) {
   if (kind2 !== EventKind.UNKNOWN && vd.additional_context !== void 0)
     hookSpecificOutput.additionalContext = vd.additional_context;
   const out = { hookSpecificOutput };
-  if (vd.decision !== Decision.ALLOW) {
+  if (kind2 !== EventKind.UNKNOWN && vd.decision !== Decision.ALLOW) {
     out.decision = "block";
     if (vd.reason !== void 0) out.reason = vd.reason;
   }
@@ -1395,7 +1482,7 @@ function nonGatingBody(hookEventName, kind2, vd) {
 }
 var AGENT, INTEGRATION_MODE, COVERAGE, GATED_EVENTS, CONTEXT_ONLY, UNRENDERED_FIELDS, NATIVE_ASK_TIER, HookEvent2, NATIVE_TO_KIND, KIND_TO_NATIVE, NATIVE_EVENT_FOR, CONSUMED, claudeAdapter;
 var init_claude = __esm({
-  "node_modules/.pnpm/agent-control-plane-core@0.8.1/node_modules/agent-control-plane-core/src/adapters/claude.mjs"() {
+  "node_modules/.pnpm/agent-control-plane-core@0.11.2/node_modules/agent-control-plane-core/src/adapters/claude.mjs"() {
     init_control_plane();
     AGENT = "claude";
     INTEGRATION_MODE = IntegrationMode.EXTERNAL_HOOK;
@@ -54292,8 +54379,14 @@ var init_layer_pipeline = __esm({
 
 // claude-hooks/lib/control-plane.mjs
 function controlPlane(overrides = {}) {
-  const bindings = { claudeAdapter: claudeAdapter2, Decision: Decision2, EventKind: EventKind2, ...overrides };
-  if (!bindings.claudeAdapter || !bindings.Decision || !bindings.EventKind)
+  const bindings = {
+    claudeAdapter: claudeAdapter2,
+    Decision: Decision2,
+    EventKind: EventKind2,
+    renderEscalated: renderEscalated2,
+    ...overrides
+  };
+  if (!bindings.claudeAdapter || !bindings.Decision || !bindings.EventKind || !bindings.renderEscalated)
     throw missingPackageError("agent-control-plane-core");
   return (
     /** @type {ReturnType<typeof controlPlane>} */
@@ -54318,6 +54411,10 @@ async function runJudgeCli(hookName, judge, {
   transformInput = (raw) => raw,
   readInput = readStdinJson,
   write = (chunk) => process.stdout.write(chunk),
+  writeErr = (chunk) => process.stderr.write(chunk),
+  setExitCode = (code4) => {
+    process.exitCode = code4;
+  },
   reportTo
 }) {
   let input;
@@ -54328,24 +54425,29 @@ async function runJudgeCli(hookName, judge, {
     input = await readInput();
     payloadBytes = readInput === readStdinJson ? lastStdinByteLength() : null;
     timer = startHookTimer();
-    const { claudeAdapter: adapter } = controlPlane();
+    const { claudeAdapter: adapter, renderEscalated: render2 } = controlPlane();
     const event = adapter.parse(transformInput(input));
     tool = event.tool ?? null;
     const judged = await judge(event);
-    const out = nativeStdout(
-      adapter.render(
-        withSlowHookNotice(hookName, timer.wallMs(), judged, void 0, {
-          payloadBytes,
-          tool,
-          cpuMs: timer.cpuMs(),
-          redactorMs: timer.redactorMs(),
-          hostMs: timer.hostMs(),
-          reportTo
-        }),
-        event
-      )
+    const response = render2(
+      adapter,
+      withSlowHookNotice(hookName, timer.wallMs(), judged, void 0, {
+        payloadBytes,
+        tool,
+        cpuMs: timer.cpuMs(),
+        redactorMs: timer.redactorMs(),
+        hostMs: timer.hostMs(),
+        reportTo
+      }),
+      event
     );
+    const out = nativeStdout(response);
     if (out !== null) write(out);
+    else if (response.enforced) {
+      writeErr(`${response.stderr}
+`);
+      setExitCode(response.exit_code);
+    }
   } catch (err) {
     process.stderr.write(`${hookName} hook error: ${errMessage(err)}
 `);
@@ -54361,7 +54463,7 @@ async function runJudgeCli(hookName, judge, {
     onError(err, input);
   }
 }
-var claudeAdapter2, Decision2, EventKind2, marker, loaded;
+var claudeAdapter2, Decision2, EventKind2, renderEscalated2, marker, loaded;
 var init_control_plane2 = __esm({
   async "claude-hooks/lib/control-plane.mjs"() {
     "use strict";
@@ -54374,24 +54476,34 @@ var init_control_plane2 = __esm({
           /** @type {Partial<typeof import("agent-control-plane-core/claude")>} */
           await lazyImport("agent-control-plane-core/claude")
         );
-        const { Decision: decision, EventKind: eventKind } = (
+        const {
+          Decision: decision,
+          EventKind: eventKind,
+          renderEscalated: escalated
+        } = (
           /** @type {Partial<typeof import("agent-control-plane-core/contract")>} */
           await lazyImport("agent-control-plane-core/contract")
         );
-        if (!adapter || !decision || !eventKind) return null;
-        return { claudeAdapter: adapter, Decision: decision, EventKind: eventKind };
+        if (!adapter || !decision || !eventKind || !escalated) return null;
+        return {
+          claudeAdapter: adapter,
+          Decision: decision,
+          EventKind: eventKind,
+          renderEscalated: escalated
+        };
       },
       markerPresent: () => markerIsTrusted(marker),
       setupAlive: () => probeSetupAlive(marker)
     });
     if (loaded) {
       const bound = (
-        /** @type {{ claudeAdapter: typeof claudeAdapter, Decision: typeof Decision, EventKind: typeof EventKind }} */
+        /** @type {{ claudeAdapter: typeof claudeAdapter, Decision: typeof Decision, EventKind: typeof EventKind, renderEscalated: typeof renderEscalated }} */
         loaded
       );
       claudeAdapter2 = bound.claudeAdapter;
       Decision2 = bound.Decision;
       EventKind2 = bound.EventKind;
+      renderEscalated2 = bound.renderEscalated;
     }
   }
 });

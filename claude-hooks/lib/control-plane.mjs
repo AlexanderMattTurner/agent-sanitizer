@@ -37,6 +37,8 @@ let claudeAdapter;
 let Decision;
 /** @type {typeof import("agent-control-plane-core/contract").EventKind | undefined} */
 let EventKind;
+/** @type {typeof import("agent-control-plane-core/contract").renderEscalated | undefined} */
+let renderEscalated;
 
 /* c8 ignore start -- module-load boundary: the real import resolves in every
    in-process test and spawned CLI run, and a missing node_modules can't be
@@ -55,26 +57,35 @@ const loaded = await awaitLazyDependency({
       );
     // The /contract subpath, not the package root: the root barrel also pulls
     // all four adapters, the registry and the conformance harness, which costs
-    // ~22 ms of import work per process for two enums. A guardrail hook is one
-    // process per tool call, so that cost lands on every gated call.
-    const { Decision: decision, EventKind: eventKind } =
-      /** @type {Partial<typeof import("agent-control-plane-core/contract")>} */ (
-        await lazyImport("agent-control-plane-core/contract")
-      );
-    if (!adapter || !decision || !eventKind) return null;
-    return { claudeAdapter: adapter, Decision: decision, EventKind: eventKind };
+    // ~22 ms of import work per process for three bindings. A guardrail hook is
+    // one process per tool call, so that cost lands on every gated call.
+    const {
+      Decision: decision,
+      EventKind: eventKind,
+      renderEscalated: escalated,
+    } = /** @type {Partial<typeof import("agent-control-plane-core/contract")>} */ (
+      await lazyImport("agent-control-plane-core/contract")
+    );
+    if (!adapter || !decision || !eventKind || !escalated) return null;
+    return {
+      claudeAdapter: adapter,
+      Decision: decision,
+      EventKind: eventKind,
+      renderEscalated: escalated,
+    };
   },
   markerPresent: () => markerIsTrusted(marker),
   setupAlive: () => probeSetupAlive(marker),
 });
 if (loaded) {
   const bound =
-    /** @type {{ claudeAdapter: typeof claudeAdapter, Decision: typeof Decision, EventKind: typeof EventKind }} */ (
+    /** @type {{ claudeAdapter: typeof claudeAdapter, Decision: typeof Decision, EventKind: typeof EventKind, renderEscalated: typeof renderEscalated }} */ (
       loaded
     );
   claudeAdapter = bound.claudeAdapter;
   Decision = bound.Decision;
   EventKind = bound.EventKind;
+  renderEscalated = bound.renderEscalated;
 }
 // Stryker restore all
 /* c8 ignore stop */
@@ -83,16 +94,28 @@ if (loaded) {
  * The loaded control-plane bindings, narrowed to non-undefined — or a throw
  * the calling hook's catch converts into its own failure posture. Overrides
  * exist so tests can drive the unavailable arm in-process.
- * @param {{ claudeAdapter?: unknown, Decision?: unknown, EventKind?: unknown }} [overrides]
+ * @param {{ claudeAdapter?: unknown, Decision?: unknown, EventKind?: unknown, renderEscalated?: unknown }} [overrides]
  * @returns {{
  *   claudeAdapter: typeof import("agent-control-plane-core/claude").claudeAdapter,
  *   Decision: typeof import("agent-control-plane-core/contract").Decision,
  *   EventKind: typeof import("agent-control-plane-core/contract").EventKind,
+ *   renderEscalated: typeof import("agent-control-plane-core/contract").renderEscalated,
  * }}
  */
 export function controlPlane(overrides = {}) {
-  const bindings = { claudeAdapter, Decision, EventKind, ...overrides };
-  if (!bindings.claudeAdapter || !bindings.Decision || !bindings.EventKind)
+  const bindings = {
+    claudeAdapter,
+    Decision,
+    EventKind,
+    renderEscalated,
+    ...overrides,
+  };
+  if (
+    !bindings.claudeAdapter ||
+    !bindings.Decision ||
+    !bindings.EventKind ||
+    !bindings.renderEscalated
+  )
     throw missingPackageError("agent-control-plane-core");
   return /** @type {ReturnType<typeof controlPlane>} */ (bindings);
 }
@@ -101,10 +124,10 @@ export function controlPlane(overrides = {}) {
  * Serialize a rendered NativeResponse for Claude Code's stdout, or null when
  * the body carries nothing a silent exit 0 doesn't already say. The adapter's
  * exit_code is deliberately NOT honored by the hooks: Claude Code parses hook
- * stdout as JSON only on exit 0 — under the adapter's exit-2 enforced-deny
- * channel it discards stdout and reads the (empty) stderr instead, so the
- * deny would land without its reason. For this host the stdout JSON's
- * permissionDecision IS the enforcement channel, and hooks always exit 0.
+ * stdout as JSON only on exit 0, and that body is the one channel that carries
+ * every verdict field (updatedInput, additionalContext) beside the decision.
+ * For this host the stdout JSON's permissionDecision IS the enforcement
+ * channel, and a rendered verdict always exits 0.
  * @param {{ stdout?: unknown }} response a NativeResponse from adapter.render
  * @returns {string | null}
  */
@@ -133,8 +156,10 @@ export function nativeStdout(response) {
  * native response. This encodes the two transport invariants every gate hook
  * shares: stdin is read BEFORE the control-plane bindings are touched, so a
  * package-load failure still lands in `onError` with the parsed input in hand;
- * and the process always exits 0 with the verdict in the stdout JSON (see
- * nativeStdout — exit-code enforcement is deliberately not used). Any throw —
+ * and a verdict exits 0 in the stdout JSON (see nativeStdout). The verdict
+ * renders through the package's renderEscalated: a response with no stdout body
+ * that still blocks (a deny on a payload that names no event) blocks through its
+ * exit code and stderr instead. Any throw —
  * unparsable stdin, missing package, a judge error — is reported on stderr and
  * routed to `onError(err, input)` (`input` undefined when stdin never parsed),
  * where the hook applies its declared fail posture.
@@ -152,6 +177,8 @@ export function nativeStdout(response) {
  * @param {(input: unknown) => unknown} [opts.transformInput]  raw-payload normalization before adapter.parse
  * @param {() => Promise<unknown>} [opts.readInput]  injectable stdin reader
  * @param {(chunk: string) => void} [opts.write]  injectable stdout writer
+ * @param {(chunk: string) => void} [opts.writeErr]  injectable stderr writer
+ * @param {(code: number) => void} [opts.setExitCode]  injectable exit-code setter
  * @param {import("./hook-timing.mjs").ReportTo} [opts.reportTo]  the composer
  *   that owns this hook, which a slow-run notice names and sends the report to;
  *   omitted, the notice names this package
@@ -165,6 +192,10 @@ export async function runJudgeCli(
     transformInput = (raw) => raw,
     readInput = readStdinJson,
     write = (chunk) => process.stdout.write(chunk),
+    writeErr = (chunk) => process.stderr.write(chunk),
+    setExitCode = (code) => {
+      process.exitCode = code;
+    },
     reportTo,
   },
 ) {
@@ -190,26 +221,30 @@ export async function runJudgeCli(
     // over stdin is not this hook's cost, and blaming it for one would send
     // operators chasing a bug report that is not theirs to fix.
     timer = startHookTimer();
-    const { claudeAdapter: adapter } = controlPlane();
+    const { claudeAdapter: adapter, renderEscalated: render } = controlPlane();
     const event = adapter.parse(transformInput(input));
     tool = event.tool ?? null;
     // Awaited into its own binding first: as an inline argument, the timer read
     // would be evaluated BEFORE the judge it is supposed to be timing.
     const judged = await judge(event);
-    const out = nativeStdout(
-      adapter.render(
-        withSlowHookNotice(hookName, timer.wallMs(), judged, undefined, {
-          payloadBytes,
-          tool,
-          cpuMs: timer.cpuMs(),
-          redactorMs: timer.redactorMs(),
-          hostMs: timer.hostMs(),
-          reportTo,
-        }),
-        event,
-      ),
+    const response = render(
+      adapter,
+      withSlowHookNotice(hookName, timer.wallMs(), judged, undefined, {
+        payloadBytes,
+        tool,
+        cpuMs: timer.cpuMs(),
+        redactorMs: timer.redactorMs(),
+        hostMs: timer.hostMs(),
+        reportTo,
+      }),
+      event,
     );
+    const out = nativeStdout(response);
     if (out !== null) write(out);
+    else if (response.enforced) {
+      writeErr(`${response.stderr}\n`);
+      setExitCode(response.exit_code);
+    }
   } catch (err) {
     process.stderr.write(`${hookName} hook error: ${errMessage(err)}\n`);
     // After the error line, before the posture: the fault is what the reader

@@ -145,9 +145,8 @@ export function judgeSanitizeUserPrompt(
   const { Decision, EventKind } = controlPlane();
   // A payload the adapter cannot classify carries no readable prompt, so an
   // abstain would fail OPEN on harness contract drift; this gate's posture is
-  // deny-when-blind. (Renders through the adapter's top-level decision:"block"
-  // channel — a non-PRE_TOOL event has no permissionDecision body — which Claude
-  // honors on UserPromptSubmit.)
+  // deny-when-blind. (runJudgeCli's renderEscalated blocks it with exit 2 and
+  // the reason on stderr, which Claude honors on UserPromptSubmit.)
   if (event.event === EventKind.UNKNOWN)
     return { decision: Decision.DENY, reason: messages.unknownEvent };
   if (event.event !== EventKind.PROMPT_SUBMIT)
