@@ -70,8 +70,6 @@ const LAZY_LOADERS = {
     import("agent-control-plane-core/claude"),
   "agent-control-plane-core/contract": () =>
     import("agent-control-plane-core/contract"),
-  "agent-control-plane-core/runtime": () =>
-    import("agent-control-plane-core/runtime"),
   "agent-sanitizer": () => import("agent-sanitizer"),
   "agent-sanitizer/confusables": () => import("agent-sanitizer/confusables"),
   "agent-sanitizer/instructions": () => import("agent-sanitizer/instructions"),

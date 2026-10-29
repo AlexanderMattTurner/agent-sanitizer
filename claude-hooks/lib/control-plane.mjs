@@ -37,8 +37,8 @@ let claudeAdapter;
 let Decision;
 /** @type {typeof import("agent-control-plane-core/contract").EventKind | undefined} */
 let EventKind;
-/** @type {typeof import("agent-control-plane-core/runtime").failClosedResponse | undefined} */
-let failClosedResponse;
+/** @type {typeof import("agent-control-plane-core/contract").renderEscalated | undefined} */
+let renderEscalated;
 
 /* c8 ignore start -- module-load boundary: the real import resolves in every
    in-process test and spawned CLI run, and a missing node_modules can't be
@@ -57,22 +57,21 @@ const loaded = await awaitLazyDependency({
       );
     // The /contract subpath, not the package root: the root barrel also pulls
     // all four adapters, the registry and the conformance harness, which costs
-    // ~22 ms of import work per process for two enums. A guardrail hook is one
-    // process per tool call, so that cost lands on every gated call.
-    const { Decision: decision, EventKind: eventKind } =
-      /** @type {Partial<typeof import("agent-control-plane-core/contract")>} */ (
-        await lazyImport("agent-control-plane-core/contract")
-      );
-    const { failClosedResponse: failClosed } =
-      /** @type {Partial<typeof import("agent-control-plane-core/runtime")>} */ (
-        await lazyImport("agent-control-plane-core/runtime")
-      );
-    if (!adapter || !decision || !eventKind || !failClosed) return null;
+    // ~22 ms of import work per process for three bindings. A guardrail hook is
+    // one process per tool call, so that cost lands on every gated call.
+    const {
+      Decision: decision,
+      EventKind: eventKind,
+      renderEscalated: escalated,
+    } = /** @type {Partial<typeof import("agent-control-plane-core/contract")>} */ (
+      await lazyImport("agent-control-plane-core/contract")
+    );
+    if (!adapter || !decision || !eventKind || !escalated) return null;
     return {
       claudeAdapter: adapter,
       Decision: decision,
       EventKind: eventKind,
-      failClosedResponse: failClosed,
+      renderEscalated: escalated,
     };
   },
   markerPresent: () => markerIsTrusted(marker),
@@ -80,13 +79,13 @@ const loaded = await awaitLazyDependency({
 });
 if (loaded) {
   const bound =
-    /** @type {{ claudeAdapter: typeof claudeAdapter, Decision: typeof Decision, EventKind: typeof EventKind, failClosedResponse: typeof failClosedResponse }} */ (
+    /** @type {{ claudeAdapter: typeof claudeAdapter, Decision: typeof Decision, EventKind: typeof EventKind, renderEscalated: typeof renderEscalated }} */ (
       loaded
     );
   claudeAdapter = bound.claudeAdapter;
   Decision = bound.Decision;
   EventKind = bound.EventKind;
-  failClosedResponse = bound.failClosedResponse;
+  renderEscalated = bound.renderEscalated;
 }
 // Stryker restore all
 /* c8 ignore stop */
@@ -95,12 +94,12 @@ if (loaded) {
  * The loaded control-plane bindings, narrowed to non-undefined — or a throw
  * the calling hook's catch converts into its own failure posture. Overrides
  * exist so tests can drive the unavailable arm in-process.
- * @param {{ claudeAdapter?: unknown, Decision?: unknown, EventKind?: unknown, failClosedResponse?: unknown }} [overrides]
+ * @param {{ claudeAdapter?: unknown, Decision?: unknown, EventKind?: unknown, renderEscalated?: unknown }} [overrides]
  * @returns {{
  *   claudeAdapter: typeof import("agent-control-plane-core/claude").claudeAdapter,
  *   Decision: typeof import("agent-control-plane-core/contract").Decision,
  *   EventKind: typeof import("agent-control-plane-core/contract").EventKind,
- *   failClosedResponse: typeof import("agent-control-plane-core/runtime").failClosedResponse,
+ *   renderEscalated: typeof import("agent-control-plane-core/contract").renderEscalated,
  * }}
  */
 export function controlPlane(overrides = {}) {
@@ -108,14 +107,14 @@ export function controlPlane(overrides = {}) {
     claudeAdapter,
     Decision,
     EventKind,
-    failClosedResponse,
+    renderEscalated,
     ...overrides,
   };
   if (
     !bindings.claudeAdapter ||
     !bindings.Decision ||
     !bindings.EventKind ||
-    !bindings.failClosedResponse
+    !bindings.renderEscalated
   )
     throw missingPackageError("agent-control-plane-core");
   return /** @type {ReturnType<typeof controlPlane>} */ (bindings);
@@ -157,9 +156,10 @@ export function nativeStdout(response) {
  * native response. This encodes the two transport invariants every gate hook
  * shares: stdin is read BEFORE the control-plane bindings are touched, so a
  * package-load failure still lands in `onError` with the parsed input in hand;
- * and a rendered verdict exits 0 in the stdout JSON (see nativeStdout). The one
- * exit-code block is a non-allow verdict on an event the adapter cannot name,
- * which the render drops: it takes the package's failClosedResponse. Any throw —
+ * and a verdict exits 0 in the stdout JSON (see nativeStdout). The verdict
+ * renders through the package's renderEscalated: a response with no stdout body
+ * that still blocks (a deny on a payload that names no event) blocks through its
+ * exit code and stderr instead. Any throw —
  * unparsable stdin, missing package, a judge error — is reported on stderr and
  * routed to `onError(err, input)` (`input` undefined when stdin never parsed),
  * where the hook applies its declared fail posture.
@@ -221,44 +221,30 @@ export async function runJudgeCli(
     // over stdin is not this hook's cost, and blaming it for one would send
     // operators chasing a bug report that is not theirs to fix.
     timer = startHookTimer();
-    const {
-      claudeAdapter: adapter,
-      Decision,
-      EventKind,
-      failClosedResponse: blockResponse,
-    } = controlPlane();
+    const { claudeAdapter: adapter, renderEscalated: render } = controlPlane();
     const event = adapter.parse(transformInput(input));
     tool = event.tool ?? null;
     // Awaited into its own binding first: as an inline argument, the timer read
     // would be evaluated BEFORE the judge it is supposed to be timing.
     const judged = await judge(event);
-    const verdict = withSlowHookNotice(
-      hookName,
-      timer.wallMs(),
-      judged,
-      undefined,
-      {
+    const response = render(
+      adapter,
+      withSlowHookNotice(hookName, timer.wallMs(), judged, undefined, {
         payloadBytes,
         tool,
         cpuMs: timer.cpuMs(),
         redactorMs: timer.redactorMs(),
         hostMs: timer.hostMs(),
         reportTo,
-      },
+      }),
+      event,
     );
-    // The render writes no decision on an UNKNOWN event, so without this a
-    // judge's deny-when-blind would exit 0 with an empty body: a silent pass.
-    if (
-      event.event === EventKind.UNKNOWN &&
-      verdict.decision !== Decision.ALLOW
-    ) {
-      const blocked = blockResponse(adapter.AGENT, verdict.reason ?? "");
-      writeErr(`${blocked.stderr}\n`);
-      setExitCode(blocked.exit_code);
-      return;
-    }
-    const out = nativeStdout(adapter.render(verdict, event));
+    const out = nativeStdout(response);
     if (out !== null) write(out);
+    else if (response.enforced) {
+      writeErr(`${response.stderr}\n`);
+      setExitCode(response.exit_code);
+    }
   } catch (err) {
     process.stderr.write(`${hookName} hook error: ${errMessage(err)}\n`);
     // After the error line, before the posture: the fault is what the reader
