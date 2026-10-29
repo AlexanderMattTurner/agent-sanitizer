@@ -15,8 +15,8 @@ importers:
   .:
     dependencies:
       agent-control-plane-core:
-        specifier: 0.8.1
-        version: 0.8.1
+        specifier: 0.11.1
+        version: 0.11.1
       css-tree:
         specifier: ^3.2.1
         version: 3.2.1
@@ -977,9 +977,10 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  agent-control-plane-core@0.8.1:
-    resolution: {integrity: sha512-4/eHv6BMUpweWrpuDTHEDyUZWCC94kEPhKLuAui4kJV5PDn5GZb7yht5E2R7BhQQQDd7RAxlgNyDQnZQCoDWDg==}
+  agent-control-plane-core@0.11.1:
+    resolution: {integrity: sha512-Hsw4D/hoU3vUYkfPYdgMHIhKi9NFssq1eNOTmtwxzcp/mL66PIiNUQNjb26ksJ8oxiP3RgLyNJl+l9uVh4dA8A==}
     engines: {node: '>=20'}
+    hasBin: true
 
   ajv@6.15.0:
     resolution: {integrity: sha512-fgFx7Hfoq60ytK2c7DhnF8jIvzYgOMxfugjLOSMHjLIPgenqa7S7oaagATUq99mV6IYvN2tRmC0wnTYX6iPbMw==}
@@ -3088,7 +3089,7 @@ snapshots:
 
   acorn@8.18.0: {}
 
-  agent-control-plane-core@0.8.1:
+  agent-control-plane-core@0.11.1:
     dependencies:
       semver: 7.8.5
 

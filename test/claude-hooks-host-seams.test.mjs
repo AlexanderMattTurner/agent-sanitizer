@@ -40,7 +40,7 @@ const {
   awaitLazyDependency,
   scrubUntrustedText,
 } = await import("../claude-hooks/lib/hook-io.mjs");
-const { controlPlane, nativeStdout } =
+const { controlPlane, runJudgeCli } =
   await import("../claude-hooks/lib/control-plane.mjs");
 const { instructionsLoadedFile, recordInstructionsLoaded } =
   await import("../claude-hooks/lib/invisible-alert.mjs");
@@ -76,33 +76,39 @@ const parse = (payload) => claudeAdapter.parse(payload);
 
 const unknownEvent = () => parse({ no_such_field: 1 });
 
-describe("the deny-when-blind body", () => {
-  // What the gates emit for a payload the adapter cannot name is the posture
-  // operators depend on, and it is the one thing a contract bump can move
-  // silently: the render's `this_call_vetoable`, `enforced` and `exit_code` all
-  // flipped in 0.5.0 while this body did not. `nativeStdout` ignores those
-  // three by design, so pinning the STRING is what proves it.
-  it("renders an unnameable event's deny as a block the host acts on", () => {
-    assert.equal(
-      nativeStdout(
-        claudeAdapter.render(
-          { decision: Decision.DENY, reason: "R" },
-          unknownEvent(),
-        ),
-      ),
-      '{"hookSpecificOutput":{"hookEventName":""},"decision":"block","reason":"R"}',
-    );
+describe("the deny-when-blind block", () => {
+  // The render writes no decision on an event the adapter cannot name, so the
+  // gates' deny there must reach the host another way. Driven through
+  // runJudgeCli, the transport every gate hook shares.
+  /** @param {unknown} decision */
+  const runBlind = async (decision) => {
+    /** @type {{ out: string[], err: string[], exit: number[] }} */
+    const seen = { out: [], err: [], exit: [] };
+    await runJudgeCli("blind", () => ({ decision, reason: "R" }), {
+      onError: (err) => assert.fail(String(err)),
+      readInput: async () => ({ no_such_field: 1 }),
+      write: (chunk) => seen.out.push(chunk),
+      writeErr: (chunk) => seen.err.push(chunk),
+      setExitCode: (code) => seen.exit.push(code),
+    });
+    return seen;
+  };
+
+  it("blocks an unnameable event's deny with exit 2 and the reason on stderr", async () => {
+    assert.deepEqual(await runBlind(Decision.DENY), {
+      out: [],
+      err: ["R\n"],
+      exit: [2],
+    });
   });
 
-  it("keeps that deny distinct from the allow it would otherwise collapse onto", () => {
-    // Without this half the assertion above could pass on a body that says
-    // nothing: an allow renders no directive at all, so nativeStdout answers null.
-    assert.equal(
-      nativeStdout(
-        claudeAdapter.render({ decision: Decision.ALLOW }, unknownEvent()),
-      ),
-      null,
-    );
+  it("leaves that event's allow a silent exit 0", async () => {
+    // Without this half the block above could be every UNKNOWN event's answer.
+    assert.deepEqual(await runBlind(Decision.ALLOW), {
+      out: [],
+      err: [],
+      exit: [],
+    });
   });
 });
 
