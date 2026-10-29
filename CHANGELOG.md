@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.67.2] - 2026-10-29
+
+### Fixed
+
+- Fixed verdict rendering to use agent-control-plane-core 0.11.2's `renderEscalated` method.
+- Fixed handling of unrecognized payloads by upgrading agent-control-plane-core to 0.11.1, which now properly blocks via exit 2.
+
 ## [2.67.0] - 2026-10-27
 
 ### Added
