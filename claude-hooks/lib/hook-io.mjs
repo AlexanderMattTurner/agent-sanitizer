@@ -681,6 +681,77 @@ export function emitHookResponse(hookEventName, fields) {
 }
 
 /**
+ * Fold several hook envelopes into the ONE that may reach stdout: `systemMessage`
+ * and `additionalContext` are joined (a later part is appended, never allowed to
+ * displace an earlier one); any other field takes the last value written.
+ * @param {Array<Record<string, any>>} envelopes  non-empty
+ * @returns {Record<string, any>}
+ */
+function mergeEnvelopes(envelopes) {
+  /** @type {Record<string, any>} */
+  const merged = {};
+  /** @type {Record<string, any>} */
+  const specific = {};
+  /** @type {string[]} */
+  const systemMessages = [];
+  /** @type {string[]} */
+  const contexts = [];
+  for (const { hookSpecificOutput, systemMessage, ...rest } of envelopes) {
+    Object.assign(merged, rest);
+    if (systemMessage) systemMessages.push(systemMessage);
+    if (!hookSpecificOutput) continue;
+    const { additionalContext, ...fields } = hookSpecificOutput;
+    Object.assign(specific, fields);
+    if (additionalContext) contexts.push(additionalContext);
+  }
+  if (systemMessages.length > 0)
+    merged.systemMessage = systemMessages.join("\n");
+  if (contexts.length > 0) specific.additionalContext = contexts.join("\n");
+  if (Object.keys(specific).length > 0) merged.hookSpecificOutput = specific;
+  return merged;
+}
+
+/**
+ * @typedef {{
+ *   add: (envelope: Record<string, any>) => void,
+ *   emit: (hookEventName: string, fields: Record<string, unknown>) => void,
+ *   flush: () => void,
+ * }} EnvelopeBuffer
+ */
+
+/**
+ * Collect everything a hook run wants to say on stdout and write it as exactly
+ * ONE JSON object on `flush`. Claude Code parses a hook's stdout as a single
+ * document, so two envelopes written by two reporters (a fault notice, then the
+ * slow-hook notice from the timing wrapper's `finally`) concatenate into invalid
+ * output and the host DROPS the whole response — the model never sees either
+ * warning. Every reporter in a run therefore adds here instead of writing, and
+ * the entry point flushes once, last.
+ * @param {(chunk: string) => void} [write]  injectable stdout sink, for tests
+ * @returns {EnvelopeBuffer}
+ */
+export function createEnvelopeBuffer(
+  write = (chunk) => process.stdout.write(chunk),
+) {
+  /** @type {Array<Record<string, any>>} */
+  const pending = [];
+  /** @param {Record<string, any>} envelope */
+  const add = (envelope) => {
+    pending.push(envelope);
+  };
+  return {
+    add,
+    emit: (hookEventName, fields) =>
+      add({ hookSpecificOutput: { hookEventName, ...fields } }),
+    flush() {
+      if (pending.length === 0) return;
+      write(JSON.stringify(mergeEnvelopes(pending)));
+      pending.length = 0;
+    },
+  };
+}
+
+/**
  * The project the hooks are guarding. Every per-project $TMPDIR store is keyed to
  * it, so it lives here — beside the other shared identity these hooks agree on —
  * rather than in whichever store happened to need it first.

@@ -353,6 +353,7 @@ const FUZZ_EXEMPT = Object.freeze({
     "configureHookgateMarker",
     "configureMissingPackageRemedy",
     "controlPlane",
+    "createEnvelopeBuffer",
     "defaultOpen",
     "depLoadHint",
     "failedLazyPackages",

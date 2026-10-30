@@ -25,7 +25,7 @@ import { readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import {
   awaitLazyDependency,
-  emitHookResponse,
+  createEnvelopeBuffer,
   safeErrMessage,
   hookgateMarkerPath,
   HookEvent,
@@ -213,12 +213,18 @@ registerFaultPolicy(HOOK_NAME, {
  * the cross-hook alert so a later gate carries the posture this hook cannot
  * express itself.
  * @param {unknown} err
- * @param {string} [gapNotice]  the {@link formatSkipped} report
+ * @param {string | undefined} gapNotice  the {@link formatSkipped} report
+ * @param {import("./lib/hook-io.mjs").EnvelopeBuffer} out  this run's one stdout
+ *   buffer
  * @returns {string[]}
  */
-function reportFault(err, gapNotice) {
+function reportFault(err, gapNotice, out) {
   const outcome = hookFaultOutcome(HOOK_NAME, err, { gapNotice });
-  process.exitCode = writeFaultOutcome(outcome);
+  // Buffered, not written: the timing wrapper may still owe stdout a slow-hook
+  // notice, and two envelopes on one stdout are invalid hook output.
+  process.exitCode = writeFaultOutcome(outcome, (chunk) =>
+    out.add(JSON.parse(chunk)),
+  );
   if (!outcome.armAlert) return [];
   return [gapNotice ?? /** @type {string} */ (outcome.stderr)];
 }
@@ -417,12 +423,15 @@ export async function cliMain(opts = {}) {
   // reporting an overrun in band is what turned a 30-second scan from a rumor
   // into a bug report (see lib/hook-timing.mjs).
   const timer = startHookTimer();
+  // One stdout document per run: the scan's own envelope (a fault or the
+  // unreadable-file notice) and the slow-hook notice below fold into it.
+  const out = createEnvelopeBuffer();
   try {
     // Charged to provisioning when the session's setup is installing THROUGHOUT
     // this run: that install saturates the machine, and a scan that merely
     // waited it out has no per-call cost to report (see hook-timing.mjs).
     await excludeConcurrentProvisioning(
-      () => runScanCli(opts),
+      () => runScanCli(opts, out),
       () => setupRunning(hookgateMarkerPath()),
     );
   } finally {
@@ -430,7 +439,7 @@ export async function cliMain(opts = {}) {
       HOOK_NAME,
       timer.wallMs(),
       HookEvent.SESSION_START,
-      emitHookResponse,
+      out.emit,
       undefined,
       // All four windows, including the two this scan normally leaves empty: a
       // measured 0 rules a window OUT, where an omitted one leaves the notice
@@ -441,6 +450,7 @@ export async function cliMain(opts = {}) {
         hostMs: timer.hostMs(),
       },
     );
+    out.flush();
   }
 }
 
@@ -453,9 +463,10 @@ export async function cliMain(opts = {}) {
  *   scan?: () => ReturnType<typeof scanProject>,
  *   sessionId?: string,
  * }} opts  see {@link cliMain}
+ * @param {import("./lib/hook-io.mjs").EnvelopeBuffer} out  see {@link cliMain}
  * @returns {Promise<void>}
  */
-async function runScanCli({ trace: sink, scan: runScan, sessionId }) {
+async function runScanCli({ trace: sink, scan: runScan, sessionId }, out) {
   // Bound best-effort: the announcements below run BEFORE the auto-clean and
   // the alert write, with no catch above them, so a throwing host sink would
   // abort the scan silently (see hookTrace).
@@ -486,9 +497,13 @@ async function runScanCli({ trace: sink, scan: runScan, sessionId }) {
           "agent-sanitizer failed to load (node deps not installed and " +
             "session-setup did not finish in time); run `pnpm install`",
         ),
+        undefined,
+        out,
       ),
     );
     persistAlert(alertParts, sessionId);
+    // process.exit skips cliMain's `finally`, which would otherwise flush.
+    out.flush();
     process.exit(1);
   }
   /* c8 ignore stop */
@@ -514,7 +529,7 @@ async function runScanCli({ trace: sink, scan: runScan, sessionId }) {
     scan = (runScan ?? scanProject)();
   } catch (err) {
     emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "skipped" });
-    alertParts.push(...reportFault(err));
+    alertParts.push(...reportFault(err, undefined, out));
     persistAlert(alertParts, sessionId);
     return;
   }
@@ -534,6 +549,7 @@ async function runScanCli({ trace: sink, scan: runScan, sessionId }) {
       ...reportFault(
         new Error(`${skipped.length} instruction file(s) could not be read`),
         formatSkipped(skipped),
+        out,
       ),
     );
   } else if (allFindings.length === 0) {
