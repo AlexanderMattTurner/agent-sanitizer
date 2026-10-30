@@ -348,6 +348,7 @@ const FUZZ_EXEMPT = Object.freeze({
   ...withReason("process lifecycle, shared state and lazy module loading", [
     "EmptyStdinError",
     "adoptHookIoSharedState",
+    "advisoryParts",
     "awaitLazyDependency",
     "claimCliEntry",
     "configureHookgateMarker",
@@ -433,6 +434,7 @@ const FUZZ_EXEMPT = Object.freeze({
       "revealDir",
       "sessionPrefix",
       "spanPath",
+      "stateRootCandidates",
       "sweepStaleConfirms",
       "sweepStaleReveals",
       "sweepStaleSessions",
