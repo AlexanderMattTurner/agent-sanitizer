@@ -442,7 +442,7 @@ emit_watchdog_timeout() {
 payload_file=""
 bin_stdout_file=""
 stdout_file=""
-# shellcheck disable=SC2317 # invoked by the EXIT trap
+# shellcheck disable=SC2317,SC2329 # invoked by the EXIT trap
 remove_temp_files() { rm -f "$payload_file" "$bin_stdout_file" "$stdout_file"; }
 trap remove_temp_files EXIT
 
