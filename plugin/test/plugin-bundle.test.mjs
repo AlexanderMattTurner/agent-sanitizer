@@ -2633,13 +2633,27 @@ test("hook sources run un-bundled against the installed packages", (t) => {
   assert.equal(res.status, 0, res.stderr);
   assert.equal(JSON.parse(res.stdout).decision, "block");
 
-  const unknown = spawnSync(
-    process.execPath,
-    [join(hooks, "plugin-hooks.mjs"), "--hook=no-such-hook"],
-    { input: "{}", encoding: "utf8", cwd: dir },
-  );
-  assert.equal(unknown.status, 2);
-  assert.match(unknown.stderr, /unknown hook mode/);
+  // An unknown mode is wiring skew: non-blocking under the open default, a
+  // blocking exit 2 only under the opt-out.
+  const inherited = { ...process.env };
+  delete inherited.AGENT_SANITIZER_FAIL_OPEN;
+  for (const [knob, status] of [
+    [{}, 1],
+    [{ AGENT_SANITIZER_FAIL_OPEN: "0" }, 2],
+  ]) {
+    const unknown = spawnSync(
+      process.execPath,
+      [join(hooks, "plugin-hooks.mjs"), "--hook=no-such-hook"],
+      {
+        input: "{}",
+        encoding: "utf8",
+        cwd: dir,
+        env: { ...inherited, ...knob },
+      },
+    );
+    assert.equal(unknown.status, status, JSON.stringify(knob));
+    assert.match(unknown.stderr, /unknown hook mode/);
+  }
 });
 
 test("importing the entry does not run the dispatch", (t) => {
