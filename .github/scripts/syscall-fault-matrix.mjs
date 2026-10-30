@@ -697,13 +697,12 @@ function scenarioEnv(scenario, root, closed) {
  * @param {Record<string, string>} env
  */
 function fullEnv(env) {
-  /** @type {Record<string, string>} */
-  const inherited = {};
   const knob =
     /^_?AGENT_SANITIZER_|^CLAUDE_|^XDG_|^NODE_(?:COMPILE_CACHE|OPTIONS)$/;
-  for (const [k, v] of Object.entries(process.env))
-    if (v !== undefined && !knob.test(k)) inherited[k] = v;
-  return { ...inherited, ...env };
+  const inherited = Object.entries(process.env).filter(
+    ([k, v]) => v !== undefined && !knob.test(k),
+  );
+  return { ...Object.fromEntries(inherited), ...env };
 }
 
 /** @param {Scenario} scenario @param {string} root */
@@ -941,7 +940,7 @@ async function pool(tasks, jobs) {
 /** @param {string[]} argv */
 export function parseArgs(argv) {
   /** @type {Record<string, string>} */
-  const opts = {};
+  const opts = Object.create(null);
   for (const arg of argv) {
     const m = /^--(seed|budget|jobs|only)=(.+)$/.exec(arg);
     if (!m) throw new Error(`unknown argument ${JSON.stringify(arg)}`);
