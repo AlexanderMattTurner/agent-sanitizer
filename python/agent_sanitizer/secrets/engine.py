@@ -29,7 +29,6 @@ import re
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import urlsplit
 
@@ -121,16 +120,14 @@ _DISABLED_BUNDLED = {
 }
 PLUGINS = [{"name": name} for name in _BUNDLED_PLUGINS]
 
-# Custom detectors for formats detect-secrets has no plugin for, loaded by file
-# path. The list is DERIVED from the same SSOT detectors.py compiles its
-# denylists from — data/secret-detectors.json — so a detector added there
-# registers here automatically, with no hand-kept copy to drift.
-# `_INLINE_PLUGINS` are the exception: each subclasses or replaces a bundled
-# detector and carries its regex inline (see detectors.py), so none has a JSON
-# row and all are appended explicitly. A JSON entry whose adapter class is
-# missing from detectors.py fails loud when detect-secrets loads the plugin by
-# name.
-_PLUGIN_FILE = Path(detectors.__file__).resolve().as_uri()
+# Custom detectors for formats detect-secrets has no plugin for. The list is
+# DERIVED from the same SSOT detectors.py compiles its denylists from —
+# data/secret-detectors.json — so a detector added there registers here
+# automatically, with no hand-kept copy to drift. `_INLINE_PLUGINS` are the
+# exception: each subclasses or replaces a bundled detector and carries its
+# regex inline (see detectors.py), so none has a JSON row and all are appended
+# explicitly. A JSON entry whose adapter class is missing from detectors.py
+# fails loud in _register_custom_plugins.
 _DETECTOR_ROWS = json.loads(detectors.DETECTORS_FILE.read_text(encoding="utf-8"))[
     "detectors"
 ]
@@ -164,10 +161,35 @@ def _row_cross_line(entry: dict) -> bool:
 
 
 _CONFIGURED_DETECTORS = [entry["const"] for entry in _DETECTOR_ROWS]
-CUSTOM_PLUGINS = [
-    {"name": name, "path": _PLUGIN_FILE}
-    for name in (*_CONFIGURED_DETECTORS, *_INLINE_PLUGINS)
-]
+CUSTOM_PLUGINS = [{"name": name} for name in (*_CONFIGURED_DETECTORS, *_INLINE_PLUGINS)]
+
+
+def _register_custom_plugins() -> None:
+    """Put the custom detector classes into detect-secrets' secret_type->class
+    map, which its plugin lookup by name reads.
+
+    Registered from the already-imported module, never by `path`: detect-secrets
+    turns a plugin `path` into a file by slicing off `file://` without decoding
+    it (core/plugins/util.py), so an install path holding a space or `+` loads
+    nothing, and a path that does load execs detectors.py a second time as a
+    separate module. This is the same map write its own `initialize.from_file`
+    performs, minus the file import.
+    """
+    mapping = get_mapping_from_secret_type_to_class()
+    for plugin in CUSTOM_PLUGINS:
+        cls = getattr(detectors, plugin["name"])
+        mapping[cls.secret_type] = cls
+
+
+def _reset_plugin_mapping() -> None:
+    """Rebuild detect-secrets' secret_type->class map with the custom detectors
+    in it. Every clear of the map goes through here: the map is process-wide, so
+    a nested configure_plugins() that clears it on exit would otherwise leave
+    the still-active outer configuration naming plugins its rebuilt map lacks,
+    and every scan under it raises."""
+    get_mapping_from_secret_type_to_class.cache_clear()
+    _register_custom_plugins()
+
 
 # The one place a detector's cross-line eligibility is decided, unioned from the
 # three registries above so no plugin can be enabled without a verdict.
@@ -2709,7 +2731,7 @@ def configure_plugins(high_confidence: bool = False):
             get_settings().disable_filters(
                 "detect_secrets.filters.allowlist.is_line_allowlisted"
             )
-            get_mapping_from_secret_type_to_class.cache_clear()
+            _reset_plugin_mapping()
             # _eligible_prefilter() reads get_plugins(), which answers for
             # WHICHEVER config is active — high_confidence and the default both
             # run in this same process (the daemon serves both), and without
@@ -2738,7 +2760,7 @@ def configure_plugins(high_confidence: bool = False):
             # `return` that verdict AFTER the finally so a cache_clear exception
             # propagates instead of being masked.
             try:
-                get_mapping_from_secret_type_to_class.cache_clear()
+                _reset_plugin_mapping()
                 _eligible_prefilter.cache_clear()
                 _full_prefilter.cache_clear()
                 _line_probe.cache_clear()

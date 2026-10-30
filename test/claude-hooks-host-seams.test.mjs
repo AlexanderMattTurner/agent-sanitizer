@@ -39,6 +39,7 @@ const {
   SETUP_LOCK_DECLARATION,
   awaitLazyDependency,
   scrubUntrustedText,
+  FAIL_OPEN_ENV,
 } = await import("../claude-hooks/lib/hook-io.mjs");
 const { controlPlane, runJudgeCli } =
   await import("../claude-hooks/lib/control-plane.mjs");
@@ -50,14 +51,36 @@ const {
   envBoundSecretVars,
   dynamicSecretVars,
 } = await import("../claude-hooks/lib/env-config.mjs");
-const { judgeSanitizeUserPrompt, USER_PROMPT_MESSAGES } =
-  await import("../claude-hooks/sanitize-user-prompt.mjs");
+const {
+  judgeSanitizeUserPrompt,
+  main: userPromptMain,
+  USER_PROMPT_MESSAGES,
+} = await import("../claude-hooks/sanitize-user-prompt.mjs");
 const {
   judgePreToolUseSanitize,
   failClosedFields,
+  hookFailureFields,
   depLoadHint,
   PRE_TOOL_USE_MESSAGES,
 } = await import("../claude-hooks/pretooluse-sanitize.mjs");
+
+/**
+ * The fault an unclassifiable payload raises from the PreToolUse judge, and
+ * what the CLI's onError renders it to under the strict posture.
+ * @param {Partial<typeof PRE_TOOL_USE_MESSAGES>} messages
+ */
+async function blindPreToolUse(messages) {
+  const err = await judgePreToolUseSanitize(unknownEvent(), undefined, {
+    messages,
+  }).then(
+    () => assert.fail("an UNKNOWN event must throw"),
+    (thrown) => thrown,
+  );
+  return hookFailureFields(true, err, {
+    env: { AGENT_SANITIZER_FAIL_OPEN: "0" },
+    messages,
+  });
+}
 const { failClosedContext } =
   await import("../claude-hooks/sanitize-output.mjs");
 
@@ -466,27 +489,24 @@ describe("env-config host source seam", () => {
 });
 
 describe("user-prompt gate reason table", () => {
+  /** The fault an unclassifiable payload raises, carrying `reason`. */
+  const blindFault = (reason) => ({ code: "UNKNOWN_EVENT", reason });
+
   it("is inert by default", () => {
-    const event = unknownEvent();
-    assert.deepEqual(
-      judgeSanitizeUserPrompt(event),
-      judgeSanitizeUserPrompt(event, undefined, USER_PROMPT_MESSAGES),
-    );
-    assert.equal(
-      judgeSanitizeUserPrompt(event).reason,
-      USER_PROMPT_MESSAGES.unknownEvent,
+    assert.throws(
+      () => judgeSanitizeUserPrompt(unknownEvent()),
+      blindFault(USER_PROMPT_MESSAGES.unknownEvent),
     );
   });
 
-  it("carries a host's deny-when-blind reason", () => {
-    const verdict = judgeSanitizeUserPrompt(unknownEvent(), undefined, {
-      ...USER_PROMPT_MESSAGES,
-      unknownEvent: "blocked: fix the adapter parse in hooks/prompt.mjs",
-    });
-    assert.equal(verdict.decision, Decision.DENY);
-    assert.equal(
-      verdict.reason,
-      "blocked: fix the adapter parse in hooks/prompt.mjs",
+  it("carries a host's deny-when-blind reason on the fault", () => {
+    assert.throws(
+      () =>
+        judgeSanitizeUserPrompt(unknownEvent(), undefined, {
+          ...USER_PROMPT_MESSAGES,
+          unknownEvent: "blocked: fix the adapter parse in hooks/prompt.mjs",
+        }),
+      blindFault("blocked: fix the adapter parse in hooks/prompt.mjs"),
     );
   });
 
@@ -494,10 +514,13 @@ describe("user-prompt gate reason table", () => {
     // Same fail-open shape as the PreToolUse gate: main() threads this object
     // into its onError. A partial table would also silently drop sgrNote and
     // blockContext from the verdict rather than erroring.
-    const verdict = judgeSanitizeUserPrompt(unknownEvent(), undefined, {
-      unknownEvent: "host blind deny",
-    });
-    assert.equal(verdict.reason, "host blind deny");
+    assert.throws(
+      () =>
+        judgeSanitizeUserPrompt(unknownEvent(), undefined, {
+          unknownEvent: "host blind deny",
+        }),
+      blindFault("host blind deny"),
+    );
     const blocked = parse({
       hook_event_name: "UserPromptSubmit",
       prompt: `hello${"\u{E0041}".repeat(20)}`,
@@ -508,6 +531,33 @@ describe("user-prompt gate reason table", () => {
       }).additional_context,
       USER_PROMPT_MESSAGES.blockContext,
     );
+  });
+
+  it("leaves an unclassifiable payload to the fault posture", async () => {
+    // A FAULT, not a content verdict: the open default lets the prompt through
+    // with a warning, and only the opt-out blocks it, in the host's words.
+    /** @param {Record<string, string>} env */
+    const emitted = async (env) => {
+      const written = [];
+      await userPromptMain(
+        async () => ({ no_such_field: 1 }),
+        (chunk) => written.push(chunk),
+        { env, overrides: { unknownEvent: "host blind deny" } },
+      );
+      assert.equal(written.length, 1);
+      return JSON.parse(written[0]);
+    };
+    const open = await emitted({});
+    assert.equal(open.decision, undefined);
+    assert.match(open.hookSpecificOutput.additionalContext, /UNSANITIZED/u);
+    assert.match(
+      open.hookSpecificOutput.additionalContext,
+      /unrecognized hook payload/u,
+    );
+    assert.deepEqual(await emitted({ [FAIL_OPEN_ENV]: "0" }), {
+      decision: "block",
+      reason: "host blind deny",
+    });
   });
 
   it("carries a host's block context on a real payload block", () => {
@@ -684,10 +734,8 @@ describe("PreToolUse host gates", () => {
     // is what a host actually writes — and the field it did NOT set is consumed
     // inside runJudgeCli's catch, where an undefined reason-builder throws out of
     // the handler and the hook emits nothing at all: a fail-OPEN pass.
-    const verdict = await judgePreToolUseSanitize(unknownEvent(), undefined, {
-      messages: { unknownEvent: "host blind deny" },
-    });
-    assert.equal(verdict.reason, "host blind deny");
+    const blind = await blindPreToolUse({ unknownEvent: "host blind deny" });
+    assert.equal(blind.permissionDecisionReason, "host blind deny");
     const fields = failClosedFields(true, new Error("boom"), {
       messages: { unknownEvent: "host blind deny" },
     });
@@ -712,12 +760,17 @@ describe("PreToolUse host gates", () => {
     );
   });
 
-  it("carries a host's deny-when-blind reason", async () => {
-    const verdict = await judgePreToolUseSanitize(unknownEvent(), undefined, {
-      messages: { ...PRE_TOOL_USE_MESSAGES, unknownEvent: "host blind deny" },
-    });
-    assert.equal(verdict.decision, Decision.DENY);
-    assert.equal(verdict.reason, "host blind deny");
+  it("carries a host's deny-when-blind reason under the strict posture", async () => {
+    assert.deepEqual(
+      await blindPreToolUse({
+        ...PRE_TOOL_USE_MESSAGES,
+        unknownEvent: "host blind deny",
+      }),
+      {
+        permissionDecision: Decision.DENY,
+        permissionDecisionReason: "host blind deny",
+      },
+    );
   });
 });
 

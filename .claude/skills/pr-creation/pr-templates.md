@@ -102,6 +102,13 @@ to engage, not raise it. Concretely:
   measurably hurt review accuracy (Herzig & Zeller, MSR 2013). When a refactor and a fix must
   ride together, label the partitions ("mechanical rename, files 1-7; behavior change, file 8")
   so each is reviewable on its own.
+- **Write for a reader who has not seen this session.** Every term the body uses must mean
+  something to someone who knows the product but not your investigation. Say what the change
+  does for the user in plain words first ("a hook that hangs no longer stalls the session"),
+  and use internal names (`releasableRefusal`, `{deny, fault}`, "open arm", "R1 oracle") only
+  after the plain sentence, as a pointer into the diff. A coined term the diff does not define
+  is jargon: replace it with what it means. Test: read the lead aloud to someone who uses the
+  plugin but never opened the code; any phrase they would ask about gets rewritten.
 - **Match the diff's vocabulary.** Use the same identifiers and file paths in the prose as in
   the diff, and link claims to specific files/lines — that lexical "scent" is how a reviewer
   navigates to the code (information foraging).

@@ -61,6 +61,7 @@ const {
   withSecretDropGuard,
   gitTracked,
   dropFingerprint,
+  reissueFingerprint,
   confirmMarkerPath,
   sweepStaleConfirms,
   CONFIRM_TTL_MS,
@@ -471,6 +472,35 @@ describe("secret-drop-guard", () => {
       dropFingerprint("/a", "x", ["s1"]),
     );
   });
+
+  it("a re-issue fingerprint ignores key order but not values, site or tool", () => {
+    const input = { file_path: "/a", old_string: "o", new_string: "n" };
+    const fp = reissueFingerprint("rehydrate", "Edit", input);
+    const reordered = { new_string: "n", file_path: "/a", old_string: "o" };
+    assert.equal(reissueFingerprint("rehydrate", "Edit", reordered), fp);
+    assert.equal(
+      reissueFingerprint("rehydrate", "MultiEdit", {
+        edits: [{ new_string: "n", old_string: "o" }],
+      }),
+      reissueFingerprint("rehydrate", "MultiEdit", {
+        edits: [{ old_string: "o", new_string: "n" }],
+      }),
+    );
+    for (const other of [
+      reissueFingerprint("rehydrate", "Edit", { ...input, new_string: "m" }),
+      reissueFingerprint("layer2", "Edit", input),
+      reissueFingerprint("rehydrate", "Write", input),
+    ])
+      assert.notEqual(other, fp);
+  });
+
+  it("the two fingerprint domains never collide on the same bytes", () => {
+    const body = JSON.stringify(["s", "Edit", { a: 1 }]);
+    assert.notEqual(
+      dropFingerprint("reissue", body),
+      reissueFingerprint("s", "Edit", { a: 1 }),
+    );
+  });
 });
 
 // ─── withSecretDropGuard (the production composition) ────────────────────────
@@ -546,7 +576,7 @@ describe("withSecretDropGuard", () => {
           secretDropGuard(finalInput, guardIo, {
             isTracked: () => false,
             confirmSeen: () => false,
-            recordConfirm: () => {},
+            recordConfirm: () => true,
           }),
       );
 
@@ -749,4 +779,201 @@ describe("gitTracked on real git", () => {
     assert.equal(gitTracked("/f/x", stub([{ status: 2 }])), true);
     assert.deepEqual(calls, ["ls-files"]);
   });
+});
+
+// ─── fault denies under the failure posture ──────────────────────────────────
+
+/**
+ * Run `fn` with `vars` set in process.env — the hook reads its posture and
+ * $TMPDIR (where re-issue confirmations live) there — restoring after.
+ * @param {Record<string, string>} vars
+ * @param {() => Promise<void>} fn
+ */
+async function withEnv(vars, fn) {
+  const saved = Object.fromEntries(
+    Object.keys(vars).map((key) => [key, process.env[key]]),
+  );
+  Object.assign(process.env, vars);
+  try {
+    await fn();
+  } finally {
+    for (const [key, value] of Object.entries(saved))
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+  }
+}
+
+const confirmDir = () => mkdtempSync(join(projectDir, "confirm-"));
+const UNWRITABLE_TMPDIR = join(projectDir, "no-such-tmpdir");
+/** The production Layer-4 composition over `io`, with the git probe faked. */
+const realLayer4 = (io) =>
+  withSecretDropGuard(
+    (tool, toolInput) => rehydrateRedacted(tool, toolInput, io),
+    io,
+    (finalInput, guardIo) => secretDropGuard(finalInput, guardIo, untracked),
+  );
+
+describe("Layer-4 fault denies never block for good by default", () => {
+  const unreadableIo = {
+    readFile: () => {
+      throw Object.assign(new Error("denied"), { code: "EACCES" });
+    },
+    redact: () => null,
+    redactMap: () => {
+      throw new Error("redactMap must not be reached");
+    },
+  };
+  // Pairs that point past the end of the file: a map that fails validation.
+  const defectiveMapIo = {
+    ...dropIo(DISK),
+    redactMap: (text) => ({
+      text,
+      pairs: [{ placeholder: PH, original: SECRET_A, start: 999 }],
+    }),
+  };
+  const CASES = [
+    {
+      name: "an unreadable target",
+      io: unreadableIo,
+      input: {
+        tool_name: "Write",
+        tool_input: { file_path: "/w/locked", content: `value=${PH}\n` },
+      },
+      warning: /\/w\/locked could not be read \(EACCES\)/,
+    },
+    {
+      name: "a redactor map that fails validation (unhinted Edit)",
+      io: defectiveMapIo,
+      input: {
+        tool_name: "Edit",
+        tool_input: {
+          file_path: "/w/.env",
+          old_string: "host=",
+          new_string: "h=",
+        },
+      },
+      warning: /violates its contract/,
+    },
+  ];
+  for (const { name, io, input, warning } of CASES) {
+    const build = () => buildPreToolUseResponse(input, realLayer4(io));
+
+    it(`${name}: refused once, the exact re-issue proceeds with a warning`, () =>
+      withEnv({ TMPDIR: confirmDir() }, async () => {
+        const first = await build();
+        assert.equal(first.permissionDecision, "deny");
+        assert.match(
+          first.permissionDecisionReason,
+          /re-issue this exact call/,
+        );
+        const reissued = await build();
+        assert.equal(reissued.permissionDecision, undefined);
+        assert.equal(reissued.updatedInput, undefined);
+        assert.match(reissued.additionalContext, warning);
+        assert.match(reissued.additionalContext, /confirmed re-issue/);
+      }));
+
+    it(`${name}: proceeds at once when the confirmation cannot be recorded`, () =>
+      withEnv({ TMPDIR: UNWRITABLE_TMPDIR }, async () => {
+        const fields = await build();
+        assert.equal(fields.permissionDecision, undefined);
+        assert.match(fields.additionalContext, warning);
+        assert.match(fields.additionalContext, /could not be recorded/);
+      }));
+
+    it(`${name}: still denied on every call under AGENT_SANITIZER_FAIL_OPEN=0`, () =>
+      withEnv(
+        { TMPDIR: confirmDir(), AGENT_SANITIZER_FAIL_OPEN: "0" },
+        async () => {
+          const { deny } = await rehydrateRedacted(
+            input.tool_name,
+            input.tool_input,
+            io,
+          );
+          for (let call = 0; call < 2; call++)
+            assert.deepEqual(await build(), {
+              permissionDecision: "deny",
+              permissionDecisionReason: deny,
+            });
+        },
+      ));
+  }
+});
+
+describe("secret-drop-guard: an unrecordable confirmation", () => {
+  const dropWrite = {
+    tool_name: "Write",
+    tool_input: { file_path: "/w/.env", content: "host=1.2.3.4\nvalue=<x>\n" },
+  };
+
+  it("marks the deny a fault, since no re-issue could ever release it", async () => {
+    const res = await secretDropGuard(dropWrite.tool_input, dropIo(DISK), {
+      ...untracked,
+      confirmSeen: () => false,
+      recordConfirm: () => false,
+    });
+    assert.match(res.fault, /confirmation could not be recorded/);
+    // Its reason must not offer the re-issue that nothing recorded could release.
+    assert.doesNotMatch(res.deny, /re-issue/);
+    assert.match(res.deny, /ask the user to remove them/);
+    // Non-vacuity: a recorded confirmation leaves the plain verdict.
+    const recorded = await secretDropGuard(dropWrite.tool_input, dropIo(DISK), {
+      ...untracked,
+      confirmSeen: () => false,
+      recordConfirm: () => true,
+    });
+    assert.deepEqual(Object.keys(recorded), ["deny"]);
+    assert.match(recorded.deny, /re-issue this exact Write to confirm/);
+  });
+
+  it("lets the drop through with a warning by default", () =>
+    withEnv({ TMPDIR: UNWRITABLE_TMPDIR }, async () => {
+      const fields = await buildPreToolUseResponse(
+        dropWrite,
+        realLayer4(dropIo(DISK)),
+      );
+      assert.equal(fields.permissionDecision, undefined);
+      assert.match(fields.additionalContext, /removes 1 redacted secret/);
+      assert.match(fields.additionalContext, /could not be recorded/);
+    }));
+
+  it("releases the rehydrated Write, so a preserved secret is not clobbered", () =>
+    withEnv({ TMPDIR: UNWRITABLE_TMPDIR }, async () => {
+      const SECRET_B = ["hunter2hunter2", "hunter2xB"].join("");
+      const PH_B = "[REDACTED: Secret Keyword]";
+      const secrets = [
+        { value: SECRET_A, placeholder: PH },
+        { value: SECRET_B, placeholder: PH_B },
+      ];
+      const io = {
+        readFile: () => `keep=${SECRET_A}\ndrop=${SECRET_B}\n`,
+        redact: (text) => (text.includes(SECRET_A) ? "redacted" : null),
+        redactMap: (text) => mkView(text, secrets),
+      };
+      const fields = await buildPreToolUseResponse(
+        {
+          tool_name: "Write",
+          tool_input: { file_path: "/w/.env", content: `keep=${PH}\n` },
+        },
+        realLayer4(io),
+      );
+      assert.equal(fields.permissionDecision, undefined);
+      assert.match(fields.additionalContext, /could not be recorded/);
+      assert.equal(fields.updatedInput?.content, `keep=${SECRET_A}\n`);
+    }));
+
+  it("keeps denying under AGENT_SANITIZER_FAIL_OPEN=0", () =>
+    withEnv(
+      { TMPDIR: UNWRITABLE_TMPDIR, AGENT_SANITIZER_FAIL_OPEN: "0" },
+      async () => {
+        for (let call = 0; call < 2; call++) {
+          const fields = await buildPreToolUseResponse(
+            dropWrite,
+            realLayer4(dropIo(DISK)),
+          );
+          assert.equal(fields.permissionDecision, "deny");
+          assert.match(fields.permissionDecisionReason, /not tracked by git/);
+        }
+      },
+    ));
 });

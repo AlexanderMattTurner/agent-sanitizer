@@ -11,6 +11,7 @@
  * omission: a plan in a file whose name does not say "plan", a plan pasted into
  * chat or a PR body, an editor outside the session, and a `TodoWrite` checklist.
  */
+import { basename } from "node:path";
 import { createSkillGate, WRITE_TOOLS } from "./lib-skill-gate.mjs";
 import { bashCommand, runsGh } from "./lib-shell-intent.mjs";
 
@@ -49,7 +50,7 @@ export function namesAPlan(text) {
  */
 export function isPlanFile(filePath) {
   if (typeof filePath !== "string") return false;
-  const base = filePath.slice(filePath.lastIndexOf("/") + 1);
+  const base = basename(filePath);
   const dot = base.lastIndexOf(".");
   const stem = dot > 0 ? base.slice(0, dot) : base;
   const ext = dot > 0 ? base.slice(dot + 1).toLowerCase() : "";

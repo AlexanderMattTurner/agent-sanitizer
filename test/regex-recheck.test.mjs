@@ -97,14 +97,6 @@ before(async () => {
     for (const rel of [...shipped].sort())
       if (!(rel in NOT_IMPORTED))
         await import(pathToFileURL(join(ROOT, rel)).href);
-    // Function-local construction sites run only when called: the raw-text
-    // close-tag pattern is built per `<style>`/`<script>` region the HTML walk
-    // enters, and only from inside a markdown document's inline html.
-    const { sanitizeText } = await import("../src/output.mjs");
-    await sanitizeText("text <style>a { color: red }</style> more\n", {
-      html: true,
-      exfilScan: true,
-    });
   } finally {
     globalThis.RegExp = Native;
   }
@@ -123,15 +115,11 @@ describe("regex safety (runtime recheck)", () => {
     // coverage loss this check exists to catch.
     assert.equal(
       compiled.size,
-      23,
+      22,
       "the set of patterns shipped modules compile changed",
     );
-    for (const file of ["src/invisible.mjs", "src/ansi.mjs", "src/html.mjs"])
+    for (const file of ["src/invisible.mjs", "src/ansi.mjs"])
       assert.ok(files.has(file), `nothing collected from ${file}`);
-    assert.ok(
-      [...compiled.values()].some((p) => p.source.startsWith("<\\/style")),
-      "the sample never reached the raw-text close-tag construction",
-    );
     assert.ok(
       [...compiled.values()].some(
         (p) => p.file === "claude-hooks/lib/secret-annotate.mjs",

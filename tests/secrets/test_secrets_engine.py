@@ -7,8 +7,13 @@ env-bound values come from a :class:`RedactorConfig` instead of ``os.environ``.
 """
 
 import hashlib
+import os
 import re
+import shutil
+import subprocess
+import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -2381,6 +2386,22 @@ def test_configure_plugins_then_redact_configured():
     assert found == ["AWS Access Key"]
 
 
+def test_nested_configure_plugins_exit_keeps_the_outer_scan_working():
+    """The daemon's configuration stays active while a second ``serve()`` in the
+    same process enters and exits its own. That exit clears detect-secrets'
+    process-wide plugin map; the outer scan must still find every detector it
+    names, custom ones included, rather than raise on a missing plugin."""
+    from agent_sanitizer.secrets import configure_plugins, redact_configured
+
+    text = "key: AKIAIOSFODNN7EXAMPLE"
+    with configure_plugins():
+        with configure_plugins():
+            pass
+        out, found = redact_configured(text, None, RedactorConfig())
+    assert out == "key: [REDACTED: AWS Access Key]"
+    assert found == ["AWS Access Key"]
+
+
 def _env_spans(value, text):
     """`_env_value_spans` over the views its callers build for ``text``."""
     from agent_sanitizer.secrets.invisible import default_charset
@@ -2663,3 +2684,36 @@ def test_a_compute_budget_interrupts_one_very_long_line(monkeypatch):
     # raise above is the budget biting and not the input failing to scan.
     out, found = redact(line, RedactorConfig())
     assert found and "AKIA" not in out
+
+
+def test_redacts_when_the_package_path_needs_url_escaping(tmp_path):
+    """detect-secrets opens its plugin file by stripping `file://`, unescaped."""
+    root = Path(
+        subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+    install = tmp_path / "Jo Smith+dev"
+    shutil.copytree(
+        root / "python" / "agent_sanitizer",
+        install / "agent_sanitizer",
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+    # Assembled at run time so no complete key literal trips push protection.
+    key = "wJalrXUtnFEMI" + "/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    probe = (
+        "from agent_sanitizer.secrets.engine import redact; "
+        f"print(redact('aws_secret_access_key = {key}')[1])"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=install,
+        env={**os.environ, "PYTHONPATH": str(install)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() != "[]"

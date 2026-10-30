@@ -97,8 +97,10 @@ export const FAULT_POLICY_HOOKS = Object.freeze([
 /**
  * A hook's declared posture. There is deliberately no way for a policy to pin
  * the CLOSED arm: AGENT_SANITIZER_FAIL_OPEN alone decides, so no hook fault can
- * withhold a tool output or block a prompt unless the operator set the knob to
- * `0`. A pin turns any bug in the guarded layer into every tool call failing.
+ * withhold a tool output, block a prompt, or hold a tool call for good unless the
+ * operator set the knob to `0` (an open arm may refuse a call once, releasing the
+ * exact re-issue). A pin turns any bug in the guarded layer into every tool call
+ * failing.
  * @typedef {{
  *   event: string | null,
  *   guarded: string,

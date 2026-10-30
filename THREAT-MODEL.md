@@ -960,20 +960,28 @@ parsed, and a layer that ran and threw.
 One carve-out: when the PreToolUse hook itself fails (redactor daemon down,
 package failed to load, a layer threw) and the call is a **write-shaped tool**
 (Write/Edit/MultiEdit/NotebookEdit) whose input carries the `[REDACTED`
-placeholder prefix, the hook **asks** — fail-closed, human in the loop — instead
-of passing through. With the sanitizer down, rehydration cannot run, so the
-placeholder text would be persisted literally over the real secret on disk: a
-destructive clobber, not a missed scan. Holding these calls is safe because a
-placeholder-bearing write is never the benign availability case the open default
-protects — the model can retry once the sanitizer recovers, or ask the user. The
-check is package-free (a literal-string test on the already-parsed payload), so
+placeholder prefix, the hook **refuses it once** instead of passing it through.
+With the sanitizer down, rehydration cannot run, so the placeholder text would be
+persisted literally over the real secret on disk: a destructive clobber, not a
+missed scan. The refusal is releasable, never a loop: the exact same call
+re-issued is let through with a warning that the placeholder was written
+literally, and when the hook cannot record that confirmation (an unwritable
+`$TMPDIR`) it lets the call through at once with the warning. The same rule
+covers a write whose placeholder cannot be restored — a Layer-2 span missing
+from the store, an unreadable target, a redactor map that fails validation.
+Releasing an unhinted Edit on a file whose redactor map fails validation reopens
+the hidden-span probing oracle the rehydrator closes, at the price of one refusal
+per distinct probe, for as long as the redactor stays broken. An unhinted Write
+there skips the secret-drop guard, which reads the same broken map, so its
+refusal and warning say instead that any redacted secret it omits is removed. The check is
+package-free (a literal-string test on the already-parsed payload), so
 it holds even when the failure IS the missing package. Two accepted gaps: a
 launcher-level failure (no `node`, corrupt bundle, a provisioned hook binary
 that is missing, unexecutable or dies without a verdict) never reaches the
 check — the launcher cannot inspect the payload and always warns — and `Bash`
 is excluded even though shell redirection can also persist placeholder text,
-because command strings mention `[REDACTED` benignly far too often for the ask
-to hold precision. All other faults keep the open default, and
+because command strings mention `[REDACTED` benignly far too often for the
+refusal to hold precision. All other faults keep the open default, and
 `AGENT_SANITIZER_FAIL_OPEN=0` behavior is unchanged.
 
 **The open default is not enforceable against content.** Several of those
@@ -1005,13 +1013,13 @@ in `claude-hooks/sanitize-output.mjs` — so a host that wires those directly (a
 `test/downstream-parity.test.mjs` shows) keeps strict failure semantics by
 construction, with no env var to remember and none an agent could set for it.
 
-Two things the posture does NOT reach, in either direction:
-
-- **Detection verdicts.** It speaks only to the hook FAILING; a working
-  sanitizer that found an injection blocks under both settings.
-- **An unknown `--hook=` mode**, which still exits 2. That is static wiring
-  corruption, and passing it through would mean no hook ever runs — silently,
-  for the life of the install.
+The posture does NOT reach **detection verdicts**: it speaks only to the hook
+FAILING, and a working sanitizer that found an injection blocks under both
+settings. It does reach an unknown `--hook=` mode — static wiring corruption,
+from a `hooks.json` and bundle out of step: under the open default that hook
+exits non-blocking with a stderr line naming the mode and the fix, so every
+event it fires on reports the gap loudly instead of blocking the session, and
+under `=0` it exits 2.
 
 The knob is operator configuration read from the process environment, so
 anything that can set it for a session — `.claude/settings.json`'s `env` block,
@@ -1046,8 +1054,13 @@ extracts by walking the TypeScript AST of every shipped `.mjs` (not by matching
 regex source with a regex), and fails on any pattern with super-linear
 backtracking. A `RegExp(…)` built at runtime must be statically resolvable or
 carry a written exemption, so a new dynamic pattern is a red build rather than a
-hole. `tests/secrets/test_redos_static_guard.py` is the twin over the Python
-engine. In `pnpm lint`, `eslint-plugin-redos` (recheck) and
+hole. No construction may read call-time data either — a parameter, tool
+output, `process.env` — because a pattern compiled from it is as large as that
+data, and past V8's size limit it throws on every call; the same walk covers a
+string handed to `.match`/`.matchAll`/`.search`.
+`tests/secrets/test_redos_static_guard.py` is the twin over the Python engine,
+and `tests/secrets/test_regex_size_static_guard.py` holds the Python package to
+the call-time rule. In `pnpm lint`, `eslint-plugin-redos` (recheck) and
 `eslint-plugin-regexp`'s `no-super-linear-backtracking` and
 `no-super-linear-move` read every shipped regex literal — the last of them
 reports the shape that carries no backtracking at all, an **unanchored**

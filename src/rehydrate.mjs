@@ -823,6 +823,12 @@ function isCandidate(tool, ti) {
  * there is nothing to do. Throws only on internal error (the caller fails
  * closed).
  *
+ * A deny carrying `fault` is not a verdict on the input but this module being
+ * unable to do its job (an unreadable target, a redactor map that fails
+ * validation): `fault` states what proceeding un-rehydrated would write, and the
+ * caller's failure posture decides whether the deny stands. A deny without it
+ * is a verdict and stands in every posture.
+ *
  * `io` is the injected I/O (file read + redactor map/plain). `hint` is the
  * redaction-placeholder prefix (defaults to {@link DEFAULT_HINT}); override it
  * only if the injected redactor emits a different placeholder shape.
@@ -830,7 +836,7 @@ function isCandidate(tool, ti) {
  * @param {any} toolInput
  * @param {RehydrateIo} io
  * @param {{ hint?: string }} [options]
- * @returns {Promise<{updatedInput: any, context: string} | {deny: string} | null>}
+ * @returns {Promise<{updatedInput: any, context: string} | {deny: string, fault?: string} | null>}
  */
 export async function rehydrateRedacted(
   tool,
@@ -911,12 +917,17 @@ export async function rehydrateRedacted(
       if (tool !== "Write") throw err;
       return null;
     }
+    const cause = nodeErr?.code ?? nodeErr?.message;
     return {
       deny:
         `could not read ${toolInput.file_path} to rehydrate its secrets ` +
-        `(${nodeErr?.code ?? nodeErr?.message}); the file likely still exists, so writing ` +
+        `(${cause}); the file likely still exists, so writing ` +
         `the placeholder text as-is risks overwriting a real secret. Retry the read, or ` +
         `ask the user to make this change directly`,
+      fault:
+        `${toolInput.file_path} could not be read (${cause}) to rehydrate its ` +
+        `secrets, so this call is not rehydrated and its ${hint}…] placeholder ` +
+        `text is written to the file literally`,
     };
   }
   const { layer1Cleaned, cleaned } = layer1View(content);
@@ -949,8 +960,14 @@ export async function rehydrateRedacted(
     // reaches its own resolver-backed pass-through.
     if (tool === "MultiEdit") return multiEditDeny(toolInput.file_path);
     if (!hinted) return null;
+    // A verdict, not a fault: the file itself defeats mapping on every call, so
+    // a released re-issue would overwrite the real secret with its placeholder.
+    // The escape is to stop writing the placeholder, which the reason names.
     return {
-      deny: `cannot resolve redaction placeholders in ${toolInput.file_path}: ${mapped.unmappable}`,
+      deny:
+        `cannot resolve redaction placeholders in ${toolInput.file_path}: ` +
+        `${mapped.unmappable}. Leave every ${hint}…] placeholder out of this ` +
+        `call (edit around it), or ask the user to make this change`,
     };
   }
   // The redactor emits code-point offsets; the offset machinery below works in
@@ -970,9 +987,8 @@ export async function rehydrateRedacted(
   // before acting: construction re-checks range/ordering (the throws in
   // assertPairsOrdered and pairsToUtf16), viewMapDefect proves the view
   // reconstructs `cleaned` exactly. A defective map DENIES for every tool and
-  // hint state, and is deliberately NOT allowed to throw out of this module: a
-  // throw lands in the host's failure posture, whose shipped default is fail
-  // OPEN, i.e. the unsanitized placeholder write this module exists to prevent.
+  // hint state with a `fault`, never a throw: the deny lets the caller refuse
+  // the call once and name what proceeding writes, which a throw cannot.
   let view = null;
   let mapDefect = null;
   try {
@@ -993,14 +1009,25 @@ export async function rehydrateRedacted(
     // Reaching this line at all means the fast pass-through did not fire — the
     // file provably holds redacted content or diverges from its view — so an
     // unhinted pass-through here would hand the real Edit bytes inside spans
-    // nothing can vet (the R1 hidden-span oracle). Deny everything until the
-    // redactor is fixed.
+    // nothing can vet (the R1 hidden-span oracle). Deny, as a fault: the
+    // engine, not the input, is what is wrong.
     if (tool === "MultiEdit") return multiEditDeny(toolInput.file_path);
+    // A Write replaces the whole file, and the secret-drop guard reads this
+    // same broken map, so the loss it would name has to be named here instead.
+    const dropped =
+      tool === "Write"
+        ? `; it replaces the whole file, so any redacted secret it does not ` +
+          `reproduce is removed, and which secrets those are cannot be checked`
+        : "";
     return {
       deny:
         `cannot safely edit ${toolInput.file_path}: ${mapDefect}; the file holds ` +
         `redacted content whose location cannot be trusted, so no edit can be ` +
-        `verified. Retry later, or ask the user to make this change`,
+        `verified${dropped}. Retry later, or ask the user to make this change`,
+      fault:
+        `${mapDefect} for ${toolInput.file_path}, so this call is not ` +
+        `rehydrated: any ${hint}…] placeholder text in it is written to the ` +
+        `file literally, and it is applied without the redacted-span checks${dropped}`,
     };
   }
   // View identical to disk: any placeholders in an Edit's old_string are

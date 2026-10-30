@@ -255,22 +255,31 @@ async function runScanUnder(env, opts = {}) {
     return true;
   };
   const announced = [];
+  let stdout;
+  let exitCode;
   try {
     // The hook's stdout envelope must not reach the real stream: under
     // `--test-reporter=tap` that stream carries this suite's own result.
-    await withCapturedStdout(() =>
+    ({ stdout } = await withCapturedStdout(() =>
       scanInvisible.cliMain({
         trace: (event, fields) => announced.push({ event, ...fields }),
         ...opts,
       }),
-    );
+    ));
+    exitCode = process.exitCode;
   } finally {
     process.stderr.write = realWrite;
     process.exitCode = realExitCode;
     if (previous === undefined) delete process.env[FAIL_OPEN_ENV];
     else process.env[FAIL_OPEN_ENV] = previous;
   }
-  return { stderr, announced, alertArmed: invisibleCharAlert() !== null };
+  return {
+    stderr,
+    stdout,
+    exitCode,
+    announced,
+    alertArmed: invisibleCharAlert() !== null,
+  };
 }
 
 describe("SessionStart emits exactly its table entry on a hook FAULT", () => {
@@ -305,31 +314,51 @@ describe("SessionStart emits exactly its table entry on a hook FAULT", () => {
 });
 
 describe("an unreadable instruction file is a COVERAGE GAP, not a hook fault", () => {
-  // Re-pinned deliberately. This case used to assert that an EISDIR target
-  // propagated out of scanProject and rendered the hook's fault posture — which
-  // meant that under the shipped OPEN default it armed nothing, discarded the
-  // result for every OTHER instruction file, and left them unscanned and
-  // un-auto-cleaned. A benign ENOENT glob race, meanwhile, reached `partial` and
-  // armed the gate under both postures: the suspicious failure got WEAKER
-  // enforcement than the benign one.
-  //
-  // Any errno is now a skip. The assertions below are strictly louder than the
-  // old open arm — `partial` plus an armed gate in BOTH postures — and the rest
-  // of the project still gets scanned.
-  for (const [label, env] of POSTURES)
-    it(`announces partial and arms the gate under ${label}`, async () => {
-      const { stderr, announced, alertArmed } = await runScanUnder(env);
-      assert.deepEqual(
-        announced.map((a) => a.outcome),
-        ["partial"],
-      );
-      assert.equal(announced[0].skipped, 1);
-      assert.ok(alertArmed, "the gate was not armed for an unscanned file");
-      assert.match(stderr.join(""), /INSTRUCTION FILES NOT SCANNED/u);
-      // The errno text is scrubbed on its way to the operator's terminal and to
-      // the alert: it embeds a path globbed out of a possibly-hostile repo.
-      assert.match(invisibleCharAlert() ?? "", /CLAUDE\.md: EISDIR/u);
-    });
+  // The hook worked and is reporting what it could not check, so it announces
+  // `partial` rather than `skipped` and keeps scanning the rest of the project.
+  // Whether the gap may stop the session is still the operator's posture: the
+  // open default warns the user and the model at SessionStart and arms nothing,
+  // and only the opt-out arms the tool-call gate.
+  /** @param {Record<string, string>} env */
+  async function gapUnder(env) {
+    const run = await runScanUnder(env);
+    assert.deepEqual(
+      run.announced.map((a) => a.outcome),
+      ["partial"],
+    );
+    assert.equal(run.announced[0].skipped, 1);
+    // The errno text is scrubbed on its way to the operator's terminal and to
+    // the alert: it embeds a path globbed out of a possibly-hostile repo.
+    assert.match(run.stderr.join(""), /INSTRUCTION FILES NOT SCANNED/u);
+    assert.match(run.stderr.join(""), /CLAUDE\.md: EISDIR/u);
+    return run;
+  }
+
+  it("warns at SessionStart and arms no gate under the open default", async () => {
+    const { alertArmed, exitCode, stdout } = await gapUnder({});
+    assert.equal(
+      alertArmed,
+      false,
+      "the open default armed the tool-call gate",
+    );
+    assert.ok(
+      !exitCode,
+      `exit ${exitCode}: the launcher would call it a crash`,
+    );
+    const envelope = JSON.parse(stdout);
+    const context = envelope.hookSpecificOutput.additionalContext;
+    assert.equal(envelope.hookSpecificOutput.hookEventName, "SessionStart");
+    assert.match(context, /CLAUDE\.md: EISDIR/u);
+    assert.match(context, /failing open/u);
+    assert.equal(envelope.systemMessage, context);
+  });
+
+  it("arms the gate under the opt-out", async () => {
+    const { alertArmed, stdout } = await gapUnder({ [FAIL_OPEN_ENV]: "0" });
+    assert.ok(alertArmed, "the gate was not armed for an unscanned file");
+    assert.equal(stdout, "");
+    assert.match(invisibleCharAlert() ?? "", /CLAUDE\.md: EISDIR/u);
+  });
 
   it("keeps scanning the rest of the project", () => {
     // The regression the old ENOENT-only catch caused: one unreadable target
@@ -342,7 +371,12 @@ describe("an unreadable instruction file is a COVERAGE GAP, not a hook fault", (
 });
 
 describe("the plugin dispatcher's unknown-mode arm comes from the table", () => {
-  for (const [label, env] of POSTURES)
+  // Broken hooks.json wiring is a FAULT like any other: exit 1 (non-blocking)
+  // under the open default, exit 2 (blocking) only under the opt-out.
+  for (const [label, env, blockingExit] of [
+    [...POSTURES[0], 1],
+    [...POSTURES[1], 2],
+  ])
     it(`under ${label}`, () => {
       const res = spawnSync(
         process.execPath,
@@ -356,9 +390,8 @@ describe("the plugin dispatcher's unknown-mode arm comes from the table", () => 
       );
       assert.equal(res.stderr, expected.stderr);
       assert.equal(res.status, expected.exitCode);
-      // Declared, not incidental: static wiring corruption means no hook runs
-      // at all for the life of the install, so this arm blocks in BOTH
-      // postures — on the record, next to the four that degrade.
-      assert.equal(res.status, 2);
+      assert.equal(res.status, blockingExit);
+      assert.equal(res.stdout, "");
+      assert.match(res.stderr, /no-such-hook.*reinstall or update the plugin/u);
     });
 });

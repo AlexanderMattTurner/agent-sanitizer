@@ -244,6 +244,7 @@ const PUBLISHED_EXPORTS = {
     "claimCliEntry",
     "configureHookgateMarker",
     "configureMissingPackageRemedy",
+    "createEnvelopeBuffer",
     "currentUid",
     "disabledHooks",
     "emitHookResponse",

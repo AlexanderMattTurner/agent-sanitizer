@@ -119,14 +119,23 @@ proceeds and the model is told, in `additionalContext`, that what it is reading
 was never sanitized — tool output a dead redactor could not check for secrets
 included. One exception, with secrets enabled, when the hook process starts but
 its machinery fails: a write-shaped call (Write/Edit/MultiEdit/NotebookEdit) whose
-input carries `[REDACTED` placeholder text **asks** even under the open
-default — with the sanitizer down, rehydration cannot run, and passing it
-through would persist the placeholder over the real secret on disk. (A missing
+input carries `[REDACTED` placeholder text is **refused once** — with the
+sanitizer down, rehydration cannot run, and passing it through would persist the
+placeholder over the real secret on disk. Re-issuing the exact same call writes
+it literally, with a warning; if the hook cannot record that confirmation, the
+call proceeds at once with the warning, so a fault never leaves the model stuck.
+The same refuse-once rule covers an Edit/Write whose placeholder the hook cannot
+restore: a missing span, an unreadable target, a redactor map that fails
+validation. (A missing
 `node` or a corrupt bundle is caught earlier by the launcher, which cannot
 inspect the payload and always warns.) What it never does is fail SILENTLY — Claude Code treats a
 crashed hook as "no objection" and says nothing, so the launcher
 (`scripts/safe-launch.sh`) speaks even when node is missing or the bundle is
-corrupt. A deployment that would rather keep guarding than keep working sets
+corrupt. It also runs a watchdog: a hook still running after its per-event
+budget (2 minutes; 3 for PostToolUse, 5 for SessionStart, each above the
+deadlines a healthy run can add up to) is killed and answered the same way, so a
+hung hook costs that budget rather than `hooks.json`'s 30-minute timeout. A
+deployment that would rather keep guarding than keep working sets
 `AGENT_SANITIZER_FAIL_OPEN=0` (below) and gets a block, an ask, or a suppression
 instead.
 
@@ -210,8 +219,8 @@ And one posture knob, for what happens when a hook itself fails:
 Unset, a missing `node`, a corrupt bundle, an uninstalled package, an
 unreachable redaction daemon or a layer that threw all let the guarded action
 proceed with the warning attached. One exception, with secrets enabled, when the
-hook process does run at all: a placeholder-bearing write asks instead — see
-above. (A missing
+hook process does run at all: a placeholder-bearing write is refused once, and
+proceeds on the exact re-issue — see above. (A missing
 `node` or a corrupt bundle is handled by the launcher, which cannot inspect
 the payload and always warns.) Set to `0` (or `false`; every other value,
 including `1`, is the open default) they halt instead.
@@ -230,8 +239,8 @@ that the layers actually flagged is blocked or rewritten the same way either
 way.
 
 Variables prefixed `_AGENT_SANITIZER_` are internal plumbing (the redactor socket
-and its deadlines, the sanitization budget, the trace channel). `hooks.json` sets
-what it needs; they are not a stable interface and may change between releases.
+and its deadlines, the sanitization budget, the launcher's watchdog budget, the
+trace channel). `hooks.json` sets what it needs; they are not a stable interface and may change between releases.
 
 ## What is not included
 
