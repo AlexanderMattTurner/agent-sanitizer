@@ -870,7 +870,7 @@ export function hookgateMarkerPath(
   // Prefer the per-user, mode-0700 runtime dir when the harness gives an
   // absolute one; else the world-writable /tmp, where markerIsTrusted() — not
   // the path — defends against a squatted marker.
-  const base = runtimeDir && runtimeDir.startsWith("/") ? runtimeDir : "/tmp";
+  const base = runtimeDir && isAbsolute(runtimeDir) ? runtimeDir : "/tmp";
   // The flattened dir is for a human reading `ls /tmp`; the digest of the RAW
   // dir is the identity. Flattening alone is lossy — /work/a-b, /work/a_b and
   // "/work/a b" all collapse to one name — and two such projects on one machine
@@ -882,7 +882,7 @@ export function hookgateMarkerPath(
     .digest("hex")
     .slice(0, 8);
   const flattened = projectDir.replace(/[^A-Za-z0-9]/g, "_");
-  return `${base}/${HOOKGATE_MARKER_STEM}${flattened}-${digest}`;
+  return join(base, `${HOOKGATE_MARKER_STEM}${flattened}-${digest}`);
 }
 
 /**
