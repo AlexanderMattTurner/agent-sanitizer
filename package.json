@@ -165,6 +165,11 @@
       "default": "./src/rehydrate.mjs"
     },
     "./credential-names": "./python/agent_sanitizer/secrets/data/credential-names.json",
+    "./credential-files-matcher": {
+      "types": "./types/credential-files.d.mts",
+      "default": "./src/credential-files.mjs"
+    },
+    "./credential-files": "./python/agent_sanitizer/secrets/data/credential-files.json",
     "./claude-hooks": {
       "types": "./types/claude-hooks/plugin-hooks.d.mts",
       "default": "./claude-hooks/plugin-hooks.mjs"
@@ -235,6 +240,7 @@
     "src/vendor/*.mjs",
     "python/agent_sanitizer/data/invisible-charset.json",
     "python/agent_sanitizer/secrets/data/credential-names.json",
+    "python/agent_sanitizer/secrets/data/credential-files.json",
     "python/agent_sanitizer/secrets/data/redaction-floor.json",
     "python/agent_sanitizer/secrets/data/redactor-protocol.json",
     "claude-hooks/*.mjs",

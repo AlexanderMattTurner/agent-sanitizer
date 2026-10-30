@@ -254,6 +254,10 @@ const FUZZ_EXEMPT = Object.freeze({
     "validates or renders the shipped credential-names data, which is not untrusted input",
     ["credentialNameMatcher", "credentialNames", "parseCredentialNames"],
   ),
+  ...withReason(
+    "validates the shipped credential-files data, or matches a path against it by a regex-free glob walk; never-throws and case-fold invariants are pinned by property tests in credential-files.test",
+    ["credentialFiles", "credentialPathMatcher", "parseCredentialFiles"],
+  ),
 
   // ── hook stages reached through a fuzz-required hook entry point ──────────
   ...withReason(

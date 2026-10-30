@@ -196,6 +196,11 @@ const PUBLISHED_EXPORTS = {
     "suppressToolOutput",
     "withheldWarning",
   ],
+  "./credential-files-matcher": [
+    "credentialFiles",
+    "credentialPathMatcher",
+    "parseCredentialFiles",
+  ],
   "./credential-names-matcher": [
     "credentialNameMatcher",
     "credentialNames",

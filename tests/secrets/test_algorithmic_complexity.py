@@ -126,6 +126,7 @@ _TEXT_ENTRY_POINTS = {
 # scope. A name here is a claim a reader can check, not a silent omission.
 _NON_TEXT_EXPORTS = {
     "ANY_SEGMENT_SCOPE": "a scope constant",
+    "CREDENTIAL_FILES_FILE": "a path to the vocabulary file",
     "CREDENTIAL_NAMES_FILE": "a path to the vocabulary file",
     "DEFAULT_MIN_SECRET_LEN": "an int floor",
     "RedactionBudgetExceeded": "an exception type",
@@ -133,11 +134,16 @@ _NON_TEXT_EXPORTS = {
     "TRAILING_SCOPE": "a scope constant",
     "configure_plugins": "a context manager over plugin settings, takes no text",
     "credential_field_name_patterns": "returns the vocabulary's renderings",
+    "credential_directories": "returns the credential-file vocabulary's directory names",
+    "credential_name_globs": "returns the credential-file vocabulary's leaf-name globs",
     "credential_name_matcher": "a predicate over an env-var NAME, not a document",
+    "credential_path_globs": "returns the credential-file vocabulary's path globs",
+    "credential_path_matcher": "a predicate over a file PATH; its long-path stall test is in test_credential_files.py",
     "credential_name_segments": "returns the vocabulary's renderings",
     "default_charset": "returns the invisible-charset set",
     "handle_request": "the daemon's socket frame handler; covered by the daemon suite",
     "non_secret_name_segments": "returns the vocabulary's renderings",
+    "parse_credential_files": "parses the packaged vocabulary file, not untrusted text",
     "parse_credential_names": "parses the packaged vocabulary file, not untrusted text",
 }
 
