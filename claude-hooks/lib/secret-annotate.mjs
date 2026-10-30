@@ -17,7 +17,7 @@ import charset from "../../python/agent_sanitizer/data/invisible-charset.json" w
 // Invisible characters an attacker can splice between a value's characters to
 // break an exact-substring pre-gate while the daemon's redactor still matches
 // across them. Built from the SAME pinned charset Layer 1 strips and the daemon
-// tolerates (`invisible_run_pattern` in agent_sanitizer.secrets.invisible), not
+// tolerates (`_env_value_spans` in agent_sanitizer.secrets.engine), not
 // a hand-curated subset: a subset pre-gate silently under-matches whenever this
 // gate runs on text Layer 1 has not already stripped, and a value spliced with a
 // code point in the gap then never reaches the daemon at all.

@@ -47,7 +47,6 @@ from .credential_names import (
 )
 from .invisible import (
     identity_map,
-    invisible_run_pattern,
     newline_offsets,
     strip_escapes_with_map,
     strip_invisible,
@@ -342,51 +341,40 @@ def _resolve_marks(text: str, entries: list[tuple[str, str]]) -> tuple[str, list
     return "".join(out), pairs
 
 
-# NOT memoized: `re.compile` self-caches identical patterns, so a decorator here
-# is redundant for perf — and an `lru_cache(maxsize=None)` keyed on `value` would
-# retain every requester's PLAINTEXT env-secret forever (unbounded growth plus
-# secret hoarding), since the daemon calls this per request with live secrets.
-def _env_value_re(value: str, charset: frozenset[int]) -> re.Pattern[str]:
-    """Match ``value`` tolerating invisible chars (from ``charset``) spliced
-    between its characters.
-
-    Each interior gap allows zero-or-more invisibles, so the plain value still
-    matches (a superset of exact substring). Required literals between every gap
-    keep the pattern linear — no ReDoS — but only while no literal is itself an
-    invisible: ``a<ZWSP>a`` would build ``a[…]*<ZWSP>[…]*a``, two stars sharing the
-    literal, and backtrack quadratically over a long run of ZWSP. So the value's
-    own invisibles are dropped first (the text side is tolerant of them anyway).
-    A value made only of invisibles has no literal to anchor a gap on and is
-    matched exactly."""
-    visible = strip_invisible(value, charset)
-    if not visible:
-        return re.compile(re.escape(value))
-    run = invisible_run_pattern(charset)
-    return re.compile(run.join(re.escape(c) for c in visible))
-
-
 def _env_value_spans(
-    pattern: re.Pattern[str],
+    value: str,
     text: str,
     unescaped: tuple[str, Sequence[int]] | None,
+    charset: frozenset[int],
 ) -> list[tuple[int, int]]:
-    """The ascending, disjoint spans of ``text`` an :func:`_env_value_re`
-    ``pattern`` matches: in ``text`` itself, or in ``unescaped``, its
-    :func:`strip_escapes_with_map` view, mapped back.
+    """The ascending, disjoint spans of ``text`` holding ``value`` with any run
+    of ``charset`` invisibles spliced between its characters: found in ``text``'s
+    invisible-stripped view or in ``unescaped``, its
+    :func:`strip_escapes_with_map` view, and mapped back.
 
-    The gap stays invisible-only, because folding escape sequences into it would
-    make the pattern ambiguous: two of ANSI_RE's arms both match a lone C1
-    introducer, so a run of them backtracks exponentially. A view match covers
-    the escape bytes inside it and none at its edges, so map mode records the
-    exact bytes it replaced. Of two overlapping spans the earlier, then the
-    longer, wins, as ``re.sub`` would pick."""
-    spans = [m.span() for m in pattern.finditer(text)]
-    if unescaped is not None:
-        stripped, offsets = unescaped
-        spans.extend(
-            (offsets[m.start()], offsets[m.end() - 1] + 1)
-            for m in pattern.finditer(stripped)
-        )
+    Both views are invisible-free, so the match is a plain substring search for
+    ``value``'s own visible characters. That is exactly "visible characters
+    separated only by invisibles" in the original, and it is linear in the text
+    and independent of the value's length — a regex with an invisible run at
+    every gap grows by a full character class per character, so a long secret
+    (a PEM key) compiles slowly or not at all. A value made only of invisibles
+    has no visible character to search for and is matched exactly in ``text``.
+    A view match covers the deleted bytes inside it and none at its edges. Of two
+    overlapping spans the earlier, then the longer, wins."""
+    needle = strip_invisible(value, charset)
+    if needle:
+        views = [strip_invisible_with_map(text, charset)]
+        if unescaped is not None:
+            views.append(unescaped)
+    else:
+        needle, views = value, [identity_map(text)]
+    spans: list[tuple[int, int]] = []
+    for view, offsets in views:
+        at = view.find(needle)
+        while at != -1:
+            end = at + len(needle)
+            spans.append((offsets[at], offsets[end - 1] + 1))
+            at = view.find(needle, end)
     disjoint: list[tuple[int, int]] = []
     for start, end in sorted(spans, key=lambda span: (span[0], -span[1])):
         if not disjoint or start >= disjoint[-1][1]:
@@ -398,7 +386,7 @@ def _env_secrets_longest_first(
     config: RedactorConfig, charset: frozenset[int]
 ) -> list[tuple[str, str]]:
     """``config.env_secrets`` ordered longest first by the visible length
-    :func:`_env_value_re` matches on, so a secret that is a substring of another
+    :func:`_env_value_spans` matches on, so a secret that is a substring of another
     never claims the longer one's bytes."""
     return sorted(
         config.env_secrets.items(),
@@ -447,9 +435,7 @@ def _redact_env_bound(
             continue
         spans = [
             SpliceSpan(start, end, placeholder(name))
-            for start, end in _env_value_spans(
-                _env_value_re(value, charset), text, unescaped
-            )
+            for start, end in _env_value_spans(value, text, unescaped, charset)
         ]
         merged = _merge_free_spans(taken, spans)
         if len(merged) > len(taken):
@@ -1983,9 +1969,7 @@ def _cross_line_candidate_spans(
             continue
         spans.extend(
             CrossLineSpan(start, end, placeholder(name), name)
-            for start, end in _env_value_spans(
-                _env_value_re(value, charset), collapsed, unescaped
-            )
+            for start, end in _env_value_spans(value, collapsed, unescaped, charset)
         )
     return spans
 

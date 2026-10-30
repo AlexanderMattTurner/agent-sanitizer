@@ -6,7 +6,6 @@ sanitizer's), the strip semantics, and the fail-closed behaviour when the shared
 dependency is unavailable.
 """
 
-import re
 import unicodedata
 
 import pytest
@@ -16,7 +15,6 @@ from agent_sanitizer.secrets import invisible as I
 from agent_sanitizer.secrets.invisible import (
     default_charset,
     identity_map,
-    invisible_run_pattern,
     strip_invisible_with_map,
 )
 import agent_sanitizer.secrets.engine as E
@@ -175,22 +173,6 @@ def test_strip_invisible_with_map_deletes_and_offsets_correctly():
     assert all(text[offsets[i]] == result_text[i] for i in range(len(result_text)))
 
 
-# ─── invisible_run_pattern domain ────────────────────────────────────────────
-
-
-def test_env_invis_run_domain_equals_charset():
-    """The env-bound run pattern tolerates EXACTLY the charset's code points — no
-    subset (a splice using an omitted char would evade the matcher) and no
-    superset (dead weight in the class)."""
-    charset = default_charset()
-    pattern = invisible_run_pattern(charset)
-    inner = re.compile("[" + pattern[1:-2] + "]")
-    for cp in sorted(charset):
-        assert inner.match(chr(cp)), f"U+{cp:04X} missing from run pattern"
-    assert not inner.match("a")
-    assert not inner.match(" ")
-
-
 # ─── Fail closed when the shared dependency is unavailable ───────────────────
 
 
@@ -232,9 +214,6 @@ def test_an_empty_charset_strips_nothing_rather_than_failing_to_compile():
     accented = "caf\u00e9"
     assert strip_invisible_with_map(accented, frozenset()) == identity_map(accented)
     assert strip_invisible(accented, frozenset()) == accented
-    run = re.compile(invisible_run_pattern(frozenset()))
-    assert run.fullmatch("") is not None
-    assert run.match("\u200b").group(0) == ""
 
 
 @pytest.mark.parametrize(
