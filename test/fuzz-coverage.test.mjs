@@ -315,7 +315,6 @@ const FUZZ_EXEMPT = Object.freeze({
       "disabledHooks",
       "dynamicSecretVars",
       "envBoundSecretVars",
-      "envValueRegex",
       "extraSecretVars",
       "failOpenEnabled",
       "inferenceKeyVars",

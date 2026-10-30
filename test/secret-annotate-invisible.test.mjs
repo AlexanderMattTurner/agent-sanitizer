@@ -1,25 +1,18 @@
 /**
  * The env-value pre-gate's invisible tolerance derives from the generated
- * cross-language charset, not a hand-curated subset.
- *
- * This closes a real fail-open. `envValueRegex` previously tolerated a ~17-char
- * curated list of bidi/zero-width controls, a strict subset of the set the
- * daemon's redactor matches across — so a configured secret spliced with any
- * code point in the gap (a tag char U+E0001, an Egyptian control U+13439, …)
- * failed `hasEnvBoundSecret`, the daemon was never called, and the value
- * reached the model verbatim. The tolerance is asserted here FROM the generated
- * charset, so a code point added to the SSOT is covered the day it lands —
- * one source read by a consumer, no second list to drift.
+ * cross-language charset, not a hand-curated subset: a configured secret
+ * spliced with any code point the daemon's redactor matches across (a tag char
+ * U+E0001, an Egyptian control U+13439, …) must still trip `hasEnvBoundSecret`,
+ * or the daemon is never called and the value reaches the model verbatim. The
+ * tolerance is asserted FROM the generated charset, so a code point added to the
+ * SSOT is covered the day it lands.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import {
-  envValueRegex,
-  hasEnvBoundSecret,
-} from "../claude-hooks/lib/secret-annotate.mjs";
+import { hasEnvBoundSecret } from "../claude-hooks/lib/secret-annotate.mjs";
 
 const charset = JSON.parse(
   readFileSync(
@@ -36,23 +29,32 @@ const allInvisible = [
   ...new Set([...charset.cf_codepoints, ...charset.extra_codepoints]),
 ];
 
+// A credential-shaped name that exists only in the env each test passes.
+const NAME = "AIS_TEST_ONLY_DEPLOY_TOKEN";
 const VALUE = "sk-abc123def456ghi789";
+const ZWSP = "\u200B";
 
-describe("envValueRegex tolerates the full generated invisible charset", () => {
+/**
+ * @param {string} text
+ * @param {string} [value]
+ */
+const gate = (text, value = VALUE) =>
+  hasEnvBoundSecret(text, { [NAME]: value });
+
+describe("hasEnvBoundSecret tolerates the full generated invisible charset", () => {
   it("has a charset to check (non-vacuous)", () => {
     assert.ok(allInvisible.length > 300, `only ${allInvisible.length} cps`);
   });
 
   it("matches the plain value", () => {
-    assert.ok(envValueRegex(VALUE).test(`out ${VALUE} put`));
+    assert.equal(gate(`out ${VALUE} put`), true);
   });
 
   it("matches the value spliced with EVERY charset code point", () => {
-    const re = envValueRegex(VALUE);
     const missed = allInvisible.filter((cp) => {
       const spliced =
         VALUE.slice(0, 3) + String.fromCodePoint(cp) + VALUE.slice(3);
-      return !re.test(`out ${spliced} put`);
+      return !gate(`out ${spliced} put`);
     });
     assert.deepEqual(
       missed.map((cp) => `U+${cp.toString(16).toUpperCase()}`),
@@ -62,85 +64,79 @@ describe("envValueRegex tolerates the full generated invisible charset", () => {
   });
 
   it("still refuses a genuinely different value", () => {
-    assert.equal(envValueRegex(VALUE).test("out sk-abc999 put"), false);
+    assert.equal(gate("out sk-abc999 put"), false);
+  });
+
+  it("refuses a visible character spliced into the value", () => {
+    assert.equal(gate(`out ${VALUE.slice(0, 3)}x${VALUE.slice(3)} put`), false);
   });
 });
 
-describe("envValueRegex is memoized", () => {
-  // The class the fix above installs is ~4 KB of source joined at EVERY interior
-  // gap, so a 20-char value compiles a ~75 KB pattern — once per configured var,
-  // on every PostToolUse output. Identity, not timing: a cache that silently
-  // stopped caching would still pass a wall-clock assertion on a fast machine.
-  it("returns the same instance for the same value", () => {
-    assert.equal(envValueRegex(VALUE), envValueRegex(VALUE));
+describe("hasEnvBoundSecret with a long configured value", () => {
+  // A PEM key or service-account JSON bound to a credential-named var. Compiling
+  // the value into a regex with an invisible run at every gap overflowed V8's
+  // size limit here, and the throw failed every tool output.
+  const LONG = Array.from({ length: 20000 }, (_, i) =>
+    String.fromCharCode(33 + ((i * 7) % 90)),
+  ).join("");
+
+  it("answers without throwing on output that lacks it", () => {
+    assert.equal(gate("echo hello", LONG), false);
   });
 
-  it("does not confuse distinct values", () => {
-    const other = `${VALUE}-other`;
-    assert.notEqual(envValueRegex(VALUE), envValueRegex(other));
-    assert.ok(envValueRegex(other).test(`out ${other} put`));
-    // The cached instance must still be usable twice — a `g`/`y` flag would
-    // carry `lastIndex` between calls and make the second test() miss.
-    const re = envValueRegex(VALUE);
-    assert.ok(re.test(`out ${VALUE} put`));
-    assert.ok(re.test(`out ${VALUE} put`), "shared instance carried state");
+  it("matches it plain and spliced", () => {
+    assert.equal(gate(`a ${LONG} b`, LONG), true);
+    const spliced = LONG.slice(0, 9000) + ZWSP + LONG.slice(9000);
+    assert.equal(gate(`a ${spliced} b`, LONG), true);
   });
 });
 
-describe("envValueRegex with a value that itself holds an invisible", () => {
-  // `a<ZWSP>a` used to build `a[…]*<ZWSP>[…]*a`: the required literal is a member
-  // of both neighbouring starred classes, so a long ZWSP run followed by a
-  // non-match backtracked over quadratically many partitions (~6 s at 16k).
-  const ZWSP = "​";
-  const VALUE_WITH_INVISIBLE = `abc${ZWSP}def`;
+describe("hasEnvBoundSecret with a value that itself holds an invisible", () => {
+  const VALUE_WITH_INVISIBLE = `abcdefgh${ZWSP}ijklmnop`;
 
-  it("never leaves a required literal that the neighbouring runs also match", () => {
-    // The linearity argument is "each literal between two runs is matched by
-    // neither", so check that directly rather than timing a hostile input: a
-    // wall-clock bound measures the runner, and the structural condition is the
-    // whole cause. Positive marker: the runs are present to strip.
-    const { source } = envValueRegex(VALUE_WITH_INVISIBLE);
-    assert.match(source, /\]\*/u);
-    const literals = source.replace(/\[[^\]]*\]\*/gu, "");
-    assert.equal(literals, "abcdef");
-    const leaked = [...literals].filter((ch) =>
-      allInvisible.includes(ch.codePointAt(0)),
-    );
-    assert.deepEqual(leaked, []);
-  });
-
-  it("still matches the value as typed, with the invisible removed, or re-spliced", () => {
-    const re = envValueRegex(VALUE_WITH_INVISIBLE);
+  it("matches the value as typed, with the invisible removed, or re-spliced", () => {
     for (const text of [
       `out ${VALUE_WITH_INVISIBLE} put`,
-      "out abcdef put",
-      `out abc${ZWSP}${ZWSP}${ZWSP}def put`,
-      `out a⁠bc${ZWSP}def put`,
+      "out abcdefghijklmnop put",
+      `out abcdefgh${ZWSP}${ZWSP}${ZWSP}ijklmnop put`,
+      `out a\u2060bcdefgh${ZWSP}ijklmnop put`,
     ])
-      assert.ok(re.test(text), JSON.stringify(text));
-    assert.equal(re.test("out abcxdef put"), false);
+      assert.equal(
+        gate(text, VALUE_WITH_INVISIBLE),
+        true,
+        JSON.stringify(text),
+      );
+    assert.equal(
+      gate("out abcdefghxijklmnop put", VALUE_WITH_INVISIBLE),
+      false,
+    );
   });
 
-  it("matches a value made only of invisibles exactly, not as a match-everything pattern", () => {
-    const re = envValueRegex(`${ZWSP}${ZWSP}`);
-    assert.equal(re.test("ordinary text"), false);
-    assert.ok(re.test(`x${ZWSP}${ZWSP}y`));
+  it("is linear over a long invisible run followed by a non-match", () => {
+    // The structural hazard of a run-at-every-gap regex: a literal shared with
+    // its neighbouring runs backtracks quadratically. Stripping has no runs.
+    const hostile = `abcdefgh${ZWSP.repeat(200000)}x`;
+    assert.equal(gate(hostile, VALUE_WITH_INVISIBLE), false);
+  });
+
+  it("matches a value made only of invisibles exactly, not as a match-everything needle", () => {
+    const onlyInvisible = ZWSP.repeat(16);
+    assert.equal(gate("ordinary text", onlyInvisible), false);
+    assert.equal(gate(`x${onlyInvisible}y`, onlyInvisible), true);
   });
 });
 
 describe("hasEnvBoundSecret reads names and values from the SAME env", () => {
-  // A credential-shaped name that exists only in the passed env must be
-  // checked. Reading the names from process.env and the values from `env`
-  // let a caller's snapshot hold a secret the gate never looked at.
-  const name = "AIS_TEST_ONLY_DEPLOY_TOKEN";
+  // Reading the names from process.env and the values from `env` let a caller's
+  // snapshot hold a secret the gate never looked at.
   it("fires on a value bound only in the passed env", () => {
-    assert.equal(process.env[name], undefined);
-    assert.equal(
-      hasEnvBoundSecret(`out ${VALUE} put`, { [name]: VALUE }),
-      true,
-    );
+    assert.equal(process.env[NAME], undefined);
+    assert.equal(gate(`out ${VALUE} put`), true);
   });
   it("stays shut when the passed env does not hold the value", () => {
     assert.equal(hasEnvBoundSecret(`out ${VALUE} put`, {}), false);
+  });
+  it("ignores a value shorter than the configured floor", () => {
+    assert.equal(gate("out sk-short put", "sk-short"), false);
   });
 });

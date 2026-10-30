@@ -105,13 +105,6 @@ before(async () => {
       html: true,
       exfilScan: true,
     });
-    // The env-value matcher's source depends on the configured secret: one
-    // plain value, one carrying its own invisible (the shared-literal case the
-    // splice drops), one astral, and one made only of invisibles.
-    const { envValueRegex } =
-      await import("../claude-hooks/lib/secret-annotate.mjs");
-    for (const value of ["ab1", "a\u200Ba", "x\u{1F600}y", "\u200B\u200C"])
-      envValueRegex(value);
   } finally {
     globalThis.RegExp = Native;
   }
@@ -130,7 +123,7 @@ describe("regex safety (runtime recheck)", () => {
     // coverage loss this check exists to catch.
     assert.equal(
       compiled.size,
-      26,
+      23,
       "the set of patterns shipped modules compile changed",
     );
     for (const file of ["src/invisible.mjs", "src/ansi.mjs", "src/html.mjs"])
@@ -138,12 +131,6 @@ describe("regex safety (runtime recheck)", () => {
     assert.ok(
       [...compiled.values()].some((p) => p.source.startsWith("<\\/style")),
       "the sample never reached the raw-text close-tag construction",
-    );
-    assert.ok(
-      [...compiled.values()].some(
-        (p) => p.file === "claude-hooks/lib/secret-annotate.mjs",
-      ),
-      "the samples never reached envValueRegex",
     );
   });
 
