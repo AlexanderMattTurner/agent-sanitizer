@@ -131,7 +131,11 @@ validation. (A missing
 inspect the payload and always warns.) What it never does is fail SILENTLY — Claude Code treats a
 crashed hook as "no objection" and says nothing, so the launcher
 (`scripts/safe-launch.sh`) speaks even when node is missing or the bundle is
-corrupt. A deployment that would rather keep guarding than keep working sets
+corrupt. It also runs a watchdog: a hook still running after its per-event
+budget (2 minutes; 3 for PostToolUse, 5 for SessionStart, each above the
+deadlines a healthy run can add up to) is killed and answered the same way, so a
+hung hook costs that budget rather than `hooks.json`'s 30-minute timeout. A
+deployment that would rather keep guarding than keep working sets
 `AGENT_SANITIZER_FAIL_OPEN=0` (below) and gets a block, an ask, or a suppression
 instead.
 
@@ -235,8 +239,8 @@ that the layers actually flagged is blocked or rewritten the same way either
 way.
 
 Variables prefixed `_AGENT_SANITIZER_` are internal plumbing (the redactor socket
-and its deadlines, the sanitization budget, the trace channel). `hooks.json` sets
-what it needs; they are not a stable interface and may change between releases.
+and its deadlines, the sanitization budget, the launcher's watchdog budget, the
+trace channel). `hooks.json` sets what it needs; they are not a stable interface and may change between releases.
 
 ## What is not included
 
