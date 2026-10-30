@@ -206,6 +206,8 @@ export const OUT_OF_SCOPE = Object.freeze({
     "asserts the PreToolUse layer ORDER on what the hook emits",
   "claude-hooks-roundtrip.fuzz.test.mjs":
     "fuzzes the sanitize to edit to rehydrate loop, whose input is sanitized text",
+  "claude-hooks-fault-model.property.test.mjs":
+    "fuzzes fault SEQUENCES through the hook CLIs over fixed benign payloads; its alphabet is faults, not code points",
   "cli.test.mjs": "pins the CLI I/O envelope against sanitize as its oracle",
 });
 
