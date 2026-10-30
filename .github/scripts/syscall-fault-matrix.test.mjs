@@ -98,6 +98,9 @@ test("loggedExit reads one process's own exit line", () => {
   // 102 is still running; 10 is a prefix of 101, not 101.
   assert.equal(loggedExit(TRACE, "102"), undefined);
   assert.equal(loggedExit(TRACE, "10"), undefined);
+  // strace pads the pid column to a fixed width.
+  assert.equal(loggedExit("8321  +++ exited with 3 +++", "8321"), 3);
+  assert.equal(loggedExit("8321  +++ killed by SIGKILL +++", "8321"), 128);
 });
 
 test("a path that merely shares the root's prefix is out of scope", () => {
@@ -183,6 +186,7 @@ test("straceArgv filters every group by path except connect", () => {
     "-q",
     "-y",
     "--seccomp-bpf",
+    "-I1",
     "-o",
     "/l",
     "-e",
