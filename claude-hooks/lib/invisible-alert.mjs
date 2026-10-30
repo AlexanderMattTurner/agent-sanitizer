@@ -147,10 +147,11 @@ export function alertAckFile(sessionId) {
  * Marker the InstructionsLoaded scanner writes on every fire, so another hook
  * can tell whether that event is being scanned at all this session.
  * @param {string} [sessionId]
+ * @param {string} [base]  the store's root prefix
  * @returns {string}
  */
-export function instructionsLoadedFile(sessionId) {
-  return `${sessionPrefix(sessionId)}.instructions-loaded`;
+export function instructionsLoadedFile(sessionId, base = ALERT_BASE) {
+  return `${sessionPrefix(sessionId, base)}.instructions-loaded`;
 }
 
 /**
@@ -171,16 +172,28 @@ export function instructionsLoadedNoticeFile(sessionId) {
  * it is written once at launch, so otherwise a session outliving
  * MARKER_TTL_MS would have it swept by another session's SessionStart and read
  * its absence as the event never having fired.
+ *
+ * A session's marker is also looked for under {@link TMPDIR_ALERT_BASE}, where a
+ * scanner whose STATE_ROOT degraded to $TMPDIR wrote it. The shared no-session
+ * marker is not: no sweep ages it out there, so it would silence the notice for
+ * every later session-less run on the machine.
  * @param {string} [sessionId]
  * @returns {boolean}
  */
 export function instructionsLoadedSeen(sessionId) {
   const marker = instructionsLoadedFile(sessionId);
-  if (!markerIsTrusted(marker)) return false;
-  // Not the shared no-session marker: every session-less host would refresh
-  // it, and MARKER_TTL_MS is what keeps it from silencing every later session.
-  if (sessionPrefix(sessionId) !== sessionPrefix()) touchLiveState(marker);
-  return true;
+  const keyed = sessionPrefix(sessionId) !== sessionPrefix();
+  if (markerIsTrusted(marker)) {
+    // Not the shared no-session marker: every session-less host would refresh
+    // it, and MARKER_TTL_MS is what keeps it from silencing every later session.
+    if (keyed) touchLiveState(marker);
+    return true;
+  }
+  return (
+    keyed &&
+    TMPDIR_ALERT_BASE !== ALERT_BASE &&
+    markerIsTrusted(instructionsLoadedFile(sessionId, TMPDIR_ALERT_BASE))
+  );
 }
 
 /** How long a past session's artifacts are kept before a later session sweeps. */

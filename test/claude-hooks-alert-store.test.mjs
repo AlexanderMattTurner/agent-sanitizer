@@ -515,6 +515,8 @@ describe("a finding written where a degraded STATE_ROOT put it", () => {
   // Each hook process resolves STATE_ROOT for itself. A writer whose check of
   // the plugin data dir faulted resolves $TMPDIR while the gate keeps the data
   // dir, so the gate must read both or the finding never reaches a tool call.
+  // In THIS process STATE_ROOT is $TMPDIR, so alertDir() names the store the
+  // degraded writer used.
   const ALERT = new URL(
     "../claude-hooks/lib/invisible-alert.mjs",
     import.meta.url,
@@ -533,22 +535,77 @@ describe("a finding written where a degraded STATE_ROOT put it", () => {
     assert.equal(res.status, 0, res.stderr);
     return res.stdout;
   };
+  const arg = (/** @type {string | undefined} */ session) =>
+    `${JSON.stringify(session ?? null)} ?? undefined`;
+  /** Run `write` in a degraded process, then return `read` from a healthy one. */
+  const acrossTheSplit = (t, write, read) => {
+    const data = mkdtempSync(join(tmpdir(), "sanitizer-alert-data-"));
+    t.after(() => rmSync(data, { recursive: true, force: true }));
+    run(write, { CLAUDE_PLUGIN_DATA: "" });
+    const seen = JSON.parse(
+      run(`console.log(JSON.stringify(${read}));`, {
+        CLAUDE_PLUGIN_DATA: data,
+      }),
+    );
+    // The reader really did resolve the data dir, so the read crossed the
+    // split rather than sharing a root with the writer.
+    assert.ok(existsSync(join(data, "session-state")));
+    return seen;
+  };
+  const cleanup = (t, session) =>
+    t.after(() => {
+      rmSync(alertDir(session), { recursive: true, force: true });
+      rmSync(instructionsLoadedFile(session), { force: true });
+    });
 
   for (const session of ["sess-split", undefined])
-    it(`reaches the gate (session ${session ?? "none"})`, () => {
-      const data = mkdtempSync(join(tmpdir(), "sanitizer-alert-data-"));
-      after(() => rmSync(data, { recursive: true, force: true }));
-      const id = JSON.stringify(session ?? null);
-      run(`a.appendAlert("written under TMPDIR", ${id} ?? undefined);`, {
-        CLAUDE_PLUGIN_DATA: "",
-      });
-      const seen = run(
-        `console.log(JSON.stringify(a.invisibleCharAlert(${id} ?? undefined)));`,
-        { CLAUDE_PLUGIN_DATA: data },
+    it(`a finding reaches the gate (session ${session ?? "none"})`, (t) => {
+      cleanup(t, session);
+      const seen = acrossTheSplit(
+        t,
+        `a.appendAlert("written under TMPDIR", ${arg(session)});`,
+        `a.invisibleCharAlert(${arg(session)})`,
       );
-      assert.equal(JSON.parse(seen), "written under TMPDIR");
-      // The reader really did resolve the data dir, so the read above crossed
-      // the split rather than sharing a root with the writer.
-      assert.ok(existsSync(join(data, "session-state")));
+      assert.equal(seen, "written under TMPDIR");
     });
+
+  it("another session's finding does not", (t) => {
+    cleanup(t, "sess-other");
+    const seen = acrossTheSplit(
+      t,
+      `a.appendAlert("not yours", "sess-other");`,
+      `a.invisibleCharAlert("sess-split")`,
+    );
+    assert.equal(seen, null);
+  });
+
+  it("an expired no-session finding does not", (t) => {
+    cleanup(t, undefined);
+    run(`a.appendAlert("stale", undefined);`, { CLAUDE_PLUGIN_DATA: "" });
+    const past = (Date.now() - 24 * 60 * 60 * 1000) / 1000;
+    for (const name of readdirSync(alertDir()))
+      lutimesSync(join(alertDir(), name), past, past);
+    const seen = acrossTheSplit(t, "", `a.invisibleCharAlert("sess-split")`);
+    assert.equal(seen, null);
+  });
+
+  it("the InstructionsLoaded marker is seen, so no false 'never ran' notice", (t) => {
+    cleanup(t, "sess-split");
+    const seen = acrossTheSplit(
+      t,
+      `a.recordInstructionsLoaded("sess-split");`,
+      `a.instructionsLoadedSeen("sess-split")`,
+    );
+    assert.equal(seen, true);
+  });
+
+  it("the shared no-session marker is not read there", (t) => {
+    cleanup(t, undefined);
+    const seen = acrossTheSplit(
+      t,
+      `a.recordInstructionsLoaded(undefined);`,
+      `a.instructionsLoadedSeen(undefined)`,
+    );
+    assert.equal(seen, false);
+  });
 });
