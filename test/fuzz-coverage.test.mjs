@@ -434,6 +434,7 @@ const FUZZ_EXEMPT = Object.freeze({
       "revealDir",
       "sessionPrefix",
       "spanPath",
+      "stateRootCandidates",
       "sweepStaleConfirms",
       "sweepStaleReveals",
       "sweepStaleSessions",

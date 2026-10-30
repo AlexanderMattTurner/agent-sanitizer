@@ -22,7 +22,7 @@ import {
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { basename, join } from "node:path";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import {
   DISABLED_HOOKS_ENV,
   disabledHooks,
@@ -36,6 +36,7 @@ import {
   PROJECT_HASH,
   scrubUntrustedText,
   STATE_ROOT,
+  stateRootCandidates,
   touchLiveState,
   writeFileNoFollow,
   writeSentinelFile,
@@ -79,12 +80,17 @@ const ALERT_STEM = ".claude-invisible-char-alert-";
 export const ALERT_BASE = join(STATE_ROOT, `${ALERT_STEM}${PROJECT_HASH}`);
 
 /**
- * Where {@link ALERT_BASE} lands for a process that resolved STATE_ROOT to
- * $TMPDIR. Each hook process resolves STATE_ROOT for itself, and one whose check
- * of the plugin data dir faulted (an I/O error on its stat) takes $TMPDIR while
- * the rest of the session keeps the data dir, so a reader looks under both.
+ * {@link ALERT_BASE} under every root a hook of this session can resolve,
+ * this process's own first. A hook that wrote state and the gate that reads it
+ * can each have degraded to $TMPDIR while the other kept the plugin data dir.
  */
-const TMPDIR_ALERT_BASE = join(tmpdir(), `${ALERT_STEM}${PROJECT_HASH}`);
+const ALERT_BASES = [
+  ...new Set(
+    [STATE_ROOT, ...stateRootCandidates(process.env)].map((root) =>
+      join(root, `${ALERT_STEM}${PROJECT_HASH}`),
+    ),
+  ),
+];
 
 /**
  * Whether `name` is a session artifact of ANY project: {@link ALERT_BASE}'s
@@ -173,9 +179,10 @@ export function instructionsLoadedNoticeFile(sessionId) {
  * MARKER_TTL_MS would have it swept by another session's SessionStart and read
  * its absence as the event never having fired.
  *
- * A session's marker is also looked for under {@link TMPDIR_ALERT_BASE}, where a
- * scanner whose STATE_ROOT degraded to $TMPDIR wrote it. The shared no-session
- * marker is not: no sweep ages it out there, so it would silence the notice for
+ * A session's marker is also looked for under the other {@link ALERT_BASES},
+ * where a scanner that resolved a different STATE_ROOT wrote it. The shared
+ * no-session marker is read only under this process's root, which this
+ * process's sweep ages out; read elsewhere it could silence the notice for
  * every later session-less run on the machine.
  * @param {string} [sessionId]
  * @returns {boolean}
@@ -189,10 +196,12 @@ export function instructionsLoadedSeen(sessionId) {
     if (keyed) touchLiveState(marker);
     return true;
   }
-  if (!keyed || TMPDIR_ALERT_BASE === ALERT_BASE) return false;
-  const degraded = instructionsLoadedFile(sessionId, TMPDIR_ALERT_BASE);
-  if (!markerIsTrusted(degraded)) return false;
-  touchLiveState(degraded);
+  if (!keyed) return false;
+  const elsewhere = ALERT_BASES.slice(1)
+    .map((base) => instructionsLoadedFile(sessionId, base))
+    .find((path) => markerIsTrusted(path));
+  if (elsewhere === undefined) return false;
+  touchLiveState(elsewhere);
   return true;
 }
 
@@ -641,22 +650,20 @@ export function recordInstructionsLoadedNotice(sessionId) {
  * strictly session-keyed, so the gate still asks exactly once per session. A
  * fallback finding is read only while it is inside FALLBACK_TTL_MS, which is
  * what keeps it from re-arming the gate for a later session. Both stores are
- * read under {@link TMPDIR_ALERT_BASE} as well, where a writer whose STATE_ROOT
- * degraded to $TMPDIR left its finding.
+ * read under every one of {@link ALERT_BASES}, where a writer that resolved a
+ * different STATE_ROOT left its finding.
  * @param {string} [sessionId]
  * @returns {string | null}
  */
 export function invisibleCharAlert(sessionId) {
-  const bases =
-    TMPDIR_ALERT_BASE === ALERT_BASE
-      ? [ALERT_BASE]
-      : [ALERT_BASE, TMPDIR_ALERT_BASE];
-  const sessionDirs = new Set(bases.map((base) => alertDir(sessionId, base)));
+  const sessionDirs = new Set(
+    ALERT_BASES.map((base) => alertDir(sessionId, base)),
+  );
   // A fallback store belongs to no session, so only age says whether it is
   // still this session's business. Where the fallback IS the session's store
   // there is nothing inherited and nothing to expire.
   const dirs = new Set(
-    bases.flatMap((base) => [
+    ALERT_BASES.flatMap((base) => [
       alertDir(sessionId, base),
       alertDir(undefined, base),
     ]),

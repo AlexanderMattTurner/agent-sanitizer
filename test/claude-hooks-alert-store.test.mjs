@@ -14,6 +14,7 @@ import { describe, it, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   chownSync,
   existsSync,
   lstatSync,
@@ -554,6 +555,25 @@ describe("a finding written where a degraded STATE_ROOT put it", () => {
     assert.ok(existsSync(join(data, "session-state")));
     return seen;
   };
+  /**
+   * The reverse split: `write` runs healthy, then the plugin data dir turns
+   * shared (0777), so the gate's own root check fails and it degrades to
+   * $TMPDIR. Returns what `read` saw from there.
+   */
+  const gateDegraded = (t, write, read) => {
+    const data = mkdtempSync(join(tmpdir(), "sanitizer-alert-data-"));
+    t.after(() => rmSync(data, { recursive: true, force: true }));
+    run(write, { CLAUDE_PLUGIN_DATA: data });
+    assert.ok(existsSync(join(data, "session-state")), "writer degraded too");
+    chmodSync(data, 0o777);
+    const [seen, base] = JSON.parse(
+      run(`console.log(JSON.stringify([${read}, a.ALERT_BASE]));`, {
+        CLAUDE_PLUGIN_DATA: data,
+      }),
+    );
+    assert.ok(base.startsWith(tmpdir()), `the gate kept the data dir: ${base}`);
+    return seen;
+  };
   const DAY_MS = 24 * 60 * 60 * 1000;
   /** Age `path` by a day, following no symlink. */
   const backdate = (path) => {
@@ -612,6 +632,24 @@ describe("a finding written where a degraded STATE_ROOT put it", () => {
     );
     assert.equal(seen, true);
     assert.ok(fresh(instructionsLoadedFile("sess-split")), "marker left stale");
+  });
+
+  it("a degraded gate still finds a healthy writer's finding", (t) => {
+    const seen = gateDegraded(
+      t,
+      `a.appendAlert("written under the data dir", "sess-split");`,
+      `a.invisibleCharAlert("sess-split")`,
+    );
+    assert.equal(seen, "written under the data dir");
+  });
+
+  it("a degraded gate still sees a healthy scanner's marker", (t) => {
+    const seen = gateDegraded(
+      t,
+      `a.recordInstructionsLoaded("sess-split");`,
+      `a.instructionsLoadedSeen("sess-split")`,
+    );
+    assert.equal(seen, true);
   });
 
   it("the shared no-session marker is not read there", (t) => {
