@@ -315,7 +315,6 @@ const FUZZ_EXEMPT = Object.freeze({
       "disabledHooks",
       "dynamicSecretVars",
       "envBoundSecretVars",
-      "envValueRegex",
       "extraSecretVars",
       "failOpenEnabled",
       "inferenceKeyVars",
@@ -341,7 +340,6 @@ const FUZZ_EXEMPT = Object.freeze({
   ),
   ...withReason("process lifecycle, shared state and lazy module loading", [
     "EmptyStdinError",
-    "KNOB_DECIDES",
     "adoptHookIoSharedState",
     "awaitLazyDependency",
     "claimCliEntry",

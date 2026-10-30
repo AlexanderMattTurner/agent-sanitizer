@@ -379,12 +379,15 @@ def test_redact_env_bound_tolerates_interior_invisibles(sep):
     [0xFE0F, 0x115F, 0x2800, 0x061C],
     ids=["variation-selector", "hangul-filler", "braille-blank", "arabic-letter-mark"],
 )
-def test_env_value_re_tolerates_non_enumerated_invisible_splice(cp):
+def test_env_value_spans_tolerate_non_enumerated_invisible_splice(cp):
     from agent_sanitizer.secrets.invisible import default_charset
 
     value = "sk-abcdefghijklmnopqrstuvwxyz0123456789"
     spliced = value[:6] + chr(cp) + value[6:]
-    assert E._env_value_re(value, default_charset()).fullmatch(spliced)
+    text = f"x {spliced} y"
+    charset = default_charset()
+    views = E._invisible_free_views(text, charset)
+    assert E._env_value_spans(value, text, views, charset) == [(2, 2 + len(spliced))]
 
 
 # ─── _eligible_prefilter soundness guard ─────────────────────────────────────

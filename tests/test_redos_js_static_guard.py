@@ -57,19 +57,13 @@ from tests._helpers import REPO_ROOT
 UNRESOLVABLE_SITES = {
     (
         "claude-hooks/lib/secret-annotate.mjs",
-        "new RegExp( visible.length > 0 ? visible.map(escapeLiteral)"
-        '.join(ENV_INVIS_RUN) : [...value].map(escapeLiteral).join(""), "u", )',
+        'new RegExp( "[" + [...new Set([...charset.cf_codepoints, '
+        "...charset.extra_codepoints])] .map((cp) => `\\\\u{${cp.toString(16)}}`) "
+        '.join("") + "]", "gu", )',
     ): (
-        "The pattern is the caller's env-var VALUE, escaped character by "
-        "character — a runtime string with no static spelling. Its shape is "
-        "fixed, in one of two arms. A value with visible characters joins its "
-        "escaped visible literals by the constant ENV_INVIS_RUN, a STARRED "
-        "character class: every `*` gap sits between two required literals "
-        "that are not members of that class, so no two quantifiers are "
-        "adjacent. A value made only of invisibles is its escaped characters "
-        "joined by nothing, with no quantifier at all. "
-        "test_redos_js_exemption_instances.py builds both arms through the "
-        "real module and analyzes them."
+        "The class members come from the generated invisible-charset JSON, a "
+        "data import with no static spelling here. It is a bare character "
+        "class, so the pattern carries no quantifier."
     ),
     (
         "src/ansi.mjs",

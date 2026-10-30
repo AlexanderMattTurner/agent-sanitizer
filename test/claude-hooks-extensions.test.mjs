@@ -10,8 +10,8 @@
  *     changes a shipped verdict when nobody uses it is a regression wearing a
  *     feature's clothes. Each seam has an explicit no-op comparison here.
  *   - THROWS PROPAGATE. A callback that throws must not be swallowed: it reaches
- *     the CLI's fail-closed catch, which suppresses the tool output. Swallowing
- *     would degrade a broken extension into showing unvetted output.
+ *     the CLI's fault catch, which answers it under the operator's posture.
+ *     Swallowing would pass a broken extension's unvetted output as vetted.
  *
  * The Layer-4 tests drive a STUB daemon over the real socket protocol (4-byte BE
  * length + JSON) rather than a stubbed `redactViaDaemon`: the hook builds its

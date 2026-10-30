@@ -17,70 +17,25 @@ import charset from "../../python/agent_sanitizer/data/invisible-charset.json" w
 // Invisible characters an attacker can splice between a value's characters to
 // break an exact-substring pre-gate while the daemon's redactor still matches
 // across them. Built from the SAME pinned charset Layer 1 strips and the daemon
-// tolerates (`invisible_run_pattern` in agent_sanitizer.secrets.invisible
-// builds the same shape from the same set), not a hand-curated subset: a subset
-// pre-gate silently under-matches whenever this gate runs on text Layer 1 has
-// not already stripped (the module is exported and callable on its own), and a
-// value spliced with a code point in the gap then never reaches the daemon at
-// all. A run of zero-or-more is allowed at each interior gap, so the plain
-// value still matches (a superset of `includes`). The required literals between
-// every gap are what bound the match — a `*` gap is never adjacent to another
-// gap, so there is no ambiguity to backtrack over and no ReDoS. (The class size
-// is irrelevant to that: a character class matches in O(1) whether it holds one
-// member or all 435.) That argument holds only while no literal is itself a
-// member of the class, so {@link envValueRegex} drops the value's own invisible
-// code points before it splices: `a<ZWSP>a` would otherwise build
-// `a[…]*<ZWSP>[…]*a`, whose two stars share the literal and backtrack
-// quadratically over a long run of ZWSP.
-const ENV_INVIS_CODEPOINTS = [
-  ...new Set([...charset.cf_codepoints, ...charset.extra_codepoints]),
-].sort((a, b) => a - b);
-const ENV_INVIS_SET = new Set(ENV_INVIS_CODEPOINTS);
-const ENV_INVIS_RUN =
+// tolerates (`_env_value_spans` in agent_sanitizer.secrets.engine), not
+// a hand-curated subset: a subset pre-gate silently under-matches whenever this
+// gate runs on text Layer 1 has not already stripped, and a value spliced with a
+// code point in the gap then never reaches the daemon at all.
+const ENV_INVIS_RE = new RegExp(
   "[" +
-  ENV_INVIS_CODEPOINTS.map((cp) => `\\u{${cp.toString(16)}}`).join("") +
-  "]*";
-
-/** @param {string} ch */
-const escapeLiteral = (ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    [...new Set([...charset.cf_codepoints, ...charset.extra_codepoints])]
+      .map((cp) => `\\u{${cp.toString(16)}}`)
+      .join("") +
+    "]",
+  "gu",
+);
 
 /**
- * Regex matching `value` tolerating invisible chars spliced between its
- * characters (mirrors the engine's env-value regex). Code-point split so
- * an astral character is escaped whole, not as two surrogate halves — and the
- * `u` flag, which the astral `\u{…}` class members in {@link ENV_INVIS_RUN}
- * require.
- * Memoized per distinct value: {@link ENV_INVIS_RUN} renders ~435 code points
- * as ~4 KB of source and is joined at EVERY interior gap, so a 20-char secret
- * compiles a ~75 KB pattern — and `hasEnvBoundSecret` builds one per configured
- * var on every PostToolUse output. Env values are stable for the process's
- * lifetime, so the cache is bounded by the number of distinct values. Sharing an
- * instance is safe because the regex carries no `g`/`y` flag, hence no
- * `lastIndex` state to leak between calls.
- * @param {string} value
- * @returns {RegExp}
+ * `s` with every charset invisible removed.
+ * @param {string} s
+ * @returns {string}
  */
-export function envValueRegex(value) {
-  let re = ENV_VALUE_REGEX_CACHE.get(value);
-  if (re === undefined) {
-    const visible = [...value].filter(
-      (ch) => !ENV_INVIS_SET.has(/** @type {number} */ (ch.codePointAt(0))),
-    );
-    // A value made only of invisibles has no literal to anchor a gap on: match
-    // it exactly rather than build a pattern that is nothing but gaps.
-    re = new RegExp(
-      visible.length > 0
-        ? visible.map(escapeLiteral).join(ENV_INVIS_RUN)
-        : [...value].map(escapeLiteral).join(""),
-      "u",
-    );
-    ENV_VALUE_REGEX_CACHE.set(value, re);
-  }
-  return re;
-}
-
-/** value → compiled matcher; see {@link envValueRegex}. */
-const ENV_VALUE_REGEX_CACHE = new Map();
+const stripInvisibles = (s) => s.replace(ENV_INVIS_RE, "");
 
 /**
  * True when tool output contains the literal value of a configured env-bound
@@ -88,19 +43,34 @@ const ENV_VALUE_REGEX_CACHE = new Map();
  * credential, so the pre-gate must also fire on the value itself — otherwise
  * the engine's env-bound redaction never runs. Invisible-tolerant so a
  * value with spliced Cf chars (which the daemon still redacts) trips it too.
+ *
+ * Both sides are stripped and compared as substrings, which is exactly
+ * equivalent: the value's visible characters appear contiguously in the
+ * stripped text iff they appear in the original separated only by invisibles.
+ * It is linear and independent of the value's length — a regex with an
+ * invisible class at every gap grows ~4 KB per character, and a long secret (a
+ * PEM key) overflows V8's regex size limit and throws on every output.
+ *
+ * Callers pass post-Layer-1 text: terminal escapes are already gone, so a value
+ * split by one is contiguous here. Raw text spliced with an escape is not
+ * matched.
  * @param {string} text
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {boolean}
  */
 export function hasEnvBoundSecret(text, env = process.env) {
   const minLen = minEnvSecretLen();
+  /** @type {string | undefined} */
+  let strippedText;
   return envBoundSecretVars(env).some((name) => {
     const value = env[name];
-    // Code-point length to match envValueRegex's code-point split — an astral
-    // char counts once, not as two UTF-16 units, so minLen means the same thing
-    // on both sides of the gate.
-    return (
-      value && [...value].length >= minLen && envValueRegex(value).test(text)
-    );
+    // Code-point length, so an astral char counts once, not as two UTF-16 units.
+    if (!value || [...value].length < minLen) return false;
+    const needle = stripInvisibles(value);
+    // A value made only of invisibles has no visible character to anchor on:
+    // match it exactly rather than as the empty string, which matches anything.
+    if (needle === "") return text.includes(value);
+    strippedText ??= stripInvisibles(text);
+    return strippedText.includes(needle);
   });
 }
