@@ -259,6 +259,9 @@ export function straceArgv({ group, errno, when, paths, log }) {
     "-q",
     "-y",
     "--seccomp-bpf",
+    // `-o FILE` defaults strace to -I3, which blocks SIGTERM; -I1 lets through
+    // the SIGTERM that detaches a run whose fault respawned the redactor.
+    "-I1",
     "-o",
     log,
     "-e",
@@ -723,9 +726,15 @@ const DETACH_GRACE_MS = 1000;
  * @returns {number | undefined}
  */
 export function loggedExit(log, pid) {
-  const line = log.split("\n").find((l) => l.startsWith(`${pid} +++ `));
-  if (line === undefined) return undefined;
-  const code = /^\d+ \+\+\+ exited with (\d+) \+\+\+$/.exec(line)?.[1];
+  // strace pads the pid column, so `101 +++` and `101  +++` are both exits.
+  const ending = log
+    .split("\n")
+    .map((l) => /^(\d+)\s+\+\+\+ (.*) \+\+\+$/.exec(l))
+    .find((m) => m?.[1] === pid);
+  if (ending === undefined) return undefined;
+  const code = /^exited with (\d+)$/.exec(
+    /** @type {string} */ (ending[2]),
+  )?.[1];
   return code === undefined ? 128 : Number(code);
 }
 

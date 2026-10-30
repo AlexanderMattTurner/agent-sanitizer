@@ -36,6 +36,7 @@ import {
   PROJECT_HASH,
   scrubUntrustedText,
   STATE_ROOT,
+  stateRootCandidates,
   touchLiveState,
   writeFileNoFollow,
   writeSentinelFile,
@@ -79,6 +80,19 @@ const ALERT_STEM = ".claude-invisible-char-alert-";
 export const ALERT_BASE = join(STATE_ROOT, `${ALERT_STEM}${PROJECT_HASH}`);
 
 /**
+ * {@link ALERT_BASE} under every root a hook of this session can resolve,
+ * this process's own first. A hook that wrote state and the gate that reads it
+ * can each have degraded to $TMPDIR while the other kept the plugin data dir.
+ */
+const ALERT_BASES = [
+  ...new Set(
+    [STATE_ROOT, ...stateRootCandidates(process.env)].map((root) =>
+      join(root, `${ALERT_STEM}${PROJECT_HASH}`),
+    ),
+  ),
+];
+
+/**
  * Whether `name` is a session artifact of ANY project: {@link ALERT_BASE}'s
  * name, whatever its project hash, then `.s-`.
  * @param {string} name
@@ -100,25 +114,27 @@ const isAnyProjectSessionEntry = (name) =>
  * files needs neither the clear nor the ordering — past sessions' artifacts
  * simply age out through {@link sweepStaleSessions}.
  * @param {string} [sessionId]  the harness's session identity
+ * @param {string} [base]  the store's root prefix
  * @returns {string}
  */
-export function sessionPrefix(sessionId) {
+export function sessionPrefix(sessionId, base = ALERT_BASE) {
   // The id becomes a path component, so anything outside this class — a `/` in
   // a hostile session id above all — is folded away rather than escaping
   // STATE_ROOT. A host that exports no session id falls back to one shared name,
   // whose findings and ack are bounded by FALLBACK_TTL_MS instead.
   const key =
     (sessionId ?? "").replace(/[^A-Za-z0-9._-]/gu, "_") || "no-session";
-  return `${ALERT_BASE}.s-${key}`;
+  return `${base}.s-${key}`;
 }
 
 /**
  * The directory holding this session's alert findings, one file per finding.
  * @param {string} [sessionId]
+ * @param {string} [base]  the store's root prefix
  * @returns {string}
  */
-export function alertDir(sessionId) {
-  return `${sessionPrefix(sessionId)}.alerts`;
+export function alertDir(sessionId, base = ALERT_BASE) {
+  return `${sessionPrefix(sessionId, base)}.alerts`;
 }
 
 /**
@@ -137,10 +153,11 @@ export function alertAckFile(sessionId) {
  * Marker the InstructionsLoaded scanner writes on every fire, so another hook
  * can tell whether that event is being scanned at all this session.
  * @param {string} [sessionId]
+ * @param {string} [base]  the store's root prefix
  * @returns {string}
  */
-export function instructionsLoadedFile(sessionId) {
-  return `${sessionPrefix(sessionId)}.instructions-loaded`;
+export function instructionsLoadedFile(sessionId, base = ALERT_BASE) {
+  return `${sessionPrefix(sessionId, base)}.instructions-loaded`;
 }
 
 /**
@@ -161,15 +178,30 @@ export function instructionsLoadedNoticeFile(sessionId) {
  * it is written once at launch, so otherwise a session outliving
  * MARKER_TTL_MS would have it swept by another session's SessionStart and read
  * its absence as the event never having fired.
+ *
+ * A session's marker is also looked for under the other {@link ALERT_BASES},
+ * where a scanner that resolved a different STATE_ROOT wrote it. The shared
+ * no-session marker is read only under this process's root, which this
+ * process's sweep ages out; read elsewhere it could silence the notice for
+ * every later session-less run on the machine.
  * @param {string} [sessionId]
  * @returns {boolean}
  */
 export function instructionsLoadedSeen(sessionId) {
   const marker = instructionsLoadedFile(sessionId);
-  if (!markerIsTrusted(marker)) return false;
-  // Not the shared no-session marker: every session-less host would refresh
-  // it, and MARKER_TTL_MS is what keeps it from silencing every later session.
-  if (sessionPrefix(sessionId) !== sessionPrefix()) touchLiveState(marker);
+  const keyed = sessionPrefix(sessionId) !== sessionPrefix();
+  if (markerIsTrusted(marker)) {
+    // Not the shared no-session marker: every session-less host would refresh
+    // it, and MARKER_TTL_MS is what keeps it from silencing every later session.
+    if (keyed) touchLiveState(marker);
+    return true;
+  }
+  if (!keyed) return false;
+  const elsewhere = ALERT_BASES.slice(1)
+    .map((base) => instructionsLoadedFile(sessionId, base))
+    .find((path) => markerIsTrusted(path));
+  if (elsewhere === undefined) return false;
+  touchLiveState(elsewhere);
   return true;
 }
 
@@ -617,28 +649,37 @@ export function recordInstructionsLoadedNotice(sessionId) {
  * the one report of an unscanned instruction file unreachable. The ack stays
  * strictly session-keyed, so the gate still asks exactly once per session. A
  * fallback finding is read only while it is inside FALLBACK_TTL_MS, which is
- * what keeps it from re-arming the gate for a later session.
+ * what keeps it from re-arming the gate for a later session. Both stores are
+ * read under every one of {@link ALERT_BASES}, where a writer that resolved a
+ * different STATE_ROOT left its finding.
  * @param {string} [sessionId]
  * @returns {string | null}
  */
 export function invisibleCharAlert(sessionId) {
-  const own = alertDir(sessionId);
-  // The second entry, when there is one, is a store belonging to no session,
-  // so only age says whether it is still this session's business. Where the
-  // fallback IS `own` there is nothing inherited and nothing to expire.
-  const dirs = own === alertDir() ? [own] : [own, alertDir()];
+  const sessionDirs = new Set(
+    ALERT_BASES.map((base) => alertDir(sessionId, base)),
+  );
+  // A fallback store belongs to no session, so only age says whether it is
+  // still this session's business. Where the fallback IS the session's store
+  // there is nothing inherited and nothing to expire.
+  const dirs = new Set(
+    ALERT_BASES.flatMap((base) => [
+      alertDir(sessionId, base),
+      alertDir(undefined, base),
+    ]),
+  );
   const parts = [];
   for (const dir of dirs) {
     if (!privateDirAt(dir)) continue;
     // A live session's findings must outlast any sweep that ages the store by
     // its directory's timestamp: losing them lifts the gate mid-session.
-    if (dir === own) touchLiveState(dir);
+    if (sessionDirs.has(dir)) touchLiveState(dir);
     // Sorted so a multi-finding report reads the same on every call; the names
     // are random, so the order carries no meaning beyond being stable.
     for (const name of readdirSync(dir).sort()) {
       const path = join(dir, name);
       if (!markerIsTrusted(path)) continue;
-      if (dir !== own && !withinFallbackTtl(path)) continue;
+      if (!sessionDirs.has(dir) && !withinFallbackTtl(path)) continue;
       const text = readFileSync(path, "utf-8").trim();
       if (text !== "") parts.push(text);
     }
