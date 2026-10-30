@@ -8,6 +8,15 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.69.1] - 2026-10-30
+
+### Fixed
+- Gates can now read plugin data and findings correctly when state is stored under $TMPDIR, and live sessions are kept fresh during reads.
+- Instruction scans no longer produce false "InstructionsLoaded never ran" notices when recorded under $TMPDIR.
+- Instruction-scan fault messages now clearly indicate what failed instead of generically suggesting plugin reinstallation.
+- Tool-call gates can now locate findings that writers leave under $TMPDIR.
+- CI syscall-fault handling now properly detects launcher exit and cleanly detaches respawned redactors.
+
 ## [2.69.0] - 2026-10-30
 
 ### Added
