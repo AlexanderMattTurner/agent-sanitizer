@@ -960,8 +960,14 @@ export async function rehydrateRedacted(
     // reaches its own resolver-backed pass-through.
     if (tool === "MultiEdit") return multiEditDeny(toolInput.file_path);
     if (!hinted) return null;
+    // A verdict, not a fault: the file itself defeats mapping on every call, so
+    // a released re-issue would overwrite the real secret with its placeholder.
+    // The escape is to stop writing the placeholder, which the reason names.
     return {
-      deny: `cannot resolve redaction placeholders in ${toolInput.file_path}: ${mapped.unmappable}`,
+      deny:
+        `cannot resolve redaction placeholders in ${toolInput.file_path}: ` +
+        `${mapped.unmappable}. Leave every ${hint}…] placeholder out of this ` +
+        `call (edit around it), or ask the user to make this change`,
     };
   }
   // The redactor emits code-point offsets; the offset machinery below works in

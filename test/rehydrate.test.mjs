@@ -249,6 +249,8 @@ describe("rehydrate: gating", () => {
       io,
     );
     assert.match(out.deny, /cannot resolve redaction placeholders/);
+    // A verdict the model can act on: it names the escape, so no re-issue loops.
+    assert.match(out.deny, /Leave every \[REDACTED…\] placeholder out/);
   });
 
   it("passes through an unmappable file for a hint-free Edit", async () => {

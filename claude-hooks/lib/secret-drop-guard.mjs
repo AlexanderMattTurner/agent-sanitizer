@@ -66,7 +66,8 @@ export const CONFIRM_TTL_MS = 10 * 60_000;
  * @returns {string}
  */
 export function dropFingerprint(filePath, content, dropped = []) {
-  const digest = createHash("sha256").update(filePath).update("\0");
+  const digest = createHash("sha256").update("drop\0").update(filePath);
+  digest.update("\0");
   digest.update(content);
   for (const secret of dropped) digest.update("\0").update(secret);
   return digest.digest("hex").slice(0, 32);
@@ -76,8 +77,10 @@ export function dropFingerprint(filePath, content, dropped = []) {
  * Fingerprint of one refusal of one exact tool call — same refusing site, same
  * tool, same input — released by re-issuing that call. Keyed on the site too, so
  * a call refused by two sites in turn needs a confirmation for each and one
- * re-issue never releases a refusal the model was not shown. The domain tag
- * keeps it disjoint from {@link dropFingerprint}, which hashes no tag.
+ * re-issue never releases a refusal the model was not shown. The input is
+ * hashed in canonical key order, so a re-issue whose keys arrive reordered is
+ * still the same call. Distinct domain tags keep it disjoint from
+ * {@link dropFingerprint}.
  * @param {string} site
  * @param {unknown} tool
  * @param {unknown} toolInput
@@ -86,9 +89,26 @@ export function dropFingerprint(filePath, content, dropped = []) {
 export function reissueFingerprint(site, tool, toolInput) {
   return createHash("sha256")
     .update("reissue\0")
-    .update(JSON.stringify([site, tool ?? null, toolInput ?? null]))
+    .update(canonicalJson([site, tool ?? null, toolInput ?? null]))
     .digest("hex")
     .slice(0, 32);
+}
+
+/**
+ * JSON with every object's keys sorted, so two encodings of one value agree.
+ * @param {unknown} value
+ * @returns {string}
+ */
+function canonicalJson(value) {
+  return JSON.stringify(value, (_key, v) =>
+    v !== null && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(
+          Object.keys(v)
+            .sort()
+            .map((k) => [k, v[k]]),
+        )
+      : v,
+  );
 }
 
 /**
@@ -181,15 +201,19 @@ export function gitTracked(filePath, spawn = spawnSync) {
 /**
  * @param {number} count
  * @param {string} filePath
+ * @param {boolean} [confirmable] false when no confirmation could be recorded,
+ *   so the reason must not offer a re-issue that would only be refused again
  * @returns {string}
  */
-function dropDeny(count, filePath) {
-  return (
+function dropDeny(count, filePath, confirmable = true) {
+  const head =
     `this Write removes ${count} redacted secret value(s) from ${filePath}, and the ` +
-    `file is not tracked by git, so the secrets may be unrecoverable. If removing ` +
-    `them is intended, re-issue this exact Write to confirm; otherwise keep each ` +
-    `[REDACTED…] placeholder (or its secret's line) in the new content`
-  );
+    `file is not tracked by git, so the secrets may be unrecoverable. `;
+  const placeholders = `[REDACTED…] placeholder (or its secret's line) in the new content`;
+  return confirmable
+    ? `${head}If removing them is intended, re-issue this exact Write to confirm; ` +
+        `otherwise keep each ${placeholders}`
+    : `${head}Keep each ${placeholders}, or ask the user to remove them`;
 }
 
 /**
@@ -272,9 +296,11 @@ export async function secretDropGuard(toolInput, io, opts = {}) {
   // context, or a marker left by an abandoned attempt becomes a standing
   // auto-approval for a Write the user never saw.
   if (confirmSeen(fingerprint)) return null;
-  const deny = dropDeny(dropped.length, filePath);
-  if (record(fingerprint)) return { deny };
-  return { deny, fault: dropUnconfirmable(dropped.length, filePath) };
+  if (record(fingerprint)) return { deny: dropDeny(dropped.length, filePath) };
+  return {
+    deny: dropDeny(dropped.length, filePath, false),
+    fault: dropUnconfirmable(dropped.length, filePath),
+  };
 }
 
 /**

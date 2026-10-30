@@ -61,6 +61,7 @@ const {
   withSecretDropGuard,
   gitTracked,
   dropFingerprint,
+  reissueFingerprint,
   confirmMarkerPath,
   sweepStaleConfirms,
   CONFIRM_TTL_MS,
@@ -471,6 +472,35 @@ describe("secret-drop-guard", () => {
       dropFingerprint("/a", "x", ["s1"]),
     );
   });
+
+  it("a re-issue fingerprint ignores key order but not values, site or tool", () => {
+    const input = { file_path: "/a", old_string: "o", new_string: "n" };
+    const fp = reissueFingerprint("rehydrate", "Edit", input);
+    const reordered = { new_string: "n", file_path: "/a", old_string: "o" };
+    assert.equal(reissueFingerprint("rehydrate", "Edit", reordered), fp);
+    assert.equal(
+      reissueFingerprint("rehydrate", "MultiEdit", {
+        edits: [{ new_string: "n", old_string: "o" }],
+      }),
+      reissueFingerprint("rehydrate", "MultiEdit", {
+        edits: [{ old_string: "o", new_string: "n" }],
+      }),
+    );
+    for (const other of [
+      reissueFingerprint("rehydrate", "Edit", { ...input, new_string: "m" }),
+      reissueFingerprint("layer2", "Edit", input),
+      reissueFingerprint("rehydrate", "Write", input),
+    ])
+      assert.notEqual(other, fp);
+  });
+
+  it("the two fingerprint domains never collide on the same bytes", () => {
+    const body = JSON.stringify(["s", "Edit", { a: 1 }]);
+    assert.notEqual(
+      dropFingerprint("reissue", body),
+      reissueFingerprint("s", "Edit", { a: 1 }),
+    );
+  });
 });
 
 // ─── withSecretDropGuard (the production composition) ────────────────────────
@@ -546,7 +576,7 @@ describe("withSecretDropGuard", () => {
           secretDropGuard(finalInput, guardIo, {
             isTracked: () => false,
             confirmSeen: () => false,
-            recordConfirm: () => {},
+            recordConfirm: () => true,
           }),
       );
 
@@ -882,8 +912,10 @@ describe("secret-drop-guard: an unrecordable confirmation", () => {
       confirmSeen: () => false,
       recordConfirm: () => false,
     });
-    assert.match(res.deny, /re-issue this exact Write to confirm/);
     assert.match(res.fault, /confirmation could not be recorded/);
+    // Its reason must not offer the re-issue that nothing recorded could release.
+    assert.doesNotMatch(res.deny, /re-issue/);
+    assert.match(res.deny, /ask the user to remove them/);
     // Non-vacuity: a recorded confirmation leaves the plain verdict.
     const recorded = await secretDropGuard(dropWrite.tool_input, dropIo(DISK), {
       ...untracked,
@@ -891,6 +923,7 @@ describe("secret-drop-guard: an unrecordable confirmation", () => {
       recordConfirm: () => true,
     });
     assert.deepEqual(Object.keys(recorded), ["deny"]);
+    assert.match(recorded.deny, /re-issue this exact Write to confirm/);
   });
 
   it("lets the drop through with a warning by default", () =>
