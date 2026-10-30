@@ -7,8 +7,13 @@ env-bound values come from a :class:`RedactorConfig` instead of ``os.environ``.
 """
 
 import hashlib
+import os
 import re
+import shutil
+import subprocess
+import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -2663,3 +2668,36 @@ def test_a_compute_budget_interrupts_one_very_long_line(monkeypatch):
     # raise above is the budget biting and not the input failing to scan.
     out, found = redact(line, RedactorConfig())
     assert found and "AKIA" not in out
+
+
+def test_redacts_when_the_package_path_needs_url_escaping(tmp_path):
+    """detect-secrets opens its plugin file by stripping `file://`, unescaped."""
+    root = Path(
+        subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+    install = tmp_path / "Jo Smith+dev"
+    shutil.copytree(
+        root / "python" / "agent_sanitizer",
+        install / "agent_sanitizer",
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+    # Assembled at run time so no complete key literal trips push protection.
+    key = "wJalrXUtnFEMI" + "/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    probe = (
+        "from agent_sanitizer.secrets.engine import redact; "
+        f"print(redact('aws_secret_access_key = {key}')[1])"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=install,
+        env={**os.environ, "PYTHONPATH": str(install)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() != "[]"

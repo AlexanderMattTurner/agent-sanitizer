@@ -187,7 +187,7 @@ def test_custom_plugins_derived_from_detector_ssot():
     assert set(configured).isdisjoint(_INLINE_DETECTORS)
     assert "BoundedKeywordDetector" in _INLINE_DETECTORS
     assert len(configured) >= 10
-    assert all(p["path"].endswith("detectors.py") for p in E.CUSTOM_PLUGINS)
+    assert all(set(p) == {"name"} for p in E.CUSTOM_PLUGINS)
     for name in names:
         assert isinstance(getattr(D, name, None), type), (
             f"{name} is registered but detectors.py exposes no class of that name"
