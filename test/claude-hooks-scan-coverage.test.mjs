@@ -176,30 +176,45 @@ describe("a scan that could not read a target never announces clean", () => {
   });
   after(() => rmSync(alertDir(), { recursive: true, force: true }));
 
-  it("announces partial, names the skipped files, and arms the gate", async () => {
-    const { lines, sink } = collector();
-    await runScan({ trace: sink });
+  // The gate is the closed posture's enforcement: it asks once on the next
+  // tool call. The open default reports the same gap as a SessionStart warning
+  // and arms nothing (pinned in claude-hooks-posture.test.mjs).
+  for (const [label, failOpen, armed] of [
+    ["the open default", undefined, false],
+    ["the opt-out", "0", true],
+  ])
+    it(`announces partial and names the skipped files under ${label}`, async () => {
+      rmSync(alertDir(), { recursive: true, force: true });
+      const previous = process.env.AGENT_SANITIZER_FAIL_OPEN;
+      if (failOpen === undefined) delete process.env.AGENT_SANITIZER_FAIL_OPEN;
+      else process.env.AGENT_SANITIZER_FAIL_OPEN = failOpen;
+      const { lines, sink } = collector();
+      let stdout;
+      try {
+        ({ stdout } = await runScan({ trace: sink }));
+      } finally {
+        if (previous === undefined)
+          delete process.env.AGENT_SANITIZER_FAIL_OPEN;
+        else process.env.AGENT_SANITIZER_FAIL_OPEN = previous;
+      }
 
-    const announced = lines.filter(
-      (l) => l.event === "scan_invisible_chars_ran",
-    );
-    assert.equal(announced.length, 1);
-    assert.equal(
-      announced[0].outcome,
-      "partial",
-      "an unread instruction file was reported as absence of findings",
-    );
-    assert.equal(announced[0].skipped, 1);
-    assert.equal(announced[0].scanned, 0);
+      const announced = lines.filter(
+        (l) => l.event === "scan_invisible_chars_ran",
+      );
+      assert.equal(announced.length, 1);
+      assert.equal(
+        announced[0].outcome,
+        "partial",
+        "an unread instruction file was reported as absence of findings",
+      );
+      assert.equal(announced[0].skipped, 1);
+      assert.equal(announced[0].scanned, 0);
 
-    // The gate is the enforcement: it asks once on the next tool call, so an
-    // unvetted instruction file reaches the operator instead of nobody.
-    assert.ok(
-      invisibleCharAlert() !== null,
-      "the PreToolUse gate was not armed",
-    );
-    assert.match(invisibleCharAlert() ?? "", /CLAUDE\.md/u);
-  });
+      const alert = invisibleCharAlert();
+      assert.equal(alert !== null, armed, "gate armed against the posture");
+      // Whichever channel carries it, the report names the file.
+      assert.match(armed ? (alert ?? "") : stdout, /CLAUDE\.md/u);
+    });
 });
 
 describe("a fully readable project still announces clean", () => {

@@ -16,6 +16,7 @@ import {
   chownSync,
   existsSync,
   lutimesSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   rmSync,
@@ -444,5 +445,67 @@ describe("the alert reason is scrubbed before it reaches a reason field", () => 
     assert.match(reason, /visiblered/u);
     assert.ok(!reason.includes("\u200B"), "zero-width space survived");
     assert.ok(!reason.includes("\u001B"), "ANSI introducer survived");
+  });
+});
+
+const { buildPreToolUseResponse } =
+  await import("../claude-hooks/pretooluse-sanitize.mjs");
+
+describe("an acknowledgement that cannot be recorded", () => {
+  const session = SESSIONS[0];
+  const bash = { tool_name: "Bash", tool_input: { command: "ls" } };
+  const call = () =>
+    buildPreToolUseResponse({ ...bash, session_id: session }, () => null);
+  /**
+   * Plant a directory where the ack file goes, so no ack can be written.
+   * @param {() => Promise<void>} fn
+   */
+  async function withUnwritableAck(fn) {
+    mkdirSync(alertAckFile(session));
+    try {
+      await fn();
+    } finally {
+      rmSync(alertAckFile(session), { recursive: true, force: true });
+    }
+  }
+
+  it("is reported by acknowledgeAlert", () =>
+    withUnwritableAck(async () => {
+      assert.equal(acknowledgeAlert(session), false);
+      assert.equal(alertAcknowledged(session), false);
+    }).then(() => assert.equal(acknowledgeAlert(session), true)));
+
+  it("carries the finding as a warning on every call by default, never an ask", () =>
+    withUnwritableAck(async () => {
+      appendAlert("planted finding", session);
+      for (let n = 0; n < 2; n++) {
+        const fields = await call();
+        assert.equal(fields.permissionDecision, undefined);
+        assert.match(fields.additionalContext, /planted finding/);
+        assert.match(fields.additionalContext, /could not record/);
+      }
+    }));
+
+  it("asks on every call under AGENT_SANITIZER_FAIL_OPEN=0", () =>
+    withUnwritableAck(async () => {
+      appendAlert("planted finding", session);
+      process.env.AGENT_SANITIZER_FAIL_OPEN = "0";
+      try {
+        for (let n = 0; n < 2; n++) {
+          const fields = await call();
+          assert.equal(fields.permissionDecision, "ask");
+          assert.match(fields.permissionDecisionReason, /planted finding/);
+        }
+      } finally {
+        delete process.env.AGENT_SANITIZER_FAIL_OPEN;
+      }
+    }));
+
+  it("non-vacuity: a recordable ack asks once, then reminds", async () => {
+    appendAlert("planted finding", session);
+    assert.equal((await call()).permissionDecision, "ask");
+    const second = await call();
+    assert.equal(second.permissionDecision, undefined);
+    assert.match(second.additionalContext, /still unvetted/);
   });
 });

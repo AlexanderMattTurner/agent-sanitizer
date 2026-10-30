@@ -77,6 +77,9 @@ export const USER_PROMPT_MESSAGES = Object.freeze({
 
 const HOOK_NAME = "sanitize-user-prompt";
 
+/** The `code` of the error a payload the adapter cannot classify raises. */
+const UNKNOWN_EVENT_CODE = "UNKNOWN_EVENT";
+
 // This hook's entry in the one posture table (lib/hook-fault.mjs). OPEN is the
 // shared default (a warning context alongside the prompt); CLOSED is a
 // top-level `decision: "block"`, NOT a hookSpecificOutput verdict —
@@ -85,15 +88,18 @@ const HOOK_NAME = "sanitize-user-prompt";
 registerFaultPolicy(HOOK_NAME, {
   event: HookEvent.USER_PROMPT_SUBMIT,
   guarded: "prompt",
-  closed: (ctx) => ({
-    envelope: {
-      decision: "block",
-      reason: {
-        ...USER_PROMPT_MESSAGES,
-        ...ctx.messages,
-      }.hookFailed(ctx.message),
-    },
-  }),
+  closed: (ctx) => {
+    const err = /** @type {{ code?: unknown, reason?: string } | null} */ (
+      ctx.err
+    );
+    // An unclassifiable payload blocks with the host's own `unknownEvent`
+    // reason, carried on the error, rather than wrapped as a hook failure.
+    const reason =
+      err?.code === UNKNOWN_EVENT_CODE
+        ? /** @type {string} */ (err.reason)
+        : { ...USER_PROMPT_MESSAGES, ...ctx.messages }.hookFailed(ctx.message);
+    return { envelope: { decision: "block", reason } };
+  },
 });
 
 /* c8 ignore start — module-load boundary: the imports resolve in every real
@@ -121,8 +127,9 @@ registerFaultPolicy(HOOK_NAME, {
  * Judge a normalized prompt-submit event. Agent-agnostic: consumes the
  * control-plane ToolCallEvent and returns a Verdict, so the same prompt gate
  * renders through any agent adapter, not just Claude's. Throws (into the
- * calling hook's catch) when the sanitizer package never loaded, so a prompt it
- * cannot classify takes the hook's fault posture rather than a silent ALLOW.
+ * calling hook's catch) when the sanitizer package never loaded or the payload
+ * is no recognizable event, so a prompt it cannot classify takes the hook's
+ * fault posture rather than a silent ALLOW.
  * @param {import("agent-control-plane-core").ToolCallEvent} event
  * @param {((s: string) => string) | null} [strip]  the ANSI stripper (defaults
  *   to the package's stripAnsiFully; injectable so the fault path is testable)
@@ -142,11 +149,17 @@ export function judgeSanitizeUserPrompt(
   const messages = { ...USER_PROMPT_MESSAGES, ...overrides };
   const { Decision, EventKind } = controlPlane();
   // A payload the adapter cannot classify carries no readable prompt, so an
-  // abstain would fail OPEN on harness contract drift; this gate's posture is
-  // deny-when-blind. (runJudgeCli's renderEscalated blocks it with exit 2 and
-  // the reason on stderr, which Claude honors on UserPromptSubmit.)
+  // abstain would report a CLEAN run on harness contract drift. It is a fault:
+  // the throw lands in main()'s onError, and the registered posture decides —
+  // a warning by default, a block carrying the error's `reason` (this host's
+  // `messages.unknownEvent`) under AGENT_SANITIZER_FAIL_OPEN=0.
   if (event.event === EventKind.UNKNOWN)
-    return { decision: Decision.DENY, reason: messages.unknownEvent };
+    throw Object.assign(
+      new Error(
+        "sanitize-user-prompt: unrecognized hook payload (not UserPromptSubmit)",
+      ),
+      { code: UNKNOWN_EVENT_CODE, reason: messages.unknownEvent },
+    );
   if (event.event !== EventKind.PROMPT_SUBMIT)
     return { decision: Decision.ALLOW };
   // The module-load guard, one arm per binding. The two lazyImports are

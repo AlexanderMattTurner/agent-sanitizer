@@ -404,9 +404,9 @@ if [[ -n "$payload_file" && -n "$bin_stdout_file" ]]; then
   report_launch_timing
   "$hook_binary" ${@+"$@"} <"$payload_file" >"$bin_stdout_file"
   bin_rc=$?
-  # Exit 2 is a DECISION, not a fault — the dispatcher's declared block for
-  # static wiring corruption. It goes through with whatever it wrote, exactly
-  # as on the node arm below.
+  # Exit 2 is a DECISION, not a fault — the posture the binary already
+  # resolved. It goes through with whatever it wrote, exactly as on the node
+  # arm below.
   bin_stdout="$(cat "$bin_stdout_file")"
   if [[ "$bin_rc" -eq 2 ]]; then
     printf '%s' "$bin_stdout"
@@ -538,10 +538,10 @@ forward_bundle_stdout() {
   return 0
 }
 
-# Exit 2 is a DECISION, not a fault: it is the dispatcher's declared block for
-# static wiring corruption (plugin-hooks.mjs states both posture arms block on
-# it). Degrading it into a pass would overrule the one arm that deliberately
-# ignores the posture knob, so it goes through with whatever it wrote.
+# Exit 2 is a DECISION, not a fault: the bundle resolved AGENT_SANITIZER_FAIL_OPEN
+# itself before choosing it (the dispatcher's unknown-mode arm exits 2 only
+# under =0, and 1 by default). Degrading it into a pass would overrule the
+# posture the operator pinned, so it goes through with whatever it wrote.
 if [[ "$bundle_rc" -eq 2 ]]; then
   forward_bundle_stdout
   exit 2

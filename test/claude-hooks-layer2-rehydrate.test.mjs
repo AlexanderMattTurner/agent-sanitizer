@@ -6,8 +6,12 @@
  *   - an Edit `new_string` / Write `content` carrying keyed placeholders is
  *     restored to the stored span bytes, in ONE ordered pass (stored bytes
  *     that happen to contain another placeholder's text are never re-expanded);
- *   - a key with NO stored span fails CLOSED: DENY naming the key and the
- *     missing span file, with reconstruct-or-drop guidance;
+ *   - a key with NO stored span (or an unusable store) is a FAULT deny naming
+ *     the key and the missing span file, with reconstruct-or-drop guidance.
+ *     Under the default posture it is refused once and its exact re-issue
+ *     writes the placeholder literally with a warning; with nowhere to record
+ *     that confirmation it proceeds with the warning at once. Under
+ *     AGENT_SANITIZER_FAIL_OPEN=0 the deny stands on every call;
  *   - `old_string` is never rehydrated (the placeholder lives in the model's
  *     view of prior tool output, not on disk — Edit's own no-match error is
  *     the designed outcome);
@@ -53,6 +57,29 @@ const [COMMENT_KEY] = layer2Keys(COMMENT_PH);
 // A syntactically valid key no store will ever hold.
 const MISSING_KEY = "deadbeef0000";
 const MISSING_PH = `[hidden HTML removed #${MISSING_KEY}]`;
+
+/**
+ * Run `fn` with `vars` set in process.env (the hook reads its posture and
+ * $TMPDIR — where re-issue confirmations live — from there), restoring after.
+ * @param {Record<string, string>} vars
+ * @param {() => Promise<void>} fn
+ */
+async function withEnv(vars, fn) {
+  const saved = Object.fromEntries(
+    Object.keys(vars).map((key) => [key, process.env[key]]),
+  );
+  Object.assign(process.env, vars);
+  try {
+    await fn();
+  } finally {
+    for (const [key, value] of Object.entries(saved))
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+  }
+}
+
+/** A fresh directory to hold one test's re-issue confirmations. */
+const confirmDir = () => mkdtempSync(join(base, "confirm-"));
 
 let dir;
 beforeEach(() => {
@@ -181,6 +208,21 @@ describe("fail-closed denies", () => {
     assert.ok(result.deny.includes(spanPath(MISSING_KEY)));
     assert.match(result.deny, /Reconstruct that content yourself/);
     assert.match(result.deny, /deliberately drop the placeholder/);
+    // A sanitizer fault, not a verdict: the hook's posture decides it.
+    assert.match(result.fault, new RegExp(MISSING_KEY));
+    assert.match(result.fault, /written to the file literally/);
+  });
+
+  it("treats an unusable span store as a missing span, never a throw", () => {
+    // readSpan answers null for a store it cannot trust or open, so a span
+    // that WAS persisted is as unrestorable as one that never was.
+    process.env._AGENT_SANITIZER_REVEAL_DIR = join(base, "no-such-store");
+    const result = rehydrateLayer2("Write", {
+      file_path: "/tmp/x.md",
+      content: PH,
+    });
+    assert.match(result.deny, new RegExp(SPAN_ID));
+    assert.match(result.fault, new RegExp(SPAN_ID));
   });
 
   it("denies an Edit new_string with a mix of stored and missing keys", () => {
@@ -265,18 +307,74 @@ describe("through buildPreToolUseResponse (secret rehydrator stubbed to a no-op)
     );
   });
 
-  it("denies on a missing key", async () => {
-    const fields = await buildPreToolUseResponse(
-      {
-        tool_name: "Write",
-        tool_input: { file_path: "/tmp/x.md", content: MISSING_PH },
+  const missingWrite = {
+    tool_name: "Write",
+    tool_input: { file_path: "/tmp/x.md", content: `a ${MISSING_PH} b` },
+  };
+  const build = (input = missingWrite, rehydrate = noSecretRehydrate) =>
+    buildPreToolUseResponse(input, rehydrate, noTrace);
+
+  it("refuses a missing key once, then writes it literally on the exact re-issue", () =>
+    withEnv({ TMPDIR: confirmDir() }, async () => {
+      const first = await build();
+      assert.equal(first.permissionDecision, "deny");
+      assert.match(first.permissionDecisionReason, new RegExp(MISSING_KEY));
+      assert.match(first.permissionDecisionReason, /re-issue this exact call/);
+
+      const reissued = await build();
+      assert.equal(reissued.permissionDecision, undefined);
+      // Proceeds UNCHANGED: the placeholder is what gets written.
+      assert.equal(reissued.updatedInput, undefined);
+      assert.match(reissued.additionalContext, new RegExp(MISSING_KEY));
+      assert.match(reissued.additionalContext, /written to the file literally/);
+      assert.match(reissued.additionalContext, /confirmed re-issue/);
+
+      // One confirmation approves one re-issue.
+      assert.equal((await build()).permissionDecision, "deny");
+    }));
+
+  it("proceeds with the warning at once when the confirmation cannot be recorded", () =>
+    withEnv({ TMPDIR: join(base, "no-such-tmpdir") }, async () => {
+      const fields = await build();
+      assert.equal(fields.permissionDecision, undefined);
+      assert.match(fields.additionalContext, new RegExp(MISSING_KEY));
+      assert.match(fields.additionalContext, /could not be recorded/);
+    }));
+
+  it("keeps the plain refusal on every call under AGENT_SANITIZER_FAIL_OPEN=0", () =>
+    withEnv(
+      { TMPDIR: confirmDir(), AGENT_SANITIZER_FAIL_OPEN: "0" },
+      async () => {
+        const { deny } = rehydrateLayer2("Write", missingWrite.tool_input);
+        for (let call = 0; call < 3; call++)
+          assert.deepEqual(await build(), {
+            permissionDecision: "deny",
+            permissionDecisionReason: deny,
+          });
       },
-      noSecretRehydrate,
-      noTrace,
-    );
-    assert.equal(fields.permissionDecision, "deny");
-    assert.match(fields.permissionDecisionReason, new RegExp(MISSING_KEY));
-  });
+    ));
+
+  it("needs one confirmation per refusing stage, then lets the call through", () =>
+    // Two stages fault on one call. Each refusal is confirmed on its own, so a
+    // re-issue never releases a refusal the model was not shown — and the call
+    // still gets through after one re-issue per stage, never looping.
+    withEnv({ TMPDIR: confirmDir() }, async () => {
+      const faultingRehydrate = () => ({
+        deny: "the secret stage could not run",
+        fault: "secret stage fault",
+      });
+      const verdicts = [];
+      for (let call = 0; call < 3; call++)
+        verdicts.push(await build(missingWrite, faultingRehydrate));
+      assert.match(
+        verdicts[0].permissionDecisionReason,
+        /^the secret stage could not run\. /,
+      );
+      assert.match(verdicts[1].permissionDecisionReason, /Layer-2/);
+      assert.equal(verdicts[2].permissionDecision, undefined);
+      assert.match(verdicts[2].additionalContext, /secret stage fault/);
+      assert.match(verdicts[2].additionalContext, new RegExp(MISSING_KEY));
+    }));
 
   for (const [tool, input] of [
     ["Bash", { command: `grep x <<'EOF'\n${PH}\nEOF` }],

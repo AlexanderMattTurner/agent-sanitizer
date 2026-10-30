@@ -615,12 +615,31 @@ test("every wired mode is dispatchable (no unknown-mode fail-closed)", (t) => {
   }
 });
 
-test("an unknown hook mode fails loud with the blocking exit code", (t) => {
-  const res = launch(stagePlugin(t), "PreToolUse", "no-such-hook", {});
-  // 2 is the only non-zero code Claude Code treats as blocking; a plain exit 1
-  // is a non-blocking hook error that lets the guarded action through.
-  assert.equal(res.status, 2);
-  assert.match(res.stderr, /unknown hook mode/);
+test("an unknown hook mode fails loud, and blocks only under the opt-out", (t) => {
+  // Broken wiring is a fault, so the posture decides. 2 is the only non-zero
+  // code Claude Code treats as blocking, and only the opt-out may reach it; the
+  // open default degrades through the launcher's fail-open warning instead.
+  const plugin = stagePlugin(t);
+  const open = launch(plugin, "PreToolUse", "no-such-hook", {});
+  assert.equal(open.status, 0, open.stderr);
+  assert.match(open.stderr, /unknown hook mode "no-such-hook"/);
+  assert.match(open.stderr, /reinstall or update the plugin/);
+  const verdict = JSON.parse(open.stdout).hookSpecificOutput;
+  assert.equal(verdict.hookEventName, "PreToolUse");
+  assert.equal(verdict.permissionDecision, undefined);
+  assert.match(verdict.additionalContext, /failing open/);
+
+  const closed = launch(
+    plugin,
+    "PreToolUse",
+    "no-such-hook",
+    {},
+    {
+      env: FAIL_CLOSED,
+    },
+  );
+  assert.equal(closed.status, 2);
+  assert.match(closed.stderr, /unknown hook mode "no-such-hook"/);
 });
 
 // ─── The four hooks, end to end through the launcher ─────────────────────────
@@ -1128,9 +1147,11 @@ test("a well-formed object on a non-zero exit still forwards — the second acce
 });
 
 test("a deliberate blocking exit survives the launcher's fault gate", (t) => {
-  // Exit 2 is the dispatcher's declared block for static wiring corruption
-  // (plugin-hooks.mjs: BOTH arms block). The gate must not mistake a decision
-  // for a fault and degrade it into a pass.
+  // Exit 2 is a decision the bundle took under the posture it already resolved
+  // (the dispatcher's unknown-mode arm takes it under the opt-out). The launcher
+  // reads no posture for it, so a bundle that exits 2 comes through as 2 under
+  // either knob: the gate must not mistake a decision for a fault and degrade
+  // it into a pass.
   const plugin = stagePlugin(t);
   writeFileSync(
     join(plugin, "dist", "hooks", "plugin-hooks.bundle.mjs"),
@@ -1949,8 +1970,8 @@ test("both postures answer a payload that never parsed, each in its own shape", 
     assert.ok(openShape[event], `no open shape stated for ${event}`);
     assert.ok(closedShape[event], `no closed shape stated for ${event}`);
     for (const payload of ["{not json at all", ""])
-      // Layer 4 off for the open arm: with it on, the output hook withholds an
-      // unvetted payload in either posture.
+      // Layer 4 off for the open arm, the shipped default; the hook-fault
+      // matrix drives the open arm with Layer 4 on.
       for (const [env, shape] of [
         [SECRETS_OFF, openShape],
         [FAIL_CLOSED, closedShape],
@@ -1962,22 +1983,6 @@ test("both postures answer a payload that never parsed, each in its own shape", 
           `${hook} answered the wrong shape under ${JSON.stringify(env)}: ${res.stdout}`,
         );
       }
-  }
-});
-
-test("neither posture opens an unknown hook mode", (t) => {
-  // Static wiring corruption, not a runtime failure: passing it through would
-  // mean no hook ever runs, silently, for the life of the install.
-  for (const env of [{}, FAIL_CLOSED]) {
-    const res = launch(
-      stagePlugin(t),
-      "PreToolUse",
-      "no-such-hook",
-      {},
-      { env },
-    );
-    assert.equal(res.status, 2);
-    assert.match(res.stderr, /unknown hook mode/);
   }
 });
 
@@ -1997,6 +2002,190 @@ test("the open posture does NOT relax detection verdicts", (t) => {
   const out = JSON.parse(res.stdout);
   assert.equal(out.decision, "block");
   assert.match(out.reason, /U\+E00/);
+});
+
+/**
+ * Faults that reach each wired hook's OWN error path through the real bundle,
+ * keyed by mode. A case is `setup(project)` returning the payload (and any env)
+ * for one launch, plus the stderr line that proves the hook's own path ran — a
+ * corrupt bundle would only prove the launcher's. `secretsOnly` marks a case
+ * that is no fault at all with Layer 4 off.
+ * @type {Record<string, Array<{
+ *   name: string,
+ *   marker: RegExp,
+ *   secretsOnly?: boolean,
+ *   setup: (project: string, session: string) => {
+ *     payload: unknown, env?: Record<string, string> },
+ * }>>}
+ */
+const HOOK_FAULTS = {
+  "scan-invisible-chars": [
+    {
+      name: "an unreadable instruction file",
+      marker: /INSTRUCTION FILES NOT SCANNED/,
+      setup: (project, session) => {
+        mkdirSync(join(project, "CLAUDE.md"));
+        return {
+          payload: { hook_event_name: "SessionStart", session_id: session },
+        };
+      },
+    },
+  ],
+  "sanitize-user-prompt": [
+    {
+      name: "a payload naming no event",
+      marker: /unrecognized hook payload \(not UserPromptSubmit\)/,
+      setup: (_project, session) => ({
+        payload: { session_id: session, prompt: "hello" },
+      }),
+    },
+  ],
+  "scan-loaded-instructions": [
+    {
+      name: "an unreadable loaded file",
+      marker: /scan-loaded-instructions hook error: EISDIR/,
+      setup: (project, session) => {
+        mkdirSync(join(project, "CLAUDE.md"));
+        return {
+          payload: {
+            hook_event_name: "InstructionsLoaded",
+            session_id: session,
+            file_path: join(project, "CLAUDE.md"),
+            load_reason: "session_start",
+          },
+        };
+      },
+    },
+  ],
+  "pretooluse-sanitize": [
+    {
+      name: "unparsable stdin",
+      marker: /pretooluse-sanitize hook error/,
+      setup: () => ({ payload: "{not json at all" }),
+    },
+    {
+      name: "a payload naming no event",
+      marker: /unrecognized hook payload/,
+      setup: (_project, session) => ({
+        payload: {
+          session_id: session,
+          tool_name: "Bash",
+          tool_input: { command: "ls" },
+        },
+      }),
+    },
+  ],
+  "sanitize-output": [
+    {
+      name: "a dead redactor",
+      marker: /secret redaction failed/,
+      secretsOnly: true,
+      setup: (_project, session) => ({
+        payload: {
+          hook_event_name: "PostToolUse",
+          session_id: session,
+          tool_name: "Bash",
+          tool_input: {},
+          tool_response: { stdout: "aws_key=AKIAIOSFODNN7EXAMPLE" },
+        },
+        env: DEAD_REDACTOR,
+      }),
+    },
+    {
+      name: "unparsable stdin",
+      marker: /sanitize-output hook error/,
+      setup: () => ({ payload: "{not json at all" }),
+    },
+  ],
+};
+
+/** The fault every wired event shares: hooks.json naming no dispatchable mode. */
+const UNKNOWN_MODE_FAULT = {
+  name: "an unknown hook mode",
+  marker: /unknown hook mode "no-such-hook"/,
+  mode: "no-such-hook",
+  setup: () => ({ payload: {} }),
+};
+
+/**
+ * What one launch did to the session: whether it blocked, denied, asked,
+ * replaced the output, or armed the gate a later tool call asks on. The gate is
+ * read by the real PreToolUse hook on an ordinary call in the same session,
+ * because an armed alert is the only way SessionStart or InstructionsLoaded
+ * can stop anything.
+ * @returns {string[]}  the enforcement channels that fired; empty when none did
+ */
+function enforcementSeen(plugin, res, project, session, env) {
+  const fired = [];
+  if (res.status === 2) fired.push("exit 2");
+  const out = res.stdout.trim() === "" ? {} : JSON.parse(res.stdout);
+  const decision = out.hookSpecificOutput?.permissionDecision;
+  if (decision === "deny" || decision === "ask") fired.push(decision);
+  if (out.decision === "block") fired.push("decision: block");
+  if (out.hookSpecificOutput?.updatedToolOutput !== undefined)
+    fired.push("updatedToolOutput");
+  const probe = launch(
+    plugin,
+    "PreToolUse",
+    "pretooluse-sanitize",
+    {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      tool_name: "Bash",
+      tool_input: { command: "ls" },
+    },
+    { env: { ...env, CLAUDE_PROJECT_DIR: project }, cwd: project },
+  );
+  if (probe.status === 2) fired.push("next tool call: exit 2");
+  const gate = JSON.parse(probe.stdout || "{}").hookSpecificOutput;
+  if (gate?.permissionDecision !== undefined)
+    fired.push(`next tool call: ${gate.permissionDecision}`);
+  return fired;
+}
+
+test("no hook fault blocks under the default posture, and every one closes under the opt-out", (t) => {
+  // The fail-open guarantee, end to end: every hook hooks.json wires, driven
+  // through the real launcher and bundle into a fault its own catch answers.
+  // With no knob set, and with only Layer 4 opted in, nothing may stop the
+  // session. The same faults under AGENT_SANITIZER_FAIL_OPEN=0 must each close
+  // something, which is what proves each case reached a posture decision.
+  const plugin = stagePlugin(t);
+  const wired = wiredHooks();
+  assert.ok(wired.length >= 5, "hooks.json wires fewer hooks than expected");
+  const OPEN = [
+    ["no knobs", SECRETS_OFF],
+    ["Layer 4 on", {}],
+  ];
+  // Collected rather than thrown at the first: one run names every row that
+  // breaks the guarantee.
+  const violations = [];
+  for (const [event, mode] of wired) {
+    assert.ok(HOOK_FAULTS[mode]?.length, `${mode} has no fault case`);
+    for (const fault of [...HOOK_FAULTS[mode], UNKNOWN_MODE_FAULT])
+      for (const [label, env, open] of [
+        ...OPEN.map(([name, knobs]) => [name, knobs, true]),
+        ["FAIL_OPEN=0", FAIL_CLOSED, false],
+      ]) {
+        if (fault.secretsOnly && env === SECRETS_OFF) continue;
+        const where = `${event}:${mode} / ${fault.name} / ${label}`;
+        const project = scratch(t);
+        const session = `matrix-${(launchSeq += 1)}`;
+        const { payload, env: faultEnv = {} } = fault.setup(project, session);
+        const runEnv = { ...env, ...faultEnv, CLAUDE_PROJECT_DIR: project };
+        const res = launch(plugin, event, fault.mode ?? mode, payload, {
+          env: runEnv,
+          cwd: project,
+        });
+        if (!fault.marker.test(res.stderr))
+          violations.push(`${where}: fault not reached: ${res.stderr}`);
+        const fired = enforcementSeen(plugin, res, project, session, runEnv);
+        if (open && fired.length > 0)
+          violations.push(`${where}: blocked via ${fired.join(", ")}`);
+        if (!open && fired.length === 0)
+          violations.push(`${where}: the opt-out closed nothing`);
+      }
+  }
+  assert.deepEqual(violations, []);
 });
 
 // ─── Provisioning ────────────────────────────────────────────────────────────

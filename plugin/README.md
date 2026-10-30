@@ -119,9 +119,14 @@ proceeds and the model is told, in `additionalContext`, that what it is reading
 was never sanitized — tool output a dead redactor could not check for secrets
 included. One exception, with secrets enabled, when the hook process starts but
 its machinery fails: a write-shaped call (Write/Edit/MultiEdit/NotebookEdit) whose
-input carries `[REDACTED` placeholder text **asks** even under the open
-default — with the sanitizer down, rehydration cannot run, and passing it
-through would persist the placeholder over the real secret on disk. (A missing
+input carries `[REDACTED` placeholder text is **refused once** — with the
+sanitizer down, rehydration cannot run, and passing it through would persist the
+placeholder over the real secret on disk. Re-issuing the exact same call writes
+it literally, with a warning; if the hook cannot record that confirmation, the
+call proceeds at once with the warning, so a fault never leaves the model stuck.
+The same refuse-once rule covers an Edit/Write whose placeholder the hook cannot
+restore: a missing span, an unreadable target, a redactor map that fails
+validation. (A missing
 `node` or a corrupt bundle is caught earlier by the launcher, which cannot
 inspect the payload and always warns.) What it never does is fail SILENTLY — Claude Code treats a
 crashed hook as "no objection" and says nothing, so the launcher
@@ -210,8 +215,8 @@ And one posture knob, for what happens when a hook itself fails:
 Unset, a missing `node`, a corrupt bundle, an uninstalled package, an
 unreachable redaction daemon or a layer that threw all let the guarded action
 proceed with the warning attached. One exception, with secrets enabled, when the
-hook process does run at all: a placeholder-bearing write asks instead — see
-above. (A missing
+hook process does run at all: a placeholder-bearing write is refused once, and
+proceeds on the exact re-issue — see above. (A missing
 `node` or a corrupt bundle is handled by the launcher, which cannot inspect
 the payload and always warns.) Set to `0` (or `false`; every other value,
 including `1`, is the open default) they halt instead.

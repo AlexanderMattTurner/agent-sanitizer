@@ -706,14 +706,17 @@ export function alertAcknowledged(sessionId) {
 /**
  * Record that the gate has surfaced its blocking ask, so later tool calls get a
  * passive reminder instead of an ask on every call. Session-keyed, so the next
- * session re-asks once without anything having to clear this.
+ * session re-asks once without anything having to clear this. Returns false
+ * when the ack could not be recorded, so the caller knows the next call will
+ * ask again: under the fail-open posture it surfaces the finding as a warning
+ * rather than asking on every tool call for the rest of the session.
  * @param {string} [sessionId]
- * @returns {void}
+ * @returns {boolean}
  */
 export function acknowledgeAlert(sessionId) {
   // Symlink-safe presence write: the ack sits at a predictable STATE_ROOT path
   // a co-tenant could pre-plant a symlink at (see writeSentinelFile).
-  writeSentinelFile(alertAckFile(sessionId));
+  return writeSentinelFile(alertAckFile(sessionId));
 }
 
 // What the operator can actually DO — one bullet per kind of report the alert

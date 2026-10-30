@@ -21,9 +21,9 @@ const { claudeAdapter } = await import("agent-control-plane-core/claude");
 const { Decision } = await import("agent-control-plane-core");
 const { missingPackageMessage, safeErrMessage } =
   await import("../claude-hooks/lib/hook-io.mjs");
-const { judgeSanitizeUserPrompt } =
+const { judgeSanitizeUserPrompt, main: userPromptMain } =
   await import("../claude-hooks/sanitize-user-prompt.mjs");
-const { judgePreToolUseSanitize, failClosedFields } =
+const { judgePreToolUseSanitize, failClosedFields, hookFailureFields } =
   await import("../claude-hooks/pretooluse-sanitize.mjs");
 
 // Verbatim from the downstream fork.
@@ -56,16 +56,40 @@ const unknownEvent = () => parse({ no_such_field: 1 });
 
 describe("a host can retire its fork through the seams", () => {
   it("emits the host's deny-when-blind reason on both gates", async () => {
-    assert.equal(
-      judgeSanitizeUserPrompt(unknownEvent(), undefined, HOST_PROMPT_MESSAGES)
-        .reason,
-      HOST_PROMPT_MESSAGES.unknownEvent,
+    // The prompt gate too: a blind payload is a fault, and under the strict
+    // posture main()'s onError blocks it with the host's reason, verbatim.
+    const written = [];
+    await userPromptMain(
+      async () => ({ no_such_field: 1 }),
+      (chunk) => written.push(chunk),
+      {
+        env: { AGENT_SANITIZER_FAIL_OPEN: "0" },
+        overrides: HOST_PROMPT_MESSAGES,
+      },
     );
-    const verdict = await judgePreToolUseSanitize(unknownEvent(), undefined, {
+    assert.deepEqual(
+      written.map((chunk) => JSON.parse(chunk)),
+      [{ decision: "block", reason: HOST_PROMPT_MESSAGES.unknownEvent }],
+    );
+    // PreToolUse treats a blind payload as a fault: the judge throws, and the
+    // host's posture renders it — a deny carrying the host's reason under the
+    // strict posture, as the CLI's onError composes it.
+    const err = await judgePreToolUseSanitize(unknownEvent(), undefined, {
       messages: HOST_PRE_TOOL_USE_MESSAGES,
-    });
-    assert.equal(verdict.decision, Decision.DENY);
-    assert.equal(verdict.reason, HOST_PRE_TOOL_USE_MESSAGES.unknownEvent);
+    }).then(
+      () => assert.fail("an UNKNOWN event must throw"),
+      (thrown) => thrown,
+    );
+    assert.deepEqual(
+      hookFailureFields(true, err, {
+        env: { AGENT_SANITIZER_FAIL_OPEN: "0" },
+        messages: HOST_PRE_TOOL_USE_MESSAGES,
+      }),
+      {
+        permissionDecision: Decision.DENY,
+        permissionDecisionReason: HOST_PRE_TOOL_USE_MESSAGES.unknownEvent,
+      },
+    );
   });
 
   it("carries the host's remedy into a fail-closed reason", () => {

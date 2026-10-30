@@ -1199,26 +1199,30 @@ export function touchLiveState(path) {
  * file the hook's user owns. Unlink any existing entry first (removing a squatted
  * symlink), then create exclusively (O_EXCL) so a symlink re-planted in the race
  * window fails the open rather than being dereferenced. Content is irrelevant —
- * callers test only for existence — so the file is left empty. Best-effort: a
- * missing/read-only $TMPDIR or a lost race just leaves the sentinel absent, and
- * every caller treats "absent" as "not yet done" (a repeated ask, never a crash),
- * so all failures are swallowed.
+ * callers test only for existence — so the file is left empty. Never throws: a
+ * missing/read-only $TMPDIR or a lost race leaves the sentinel absent, and the
+ * return value says so. A caller whose refusal is released only by a later read
+ * of this sentinel must branch on it, because a refusal that records nothing can
+ * never be released.
  * @param {string} path
- * @returns {void}
+ * @returns {boolean}  whether a sentinel this uid owns now exists at `path`
+ *   (the same test {@link markerIsTrusted} applies when a reader looks for it)
  */
 export function writeSentinelFile(path) {
   try {
     unlinkSync(path);
   } catch {
     // No existing entry (the common case), or an unremovable one — either way the
-    // exclusive create below is the real guard, and its own failure is swallowed.
+    // exclusive create below is the real guard, and its own failure is returned.
   }
   try {
     closeSync(openSync(path, "wx"));
   } catch {
     // A symlink re-planted in the unlink→open window, an unwritable dir, or a
-    // leftover entry: skip silently — the caller simply re-asks next time.
+    // leftover entry.
+    return false;
   }
+  return markerIsTrusted(path);
 }
 
 /**

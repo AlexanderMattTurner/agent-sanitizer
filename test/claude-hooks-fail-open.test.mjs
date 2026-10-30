@@ -14,6 +14,9 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const { failOpenEnabled, failOpenContext, missingPackageError, FAIL_OPEN_ENV } =
   await import("../claude-hooks/lib/hook-io.mjs");
@@ -21,8 +24,11 @@ const {
   failClosedFields,
   hookFailureFields,
   hintedWriteFault,
+  judgePreToolUseSanitize,
+  PRE_TOOL_USE_MESSAGES,
   REDACTION_HINT,
 } = await import("../claude-hooks/pretooluse-sanitize.mjs");
+const { claudeAdapter } = await import("agent-control-plane-core/claude");
 const { DEFAULT_HINT } = await import("../src/rehydrate.mjs");
 const { SECRETS_ENABLED_ENV, secretsEnabled } =
   await import("../claude-hooks/lib/env-config.mjs");
@@ -149,6 +155,38 @@ describe("PreToolUse hookFailureFields", () => {
       hookFailureFields(false, ABSENT, { env: CLOSED }).permissionDecision,
       "deny",
     );
+  });
+});
+
+describe("an unclassifiable PreToolUse payload", () => {
+  // No hook_event_name: the adapter classifies it UNKNOWN. The judge throws, and
+  // the CLI's onError renders the throw with hookFailureFields — composed here
+  // exactly as cliMain composes them.
+  const blind = async (env) => {
+    const err = await judgePreToolUseSanitize(
+      claudeAdapter.parse({ tool_name: "Bash", tool_input: { command: "ls" } }),
+    ).then(
+      () => assert.fail("an UNKNOWN event must be a fault, not a verdict"),
+      (thrown) => thrown,
+    );
+    return hookFailureFields(true, err, {
+      env,
+      messages: PRE_TOOL_USE_MESSAGES,
+    });
+  };
+
+  it("proceeds with the fault warning by default", async () => {
+    const fields = await blind(OPEN);
+    assert.equal(fields.permissionDecision, undefined);
+    assert.match(String(fields.additionalContext), /unrecognized hook payload/);
+    assert.match(String(fields.additionalContext), /UNSANITIZED/);
+  });
+
+  it("keeps the deny-when-blind verdict under the opt-out", async () => {
+    assert.deepEqual(await blind(CLOSED), {
+      permissionDecision: "deny",
+      permissionDecisionReason: PRE_TOOL_USE_MESSAGES.unknownEvent,
+    });
   });
 });
 
@@ -316,16 +354,66 @@ describe("the open posture's placeholder-write carve-out", () => {
       assert.equal(hintedWriteFault(input), false);
   });
 
-  it("asks under the OPEN posture instead of passing the write through", () => {
-    const fields = hookFailureFields(true, ABSENT, {
-      env: OPEN_SECRETS,
-      input: HINTED_WRITE,
-    });
-    assert.equal(fields.permissionDecision, "ask");
-    assert.match(String(fields.permissionDecisionReason), /placeholder/);
-    assert.match(String(fields.permissionDecisionReason), /fail-open posture/);
-    assert.equal(fields.additionalContext, undefined);
-  });
+  /**
+   * Run `fn` with $TMPDIR (where the re-issue confirmations live) pointed at
+   * `dir`, a fresh private directory by default, removed afterwards.
+   * @param {(dir: string) => void} fn
+   * @param {string} [dir]
+   */
+  function withTmpdir(fn, dir) {
+    const own = dir ?? mkdtempSync(join(tmpdir(), "sanitizer-reissue-"));
+    const saved = process.env.TMPDIR;
+    process.env.TMPDIR = own;
+    try {
+      fn(own);
+    } finally {
+      if (saved === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = saved;
+      if (dir === undefined) rmSync(own, { recursive: true, force: true });
+    }
+  }
+  const fault = () =>
+    hookFailureFields(true, ABSENT, { env: OPEN_SECRETS, input: HINTED_WRITE });
+
+  it("refuses once under the OPEN posture, then lets the exact re-issue through with a warning", () =>
+    withTmpdir(() => {
+      const first = fault();
+      assert.equal(first.permissionDecision, "deny");
+      assert.match(String(first.permissionDecisionReason), /placeholder/);
+      assert.match(
+        String(first.permissionDecisionReason),
+        /re-issue this exact call/,
+      );
+      assert.equal(first.additionalContext, undefined);
+
+      const reissued = fault();
+      assert.equal(reissued.permissionDecision, undefined);
+      assert.match(String(reissued.additionalContext), /UNSANITIZED/);
+      assert.match(String(reissued.additionalContext), /written literally/);
+      assert.match(String(reissued.additionalContext), /confirmed re-issue/);
+
+      // The confirmation was spent: the next identical call is refused again,
+      // and a different write was never confirmed at all.
+      assert.equal(fault().permissionDecision, "deny");
+      const other = hookFailureFields(true, ABSENT, {
+        env: OPEN_SECRETS,
+        input: {
+          ...HINTED_WRITE,
+          tool_input: { ...HINTED_WRITE.tool_input, file_path: "/g" },
+        },
+      });
+      assert.equal(other.permissionDecision, "deny");
+    }));
+
+  it("lets the write through with a warning when the confirmation cannot be recorded", () =>
+    // A refusal nothing can release is a stuck session: with nowhere to
+    // record the re-issue, the first call already proceeds.
+    withTmpdir(() => {
+      const fields = fault();
+      assert.equal(fields.permissionDecision, undefined);
+      assert.match(String(fields.additionalContext), /written literally/);
+      assert.match(String(fields.additionalContext), /could not be recorded/);
+    }, "/nonexistent-sanitizer-tmpdir"));
 
   it("keeps the open default for every non-carve-out fault", () => {
     for (const input of [
@@ -354,13 +442,15 @@ describe("the open posture's placeholder-write carve-out", () => {
     assert.match(String(fields.additionalContext), /UNSANITIZED/);
   });
 
-  it("is invisible under the CLOSED posture (already strict)", () => {
-    assert.deepEqual(
-      hookFailureFields(true, ABSENT, {
-        env: { ...CLOSED, [SECRETS_ENABLED_ENV]: "1" },
-        input: HINTED_WRITE,
-      }),
-      failClosedFields(true, ABSENT),
-    );
-  });
+  it("is invisible under the CLOSED posture (already strict), however often re-issued", () =>
+    withTmpdir(() => {
+      for (let call = 0; call < 2; call++)
+        assert.deepEqual(
+          hookFailureFields(true, ABSENT, {
+            env: { ...CLOSED, [SECRETS_ENABLED_ENV]: "1" },
+            input: HINTED_WRITE,
+          }),
+          failClosedFields(true, ABSENT),
+        );
+    }));
 });
