@@ -52,6 +52,7 @@ on: # zizmor: ignore[dangerous-triggers]
       - Weekly Security & Dependency Remediation
       - Sync required status checks
       - Sync from Template
+      - Syscall faults
       - Validate config
       - zizmor
     # Every watched workflow above is push-to-main or schedule: only (see the
