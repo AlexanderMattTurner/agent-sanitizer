@@ -88,7 +88,7 @@ const LAZY_LOADERS = {
  * as a non-blocking hook error and shows the raw tool output. That is a
  * fail-OPEN on the very hook that withholds secrets. Registering what resolves
  * and leaving the rest absent hands the gap to each hook's own lazyImport
- * guard, whose posture is to block.
+ * guard, which answers it loudly under the operator's fault posture.
  * @returns {Promise<void>}
  */
 async function registerAvailableModules() {

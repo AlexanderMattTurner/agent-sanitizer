@@ -630,11 +630,10 @@ async function vetStageValue(text, redact, findings, label) {
 
 /**
  * Run the configured layers over a single text blob. Layer 1 always runs; the
- * rest are opt-in via `options`. Layer 4 (`redact`) is the fail-closed path: a
- * redactor that throws is rethrown wrapped, so the caller suppresses the
- * output rather than emitting an unvetted value. That fail-closed behavior
- * also applies to Layer 4's re-scan after a Layer-5 span deletion (see Layer
- * 5, below) — a redactor failure there fails the whole call closed too.
+ * rest are opt-in via `options`. A Layer 4 (`redact`) redactor that throws is
+ * rethrown wrapped, so the caller answers it under its fault posture rather
+ * than receiving unvetted text as vetted. The same holds for Layer 4's re-scan
+ * after a Layer-5 span deletion (see Layer 5, below).
  * `reveal` is the pre-Layer-2 text, present only when the HTML splice removed
  * bytes, so a caller can persist what was hidden for later inspection (see
  * {@link applyMarkdownPipeline}); the field is omitted otherwise, and also when

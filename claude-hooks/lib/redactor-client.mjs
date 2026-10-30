@@ -6,9 +6,9 @@
  * request is just a scan. detect-secrets stays the one and only detection engine
  * — this module never inspects the text itself.
  *
- * Fail-closed, per call only: a connection/protocol/scan failure throws so the
- * caller suppresses THAT output; it sets no session-wide state, so the next call
- * retries from scratch. If the socket is absent or dead we (re)spawn the daemon
+ * Per call only: a connection/protocol/scan failure throws, and the caller
+ * answers THAT output under its fault posture; it sets no session-wide state,
+ * so the next call retries from scratch. If the socket is absent or dead we (re)spawn the daemon
  * once and retry — a crashed daemon self-heals on the next redaction.
  *
  * Wire protocol: python/agent_sanitizer/secrets/data/redactor-protocol.json,
@@ -54,7 +54,7 @@ const DAEMON_REASON = /^[\x20-\x7e]{1,200}$/u;
 export { positiveMsOr } from "./knobs.mjs";
 
 // sun_path is 104 bytes on macOS (108 on Linux), NUL included; a longer path
-// makes the daemon's bind() fail and every call fail closed. The daemon binds
+// makes the daemon's bind() fail and every call fault. The daemon binds
 // "." + 16 hex digits before renaming onto "redactor.sock", so the longer
 // 17-byte name is what must fit.
 const SOCKET_PATH_MAX = 103;
@@ -100,7 +100,7 @@ export const DEFAULT_SOCKET_PATH = resolveSocketPath(process.env, currentUid());
  *
  * 1. `_AGENT_SANITIZER_REDACTOR_DAEMON` — authoritative when set (the launcher
  *    sets it to the provisioned venv's console script when one exists, and
- *    tests point it at dead paths to drive the fail-closed arm; a fallback
+ *    tests point it at dead paths to drive the fault arm; a fallback
  *    from an explicit setting would turn those arms into silent passes).
  * 2. The shipped self-contained zipapp (`plugin/dist/redactor/daemon.pyz`) —
  *    the guaranteed floor: it needs only a python3 on PATH, so a cold start
@@ -126,7 +126,7 @@ function daemonCommand() {
 }
 // How long to wait for a freshly-spawned daemon to start accepting. A cold start
 // pays the detect-secrets import + plugin prime (~1-3s), so the default leaves
-// margin; tests shorten it to exercise the give-up-and-fail-closed path quickly.
+// margin; tests shorten it to exercise the give-up path quickly.
 const WAIT_DEADLINE_MS = readKnob("_AGENT_SANITIZER_REDACTOR_WAIT_MS");
 
 // A daemon that ACCEPTS the connection but then stalls — a deadlock, a
@@ -270,9 +270,9 @@ export function classifySocket(socketPath, deps = {}) {
  * by us or by root, carrying no group/other write bit.
  *
  * This refusal is what blocks a co-tenant unlinking our socket and binding their
- * own listener that answers "nothing to redact" to every payload, which would flip
- * the fail-CLOSED redactor to fail-OPEN and leak unscrubbed secrets to the
- * transcript.
+ * own listener that answers "nothing to redact" to every payload, which would turn
+ * a loud fault into a silent "nothing to redact" and leak unscrubbed secrets to
+ * the transcript.
  *
  * Root ownership is trusted because it is strictly stronger than our own, not a
  * concession: a deployment may hand the socket dir to root after the daemon has
@@ -291,9 +291,9 @@ function isTrustedSocketDir(dir, uid) {
 /**
  * Open one connection, send `request`, resolve with the parsed response object
  * (or null). Rejects on connect failure, a malformed/oversize/short frame, or an
- * {error} response — every one of which the caller turns into a fail-closed. A
+ * {error} response — every one of which the caller treats as a fault. A
  * socket present but not owned by us, and a request the protocol does not
- * accept, fail closed WITHOUT dialing (the error carries no errno, so
+ * accept, throw WITHOUT dialing (the error carries no errno, so
  * isRespawnable is false): we never dial into a squat, and an oversize request
  * is not mistaken for a dead daemon worth respawning.
  * @param {string} socketPath
@@ -484,7 +484,7 @@ function canConnect(socketPath) {
 /**
  * Redact `text` via the daemon. Returns the response object (`{text, found}` for
  * plain, `{text, pairs, found}` / `{unmappable}` for map) or null when nothing was
- * redacted (plain mode). Throws to fail closed when the text cannot be vetted.
+ * redacted (plain mode). Throws when the text cannot be vetted.
  *
  * `connect`/`spawn`/`waitForSocket` are injectable seams (default to the real
  * implementations) so callers can stub the daemon in-process. `deadline` is the

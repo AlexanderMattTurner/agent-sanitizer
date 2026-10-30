@@ -19,7 +19,7 @@ import functools
 import re
 from collections.abc import Sequence
 
-# strip logic and the env-bound run-pattern live here; the CHARSET is imported.
+# strip logic lives here; the CHARSET is imported.
 from ..invisible import invisible_charset as _shared_charset
 from ..textstrip import ANSI_RE, INTRODUCER_RE
 
