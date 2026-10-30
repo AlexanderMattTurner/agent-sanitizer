@@ -99,6 +99,13 @@ const FUZZ_EXEMPT = Object.freeze({
   announcedByInstructionsLoaded:
     "splits one path on its separators and looks the tail up in the kind table",
   classifyReadFailure: "maps one errno code to a bucket, with no parse",
+  confirmFresh:
+    "stats one package-named sentinel file for trust and age, with no parse",
+  consumeConfirm:
+    "checks then unlinks one package-named sentinel file, with no parse",
+  recordConfirm: "writes one package-named sentinel file, with no parse",
+  reissueFingerprint:
+    "sha256 over JSON.stringify of the tool input; no parse or transform of its own",
   closingTagName: "reads one tag name out of an already-tokenized HTML value",
   contextScanExclude:
     "composes excludeFromContextScan with a set of paths git listed; its one parse, the NUL-delimited listing, is pinned by the quoted-directory case in repo-scope.test.mjs",
@@ -346,6 +353,7 @@ const FUZZ_EXEMPT = Object.freeze({
     "configureHookgateMarker",
     "configureMissingPackageRemedy",
     "controlPlane",
+    "createEnvelopeBuffer",
     "defaultOpen",
     "depLoadHint",
     "failedLazyPackages",

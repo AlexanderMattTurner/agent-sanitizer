@@ -249,6 +249,8 @@ describe("rehydrate: gating", () => {
       io,
     );
     assert.match(out.deny, /cannot resolve redaction placeholders/);
+    // A verdict the model can act on: it names the escape, so no re-issue loops.
+    assert.match(out.deny, /Leave every \[REDACTED…\] placeholder out/);
   });
 
   it("passes through an unmappable file for a hint-free Edit", async () => {
@@ -2304,5 +2306,76 @@ describe("rehydrate: a defective redactor map is never spliced", () => {
       mapIo([{ placeholder: PH, original: SECRET_A, start: 2 }]),
     );
     assert.match(out.deny, /single Edit calls/);
+    // A capability verdict with a working escape (single Edits), not a fault.
+    assert.equal(out.fault, undefined);
+  });
+
+  it("marks a defective-map deny as a fault naming what proceeding writes", async () => {
+    for (const toolInput of [
+      hintedEdit,
+      { file_path: "/f", old_string: "key=", new_string: "k=" },
+    ]) {
+      const out = await rehydrateRedacted(
+        "Edit",
+        toolInput,
+        mapIo([{ placeholder: PH, original: SECRET_A, start: 2 }]),
+      );
+      assert.match(out.fault, /map is inconsistent/);
+      assert.match(out.fault, /written to the file literally/);
+      assert.ok(!out.fault.includes(SECRET_A));
+    }
+  });
+
+  it("names the secrets an unhinted Write on a defective map may remove", async () => {
+    const io = () => mapIo([{ placeholder: PH, original: SECRET_A, start: 2 }]);
+    const write = await rehydrateRedacted(
+      "Write",
+      { file_path: "/f", content: "k=1\n" },
+      io(),
+    );
+    for (const text of [write.deny, write.fault])
+      assert.match(
+        text,
+        /any redacted secret it does not reproduce is removed/,
+      );
+    // Non-vacuity: an Edit replaces no whole file, so it carries no such note.
+    const edit = await rehydrateRedacted(
+      "Edit",
+      { file_path: "/f", old_string: "key=", new_string: "k=" },
+      io(),
+    );
+    assert.doesNotMatch(edit.fault, /does not reproduce/);
+  });
+});
+
+describe("rehydrate: which denies are faults", () => {
+  it("marks an unreadable target as a fault, and an unmappable verdict as none", async () => {
+    const unreadable = await rehydrateRedacted(
+      "Write",
+      { file_path: "/locked", content: `secret: ${PH}` },
+      {
+        readFile: () => {
+          throw fsError("EACCES");
+        },
+        redactMap: () => {
+          throw new Error("redactMap must not be reached");
+        },
+        redact: () => null,
+      },
+    );
+    assert.match(unreadable.fault, /\/locked could not be read \(EACCES\)/);
+    assert.match(unreadable.fault, /written to the file literally/);
+
+    const unmappable = await rehydrateRedacted(
+      "Write",
+      { file_path: "/f", content: `secret: ${PH}` },
+      fakeIo(
+        `secret: ${SECRET_A}`,
+        { unmappable: "reserved sentinel" },
+        () => "x",
+      ),
+    );
+    assert.match(unmappable.deny, /cannot resolve redaction placeholders/);
+    assert.equal(unmappable.fault, undefined);
   });
 });

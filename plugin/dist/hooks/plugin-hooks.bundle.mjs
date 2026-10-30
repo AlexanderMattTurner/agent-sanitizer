@@ -564,6 +564,40 @@ function emitHookResponse(hookEventName, fields) {
     JSON.stringify({ hookSpecificOutput: { hookEventName, ...fields } })
   );
 }
+function mergeEnvelopes(envelopes) {
+  const merged = {};
+  const specific = {};
+  const systemMessages = [];
+  const contexts = [];
+  for (const { hookSpecificOutput, systemMessage, ...rest } of envelopes) {
+    Object.assign(merged, rest);
+    if (systemMessage) systemMessages.push(systemMessage);
+    if (!hookSpecificOutput) continue;
+    const { additionalContext, ...fields } = hookSpecificOutput;
+    Object.assign(specific, fields);
+    if (additionalContext) contexts.push(additionalContext);
+  }
+  if (systemMessages.length > 0)
+    merged.systemMessage = systemMessages.join("\n");
+  if (contexts.length > 0) specific.additionalContext = contexts.join("\n");
+  if (Object.keys(specific).length > 0) merged.hookSpecificOutput = specific;
+  return merged;
+}
+function createEnvelopeBuffer(write = (chunk) => process.stdout.write(chunk)) {
+  const pending = [];
+  const add = (envelope) => {
+    pending.push(envelope);
+  };
+  return {
+    add,
+    emit: (hookEventName, fields) => add({ hookSpecificOutput: { hookEventName, ...fields } }),
+    flush() {
+      if (pending.length === 0) return;
+      write(JSON.stringify(mergeEnvelopes(pending)));
+      pending.length = 0;
+    }
+  };
+}
 function resolveStateRoot(env) {
   const data = env.CLAUDE_PLUGIN_DATA;
   if (!data || !isAbsolute(data)) return tmpdir();
@@ -591,10 +625,10 @@ function hookgateMarkerPath(projectDir = process.env.CLAUDE_PROJECT_DIR, runtime
   shared.hookgateMarkerResolved = true;
   if (shared.hookgateMarker !== null) return shared.hookgateMarker;
   if (!projectDir) return null;
-  const base = runtimeDir && runtimeDir.startsWith("/") ? runtimeDir : "/tmp";
+  const base = runtimeDir && isAbsolute(runtimeDir) ? runtimeDir : "/tmp";
   const digest = createHash("sha256").update(projectDir).digest("hex").slice(0, 8);
   const flattened = projectDir.replace(/[^A-Za-z0-9]/g, "_");
-  return `${base}/${HOOKGATE_MARKER_STEM}${flattened}-${digest}`;
+  return join2(base, `${HOOKGATE_MARKER_STEM}${flattened}-${digest}`);
 }
 function lockHeldOn(fd) {
   const probe = spawnSync("flock", ["--nonblock", "--exclusive", "3"], {
@@ -778,7 +812,9 @@ function writeSentinelFile(path2) {
   try {
     closeSync(openSync(path2, "wx"));
   } catch {
+    return false;
   }
+  return markerIsTrusted(path2);
 }
 function writeFileNoFollow(path2, content3, mode = 384) {
   try {
@@ -51698,8 +51734,8 @@ function scanInlineChildren(node2, text6, ranges, warned) {
     }
   );
   let absorbing = false;
-  let rawText = (
-    /** @type {string | null} */
+  let rawTextEnd = (
+    /** @type {RegExp | null} */
     null
   );
   let prevEnd = node2.position.start.offset;
@@ -51708,9 +51744,8 @@ function scanInlineChildren(node2, text6, ranges, warned) {
     const base = child.position.start.offset;
     const end = child.position.end.offset;
     absorbing = foldAbsorb(absorbing, text6.slice(prevEnd, base));
-    if (rawText) {
-      if (new RegExp(`</${rawText}(?![a-z0-9-])`, "i").test(value))
-        rawText = null;
+    if (rawTextEnd) {
+      if (rawTextEnd.test(value)) rawTextEnd = null;
     } else if (state.depth > 0) {
       updateHiddenState(state, value, end, ranges);
     } else if (!absorbing) {
@@ -51727,7 +51762,7 @@ function scanInlineChildren(node2, text6, ranges, warned) {
       } else if (!value.startsWith("</")) {
         const el = parseHtmlTag(value);
         if (el) {
-          if (RAW_TEXT_ELEMENTS.has(el.tagName)) rawText = el.tagName;
+          rawTextEnd = RAW_TEXT_END_TAGS.get(el.tagName) ?? null;
           if (isReportedElement(el)) countTag(warned, el.tagName);
           if (hasDataSrc(el)) warned.dataSrc += 1;
         }
@@ -52232,7 +52267,7 @@ function detectConfusableHosts(text6) {
     }
   );
 }
-var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, LEXER_TOKEN_LIMIT, VALIDATION_BUDGET, cssLexer, RESETTING_SHORTHANDS, NO_CASCADE, INHERITED_COLOR_KEYWORDS, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_ELEMENTS, INHERITING_KEYWORDS, INLINE_ELEMENTS, INLINE_DISPLAYS, BLOCKIFYING_VALUES, ITEM_BLOCKIFYING_DISPLAYS, REPLACED_ELEMENTS, TEXT_ONLY_HIDES, elementCascades, parents, contentOwners, SHADOW_HOST_TAGS, RESERVED_CUSTOM_ELEMENT_NAMES, PARENT_RELATIVE_FONT_UNITS, PARENT_RELATIVE_FONT_KEYWORDS, MATH_FUNCTIONS, parseFragment2, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, MARKUP_OPENER_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, MAX_SPLICE_ROUNDS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, ACTIVE_DATA_TYPES, DATA_URI_LENGTH_THRESHOLD, SCRIPT_SCHEMES, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, BENIGN_SHORT_PARAM_RE, BENIGN_SHORT_VALUE_MAX_LEN, BENIGN_SHORT_TOTAL_MAX_LEN, PUBLIC_KEY_ID_PARAM_RE, BLOB_VALUE_MIN_LEN, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, HEX_ONLY_RE, HEX_BLOB_MIN_LEN, DIGEST_HEX_LENGTHS, BLOB_VALUE_B64URL_RE, PATH_BLOB_RE, DIGEST_MAX_LEN, BLOB_SEPARATOR_RE, BLOB_RUN_SPLIT_RE, FLOAT_RE, SRCSET_URL_RE, SRCSET_DESCRIPTORS_RE, STRING_URL_FUNCTIONS, GRAMMAR_READERS, OFF_ORIGIN_REASON, COMMENT_INTERIOR_OPENER_RE;
+var NEAR_ZERO_EPSILON, OFFSCREEN_ABSOLUTE_THRESHOLD, OFFSCREEN_VIEWPORT_THRESHOLD, ABSOLUTE_UNITS, VIEWPORT_UNITS, ANGLE_UNITS, NAMED_COLORS, BLOCK_AXIS_EXTENT_PROPS, INLINE_AXIS_EXTENT_PROPS, BORDER_SHORTHANDS, BORDER_WIDTH_KEYWORDS, FONT_SIZE_UNITS, CSS_PROPERTY_IDENT_RE, LEXER_TOKEN_LIMIT, VALIDATION_BUDGET, cssLexer, RESETTING_SHORTHANDS, NO_CASCADE, INHERITED_COLOR_KEYWORDS, REPORTED_TAGS, VOID_ELEMENTS2, FOREIGN_ELEMENTS, RAW_TEXT_END_TAGS, INHERITING_KEYWORDS, INLINE_ELEMENTS, INLINE_DISPLAYS, BLOCKIFYING_VALUES, ITEM_BLOCKIFYING_DISPLAYS, REPLACED_ELEMENTS, TEXT_ONLY_HIDES, elementCascades, parents, contentOwners, SHADOW_HOST_TAGS, RESERVED_CUSTOM_ELEMENT_NAMES, PARENT_RELATIVE_FONT_UNITS, PARENT_RELATIVE_FONT_KEYWORDS, MATH_FUNCTIONS, parseFragment2, HIDDEN_PLACEHOLDER, COMMENT_PLACEHOLDER, mdParser, parseMarkdown, MARKDOWN_CODE_HINT, BOGUS_COMMENT_OPEN_RE, MARKUP_OPENER_RE, PHRASING_ROOTS, FLOW_HTML_PARENTS, MAX_SPLICE_ROUNDS, EXFIL_INDICATORS, KEYWORD_PARAM_NAME_RE, LONG_QUERY_THRESHOLD, ACTIVE_DATA_TYPES, DATA_URI_LENGTH_THRESHOLD, SCRIPT_SCHEMES, RELATIVE_URL_BASE, BENIGN_BLOB_PARAM_RE, BENIGN_SHORT_PARAM_RE, BENIGN_SHORT_VALUE_MAX_LEN, BENIGN_SHORT_TOTAL_MAX_LEN, PUBLIC_KEY_ID_PARAM_RE, BLOB_VALUE_MIN_LEN, OPAQUE_TOKEN_RE, VALUE_HAS_DIGIT_RE, BLOB_VALUE_B64_RE, HEX_ONLY_RE, HEX_BLOB_MIN_LEN, DIGEST_HEX_LENGTHS, BLOB_VALUE_B64URL_RE, PATH_BLOB_RE, DIGEST_MAX_LEN, BLOB_SEPARATOR_RE, BLOB_RUN_SPLIT_RE, FLOAT_RE, SRCSET_URL_RE, SRCSET_DESCRIPTORS_RE, STRING_URL_FUNCTIONS, GRAMMAR_READERS, OFF_ORIGIN_REASON, COMMENT_INTERIOR_OPENER_RE;
 var init_html4 = __esm({
   "src/html.mjs"() {
     "use strict";
@@ -52519,16 +52554,16 @@ var init_html4 = __esm({
       "wbr"
     ]);
     FOREIGN_ELEMENTS = /* @__PURE__ */ new Set(["svg", "math"]);
-    RAW_TEXT_ELEMENTS = /* @__PURE__ */ new Set([
-      "script",
-      "style",
-      "textarea",
-      "title",
-      "xmp",
-      "iframe",
-      "noembed",
-      "noframes",
-      "plaintext"
+    RAW_TEXT_END_TAGS = /* @__PURE__ */ new Map([
+      ["script", /<\/script(?![a-z0-9-])/i],
+      ["style", /<\/style(?![a-z0-9-])/i],
+      ["textarea", /<\/textarea(?![a-z0-9-])/i],
+      ["title", /<\/title(?![a-z0-9-])/i],
+      ["xmp", /<\/xmp(?![a-z0-9-])/i],
+      ["iframe", /<\/iframe(?![a-z0-9-])/i],
+      ["noembed", /<\/noembed(?![a-z0-9-])/i],
+      ["noframes", /<\/noframes(?![a-z0-9-])/i],
+      ["plaintext", /<\/plaintext(?![a-z0-9-])/i]
     ]);
     INHERITING_KEYWORDS = new Set(
       "inherit unset revert revert-layer".split(" ")
@@ -52757,7 +52792,7 @@ function processLayer1(text6, sgrCarveOut) {
 function refuseIfSpent(deadline) {
   if (deadline && deadline.remainingMs() <= 0)
     throw new Error(
-      "CRITICAL: the sanitization time budget ran out before the hidden-HTML and exfil-URL layers finished, so this text was not fully checked. Failing closed \u2014 tool output suppressed."
+      "CRITICAL: the sanitization time budget ran out before the hidden-HTML and exfil-URL layers finished, so this text was not fully checked and must be treated as UNSANITIZED."
     );
 }
 async function loadHtmlLayer(deadline) {
@@ -54243,8 +54278,10 @@ async function rehydrateRedacted(tool, toolInput, io, { hint = DEFAULT_HINT } = 
       if (tool !== "Write") throw err;
       return null;
     }
+    const cause = nodeErr?.code ?? nodeErr?.message;
     return {
-      deny: `could not read ${toolInput.file_path} to rehydrate its secrets (${nodeErr?.code ?? nodeErr?.message}); the file likely still exists, so writing the placeholder text as-is risks overwriting a real secret. Retry the read, or ask the user to make this change directly`
+      deny: `could not read ${toolInput.file_path} to rehydrate its secrets (${cause}); the file likely still exists, so writing the placeholder text as-is risks overwriting a real secret. Retry the read, or ask the user to make this change directly`,
+      fault: `${toolInput.file_path} could not be read (${cause}) to rehydrate its secrets, so this call is not rehydrated and its ${hint}\u2026] placeholder text is written to the file literally`
     };
   }
   const { layer1Cleaned, cleaned } = layer1View(content3);
@@ -54256,7 +54293,7 @@ async function rehydrateRedacted(tool, toolInput, io, { hint = DEFAULT_HINT } = 
     if (tool === "MultiEdit") return multiEditDeny(toolInput.file_path);
     if (!hinted) return null;
     return {
-      deny: `cannot resolve redaction placeholders in ${toolInput.file_path}: ${mapped.unmappable}`
+      deny: `cannot resolve redaction placeholders in ${toolInput.file_path}: ${mapped.unmappable}. Leave every ${hint}\u2026] placeholder out of this call (edit around it), or ask the user to make this change`
     };
   }
   let view = null;
@@ -54274,8 +54311,10 @@ async function rehydrateRedacted(tool, toolInput, io, { hint = DEFAULT_HINT } = 
   }
   if (view === null || mapDefect !== null) {
     if (tool === "MultiEdit") return multiEditDeny(toolInput.file_path);
+    const dropped = tool === "Write" ? `; it replaces the whole file, so any redacted secret it does not reproduce is removed, and which secrets those are cannot be checked` : "";
     return {
-      deny: `cannot safely edit ${toolInput.file_path}: ${mapDefect}; the file holds redacted content whose location cannot be trusted, so no edit can be verified. Retry later, or ask the user to make this change`
+      deny: `cannot safely edit ${toolInput.file_path}: ${mapDefect}; the file holds redacted content whose location cannot be trusted, so no edit can be verified${dropped}. Retry later, or ask the user to make this change`,
+      fault: `${mapDefect} for ${toolInput.file_path}, so this call is not rehydrated: any ${hint}\u2026] placeholder text in it is written to the file literally, and it is applied without the redacted-span checks${dropped}`
     };
   }
   const viewEqualsDisk = view.pairs.length === 0 && deletions.length === 0 && cleaned === content3;
@@ -54721,7 +54760,7 @@ function alertAcknowledged(sessionId) {
   return withinFallbackTtl(path2);
 }
 function acknowledgeAlert(sessionId) {
-  writeSentinelFile(alertAckFile(sessionId));
+  return writeSentinelFile(alertAckFile(sessionId));
 }
 function gateAskReason(findings) {
   return "agent-sanitizer: the session-start scan of this project's instruction files did not finish clean.\n\n" + findings + "\n\n" + REMEDY;
@@ -55472,10 +55511,25 @@ import { join as join8, dirname as dirname6 } from "node:path";
 import { tmpdir as tmpdir3 } from "node:os";
 import { spawnSync as spawnSync3 } from "node:child_process";
 function dropFingerprint(filePath, content3, dropped = []) {
-  const digest = createHash3("sha256").update(filePath).update("\0");
+  const digest = createHash3("sha256").update("drop\0").update(filePath);
+  digest.update("\0");
   digest.update(content3);
   for (const secret of dropped) digest.update("\0").update(secret);
   return digest.digest("hex").slice(0, 32);
+}
+function reissueFingerprint(site, tool, toolInput) {
+  return createHash3("sha256").update("reissue\0").update(canonicalJson([site, tool ?? null, toolInput ?? null])).digest("hex").slice(0, 32);
+}
+function canonicalJson(value) {
+  return JSON.stringify(
+    value,
+    (_key, v) => v !== null && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(
+      Object.keys(v).sort().map((k) => [k, v[k]])
+    ) : v
+  );
+}
+function recordConfirm(fingerprint) {
+  return writeSentinelFile(confirmMarkerPath(fingerprint));
 }
 function confirmMarkerPath(fingerprint) {
   return join8(tmpdir3(), `.claude-secret-drop-${PROJECT_HASH}-${fingerprint}`);
@@ -55484,7 +55538,18 @@ function sweepStaleConfirms() {
   const dir = tmpdir3();
   const prefix = `.claude-secret-drop-${PROJECT_HASH}-`;
   const cutoff = Date.now() - CONFIRM_TTL_MS;
-  for (const name50 of readdirSync2(dir)) {
+  let names;
+  try {
+    names = readdirSync2(dir);
+  } catch (err) {
+    const code4 = (
+      /** @type {NodeJS.ErrnoException} */
+      err.code
+    );
+    if (UNUSABLE_DIR_CODES.has(String(code4))) return;
+    throw err;
+  }
+  for (const name50 of names) {
     if (!name50.startsWith(prefix)) continue;
     const path2 = join8(dir, name50);
     try {
@@ -55515,14 +55580,19 @@ function gitTracked(filePath, spawn2 = spawnSync3) {
   if (repo.error) return true;
   return repo.status === 0 && String(repo.stdout).trim() === "true";
 }
-function dropDeny(count, filePath) {
-  return `this Write removes ${count} redacted secret value(s) from ${filePath}, and the file is not tracked by git, so the secrets may be unrecoverable. If removing them is intended, re-issue this exact Write to confirm; otherwise keep each [REDACTED\u2026] placeholder (or its secret's line) in the new content`;
+function dropDeny(count, filePath, confirmable = true) {
+  const head = `this Write removes ${count} redacted secret value(s) from ${filePath}, and the file is not tracked by git, so the secrets may be unrecoverable. `;
+  const placeholders = `[REDACTED\u2026] placeholder (or its secret's line) in the new content`;
+  return confirmable ? `${head}If removing them is intended, re-issue this exact Write to confirm; otherwise keep each ${placeholders}` : `${head}Keep each ${placeholders}, or ask the user to remove them`;
+}
+function dropUnconfirmable(count, filePath) {
+  return `the secret-drop confirmation could not be recorded under ${tmpdir3()}, so this Write removes ${count} redacted secret value(s) from untracked ${filePath} without a confirmed re-issue`;
 }
 async function secretDropGuard(toolInput, io, opts = {}) {
   const {
     isTracked = gitTracked,
     confirmSeen = consumeConfirm,
-    recordConfirm = (fingerprint2) => writeSentinelFile(confirmMarkerPath(fingerprint2))
+    recordConfirm: record = recordConfirm
   } = opts;
   const { file_path: filePath, content: content3 } = toolInput ?? {};
   if (typeof filePath !== "string" || typeof content3 !== "string") return null;
@@ -55551,8 +55621,11 @@ async function secretDropGuard(toolInput, io, opts = {}) {
   if (dropped.length === 0) return null;
   const fingerprint = dropFingerprint(filePath, content3, dropped);
   if (confirmSeen(fingerprint)) return null;
-  recordConfirm(fingerprint);
-  return { deny: dropDeny(dropped.length, filePath) };
+  if (record(fingerprint)) return { deny: dropDeny(dropped.length, filePath) };
+  return {
+    deny: dropDeny(dropped.length, filePath, false),
+    fault: dropUnconfirmable(dropped.length, filePath)
+  };
 }
 function withSecretDropGuard(rehydrate, io, guard = secretDropGuard) {
   return async (tool, toolInput) => {
@@ -55561,25 +55634,31 @@ function withSecretDropGuard(rehydrate, io, guard = secretDropGuard) {
       return rehydrated;
     const finalInput = rehydrated === null ? toolInput : rehydrated.updatedInput;
     const drop = await guard(finalInput, io);
-    return drop ?? rehydrated;
+    if (drop === null) return rehydrated;
+    if (drop.fault === void 0 || rehydrated === null) return drop;
+    return { ...drop, release: rehydrated };
   };
 }
 function consumeConfirm(fingerprint) {
   const marker2 = confirmMarkerPath(fingerprint);
   if (!markerIsTrusted(marker2)) return false;
-  let fresh;
-  try {
-    fresh = Date.now() - lstatSync5(marker2).mtimeMs <= CONFIRM_TTL_MS;
-  } catch {
-    return false;
-  }
+  const fresh = confirmFresh(fingerprint);
   try {
     unlinkSync3(marker2);
   } catch {
   }
   return fresh;
 }
-var applyLayer12, LONE_SURROGATE_RE2, CONFIRM_TTL_MS;
+function confirmFresh(fingerprint) {
+  const marker2 = confirmMarkerPath(fingerprint);
+  if (!markerIsTrusted(marker2)) return false;
+  try {
+    return Date.now() - lstatSync5(marker2).mtimeMs <= CONFIRM_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+var applyLayer12, LONE_SURROGATE_RE2, CONFIRM_TTL_MS, UNUSABLE_DIR_CODES;
 var init_secret_drop_guard = __esm({
   async "claude-hooks/lib/secret-drop-guard.mjs"() {
     "use strict";
@@ -55587,6 +55666,7 @@ var init_secret_drop_guard = __esm({
     ({ applyLayer1: applyLayer12, LONE_SURROGATE_RE: LONE_SURROGATE_RE2 } = /** @type {typeof import("agent-sanitizer")} */
     await lazyImport("agent-sanitizer"));
     CONFIRM_TTL_MS = 10 * 6e4;
+    UNUSABLE_DIR_CODES = /* @__PURE__ */ new Set(["ENOENT", "ENOTDIR", "EACCES", "EPERM"]);
   }
 });
 
@@ -55947,10 +56027,13 @@ function substituteLayer2(text6, field) {
     if (stored === null) missing.push(key);
     else byKey.set(key, stored);
   }
-  if (missing.length > 0)
+  if (missing.length > 0) {
+    const files = missing.map((key) => spanPath(key)).join(", ");
     return {
-      deny: `${field} contains Layer-2 removed-content placeholder(s) whose original is not in the span store (missing key(s): ${missing.join(", ")}; expected file(s): ${missing.map((key) => spanPath(key)).join(", ")}), so the removed content cannot be restored automatically. Reconstruct that content yourself, deliberately drop the placeholder(s) if the removed content should stay removed, or ask the user to make this change`
+      deny: `${field} contains Layer-2 removed-content placeholder(s) whose original is not in the span store (missing key(s): ${missing.join(", ")}; expected file(s): ${files}), so the removed content cannot be restored automatically. Reconstruct that content yourself, deliberately drop the placeholder(s) if the removed content should stay removed, or ask the user to make this change`,
+      fault: `the Layer-2 removed-content placeholder(s) with key(s) ${missing.join(", ")} in ${field} have no stored original (expected file(s): ${files}), so they are written to the file literally and the removed content is not restored`
     };
+  }
   const spliced = spliceOrdered2(
     text6,
     matches,
@@ -55993,7 +56076,42 @@ function emitTraced(emitTrace, toolName, fields) {
   emitTrace(TraceEvent.HOOK_RAN, { hook: HOOK_NAME, tool: toolName, outcome });
   return fields;
 }
-function preToolUseLayers(rehydrate, env = process.env, secretsOn = secretsEnabled(env)) {
+function resolveStageDeny(tool, toolInput, result, site, env, ledger) {
+  if (result.fault === void 0) return { deny: result.deny };
+  const fingerprint = reissueFingerprint(site, tool, toolInput);
+  const { fields } = hookFaultOutcome(HOOK_NAME, new Error(result.fault), {
+    env,
+    site: FaultSite.STAGE,
+    fingerprint,
+    reason: result.deny,
+    warning: `WARNING: agent-sanitizer could not complete its ${site} stage on this ${tool} call and let it proceed ${result.release ? "rehydrated" : "unchanged"} (fail-open): ${result.fault}. Set ${FAIL_OPEN_ENV}=0 to refuse such calls instead.`
+  });
+  const verdict = (
+    /** @type {Record<string, unknown>} */
+    fields
+  );
+  if (verdict.permissionDecision === PermissionDecision.DENY)
+    return { deny: String(verdict.permissionDecisionReason) };
+  ledger.warnings.push(String(verdict.additionalContext));
+  ledger.released.push(fingerprint);
+  return result.release ?? null;
+}
+function preToolUseLayers(rehydrate, env = process.env, secretsOn = secretsEnabled(env), ledger) {
+  const resolveDeny = (tool, toolInput, result, site) => {
+    if (result.fault !== void 0 && ledger === void 0)
+      throw new Error(
+        `preToolUseLayers: the ${site} stage reported a fault but no ledger was passed to carry its warning`
+      );
+    return resolveStageDeny(
+      tool,
+      toolInput,
+      result,
+      site,
+      env,
+      /** @type {FaultLedger} */
+      ledger
+    );
+  };
   const layers = [
     {
       name: "confusables",
@@ -56038,7 +56156,8 @@ function preToolUseLayers(rehydrate, env = process.env, secretsOn = secretsEnabl
         const rehydrated = await /** @type {NonNullable<typeof rehydrate>} */
         rehydrate(tool, toolInput);
         if (!rehydrated) return null;
-        if ("deny" in rehydrated) return { deny: rehydrated.deny };
+        if ("deny" in rehydrated)
+          return resolveDeny(tool, toolInput, rehydrated, "rehydrate");
         return {
           updatedInput: rehydrated.updatedInput,
           context: rehydrated.context
@@ -56054,7 +56173,10 @@ function preToolUseLayers(rehydrate, env = process.env, secretsOn = secretsEnabl
       // legitimately contain [REDACTED…] text — must not be re-fed to the
       // secret resolver or re-stripped by an earlier layer.
       terminal: true,
-      run: (tool, toolInput) => rehydrateLayer2(tool, toolInput, secretsOn)
+      run: (tool, toolInput) => {
+        const result = rehydrateLayer2(tool, toolInput, secretsOn);
+        return result !== null && "deny" in result ? resolveDeny(tool, toolInput, result, "layer2-rehydrate") : result;
+      }
     }
   ];
   return layers.filter(
@@ -56067,18 +56189,18 @@ async function buildPreToolUseResponse(input, rehydrate, sink, layers) {
   const asks = [];
   const contexts = [];
   const findings = invisibleCharAlert(input.session_id);
-  let pendingGateAck = false;
+  let gateAsk = null;
   if (findings) {
     if (alertAcknowledged(input.session_id)) {
       contexts.push(gateReminderContext());
     } else {
-      asks.push(gateAskReason(findings));
-      pendingGateAck = true;
+      gateAsk = gateAskReason(findings);
     }
   }
   const { tool_name: tool, tool_input: toolInput } = input;
   const gapNotice = instructionsLoadedGapNotice(input.session_id);
   if (gapNotice !== null) contexts.push(gapNotice);
+  const ledger = { warnings: [], released: [] };
   const {
     updatedInput: current,
     changed,
@@ -56091,7 +56213,8 @@ async function buildPreToolUseResponse(input, rehydrate, sink, layers) {
     layers ?? preToolUseLayers(
       rehydrate ?? (secretsOn ? guardedRehydrate : null),
       process.env,
-      secretsOn
+      secretsOn,
+      ledger
     )
   );
   if (deny !== void 0)
@@ -56099,16 +56222,19 @@ async function buildPreToolUseResponse(input, rehydrate, sink, layers) {
       permissionDecision: PermissionDecision.DENY,
       permissionDecisionReason: deny
     });
-  contexts.push(...layerContexts);
+  contexts.push(...layerContexts, ...ledger.warnings);
   if (fault !== void 0) {
     const faultFields = hookFailureFields(true, new Error(fault), {
       input: { tool_name: tool, tool_input: current }
     });
+    if (faultFields.permissionDecision === PermissionDecision.DENY)
+      return emitTraced(emitTrace, input.tool_name, faultFields);
     if (faultFields.permissionDecisionReason !== void 0)
       asks.push(String(faultFields.permissionDecisionReason));
     if (faultFields.additionalContext !== void 0)
       contexts.push(String(faultFields.additionalContext));
   }
+  for (const fingerprint of ledger.released) consumeConfirm(fingerprint);
   const notice = secretsOn ? placeholderNotice(tool, current) : null;
   if (notice !== null) contexts.push(notice);
   const layer2Notice = layer2PlaceholderNotice(tool, current);
@@ -56121,21 +56247,40 @@ async function buildPreToolUseResponse(input, rehydrate, sink, layers) {
       current,
       asks,
       contexts,
-      pendingGateAck,
+      gateAsk,
       pendingGapNotice: gapNotice !== null,
       sessionId: input.session_id
     })
   );
+}
+function gateVerdict(gateAsk, sessionId) {
+  if (acknowledgeAlert(sessionId)) return { ask: gateAsk };
+  const fields = (
+    /** @type {Record<string, unknown>} */
+    hookFaultOutcome(
+      HOOK_NAME,
+      new Error(
+        "the invisible-char gate's acknowledgement could not be recorded"
+      ),
+      { site: FaultSite.GATE_ACK, gateAsk }
+    ).fields
+  );
+  return fields.permissionDecision === PermissionDecision.ASK ? { ask: String(fields.permissionDecisionReason) } : { context: String(fields.additionalContext) };
 }
 function assembleResponse({
   changed,
   current,
   asks,
   contexts,
-  pendingGateAck,
+  gateAsk,
   pendingGapNotice,
   sessionId
 }) {
+  if (gateAsk !== null) {
+    const gate = gateVerdict(gateAsk, sessionId);
+    if ("ask" in gate) asks.unshift(gate.ask);
+    else contexts.unshift(gate.context);
+  }
   if (asks.length === 0 && !changed && contexts.length === 0) return null;
   const fields = {};
   if (changed) fields.updatedInput = current;
@@ -56144,7 +56289,6 @@ function assembleResponse({
     fields.permissionDecisionReason = asks.join("\n\n");
   }
   if (contexts.length > 0) fields.additionalContext = contexts.join(" ");
-  if (pendingGateAck) acknowledgeAlert(sessionId);
   if (pendingGapNotice) recordInstructionsLoadedNotice(sessionId);
   return fields;
 }
@@ -56153,7 +56297,12 @@ async function judgePreToolUseSanitize(event, rehydrate, opts = {}) {
   const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
   const { Decision: Decision3, EventKind: EventKind3 } = controlPlane();
   if (event.event === EventKind3.UNKNOWN)
-    return { decision: Decision3.DENY, reason: messages.unknownEvent };
+    throw Object.assign(
+      new Error(
+        "pretooluse-sanitize: unrecognized hook payload (not PreToolUse)"
+      ),
+      { code: UNKNOWN_EVENT_CODE, reason: messages.unknownEvent }
+    );
   const input = {
     tool_name: event.tool,
     tool_input: event.input,
@@ -56219,6 +56368,27 @@ function hookFailureFields(parsedOk, err, opts = {}) {
     }).fields
   );
 }
+function releasableRefusal(fingerprint, consume, reason, warning2) {
+  if (consume ? consumeConfirm(fingerprint) : confirmFresh(fingerprint))
+    return {
+      fields: {
+        additionalContext: `${warning2} It proceeded as the confirmed re-issue of a call refused for this reason.`
+      }
+    };
+  if (!recordConfirm(fingerprint))
+    return {
+      fields: {
+        additionalContext: `${warning2} It proceeded without a refusal: the re-issue confirmation could not be recorded, so a refusal could never be released.`
+      }
+    };
+  const sentence = /[.!?]$/u.test(reason) ? reason : `${reason}.`;
+  return {
+    fields: {
+      permissionDecision: PermissionDecision.DENY,
+      permissionDecisionReason: `${sentence} ${REISSUE_NOTE}`
+    }
+  };
+}
 async function cliMain(opts = {}) {
   const { gates = [], trace: sink } = opts;
   const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
@@ -56244,7 +56414,7 @@ async function cliMain(opts = {}) {
     }
   );
 }
-var HOOK_NAME, PRE_TOOL_USE_MESSAGES, normalizeConfusables2, normalizeContext2, rehydrateRedacted2, spliceOrdered2, require2, confusableScan, redactorIo, guardedRehydrate, REDACTION_HINT;
+var HOOK_NAME, FaultSite, UNKNOWN_EVENT_CODE, PRE_TOOL_USE_MESSAGES, normalizeConfusables2, normalizeContext2, rehydrateRedacted2, spliceOrdered2, require2, confusableScan, redactorIo, guardedRehydrate, REDACTION_HINT, REISSUE_NOTE;
 var init_pretooluse_sanitize = __esm({
   async "claude-hooks/pretooluse-sanitize.mjs"() {
     "use strict";
@@ -56263,7 +56433,11 @@ var init_pretooluse_sanitize = __esm({
     init_reveal();
     init_trace2();
     HOOK_NAME = "pretooluse-sanitize";
+    FaultSite = Object.freeze({ STAGE: "stage", GATE_ACK: "gate-ack" });
+    UNKNOWN_EVENT_CODE = "UNKNOWN_EVENT";
     PRE_TOOL_USE_MESSAGES = Object.freeze({
+      // The CLOSED posture's reason for a payload the adapter cannot classify; the
+      // open posture lets that payload through with the shared fault warning.
       unknownEvent: "PreToolUse sanitization blocked (fail-closed): unrecognized hook payload.",
       failed: (cause) => `PreToolUse sanitization failed (fail-closed): ${cause}`,
       unparsable: (cause) => `PreToolUse input unparsable (fail-closed): ${cause}`,
@@ -56302,29 +56476,71 @@ var init_pretooluse_sanitize = __esm({
       redactorIo
     );
     REDACTION_HINT = "[REDACTED";
+    REISSUE_NOTE = "If writing this text as-is is intended, re-issue this exact call (same tool, same input) to confirm: the re-issue proceeds and writes it literally.";
     registerFaultPolicy(HOOK_NAME, {
       event: HookEvent.PRE_TOOL_USE,
       guarded: "tool input",
       open: (ctx) => {
+        if (ctx.site === FaultSite.GATE_ACK)
+          return {
+            fields: {
+              additionalContext: `WARNING: agent-sanitizer could not record that its instruction-file alert was shown this session, so it is reported here rather than as a permission prompt on every tool call (fail-open; set ${FAIL_OPEN_ENV}=0 to be asked instead).
+
+${ctx.gateAsk}`
+            }
+          };
+        if (ctx.site === FaultSite.STAGE)
+          return releasableRefusal(ctx.fingerprint, false, ctx.reason, ctx.warning);
         if (!secretsEnabled(ctx.env) || !hintedWriteFault(ctx.input))
           return defaultOpen(ctx);
         const closed = failClosedFields(true, ctx.err, {
           messages: ctx.messages,
           hint: ctx.hint
         });
-        return {
-          fields: {
-            ...closed,
-            permissionDecisionReason: `${closed.permissionDecisionReason} This input would write ${REDACTION_HINT}\u2026] placeholder text, which stands for a redacted secret the unavailable sanitizer cannot translate back; proceeding would overwrite the real secret with the placeholder, so the call is held even under the fail-open posture. Retry once the sanitizer recovers, or ask the user to make this change.`
-          }
-        };
+        return releasableRefusal(
+          reissueFingerprint(
+            "hook-fault",
+            ctx.input.tool_name,
+            ctx.input.tool_input
+          ),
+          true,
+          `${closed.permissionDecisionReason} This input would write ${REDACTION_HINT}\u2026] placeholder text, which stands for a redacted secret the unavailable sanitizer cannot translate back; proceeding overwrites the real secret with the placeholder.`,
+          `${ctx.openContext} This input carries ${REDACTION_HINT}\u2026] placeholder text, which is written literally over the real secret it stands for.`
+        );
       },
-      closed: (ctx) => ({
-        fields: failClosedFields(ctx.parsedOk, ctx.err, {
-          messages: ctx.messages,
-          hint: ctx.hint
-        })
-      })
+      closed: (ctx) => {
+        if (ctx.site === FaultSite.GATE_ACK)
+          return {
+            fields: {
+              permissionDecision: PermissionDecision.ASK,
+              permissionDecisionReason: ctx.gateAsk
+            }
+          };
+        if (ctx.site === FaultSite.STAGE)
+          return {
+            fields: {
+              permissionDecision: PermissionDecision.DENY,
+              permissionDecisionReason: ctx.reason
+            }
+          };
+        const err = (
+          /** @type {{ code?: unknown, reason?: unknown } | null} */
+          ctx.err
+        );
+        if (err?.code === UNKNOWN_EVENT_CODE)
+          return {
+            fields: {
+              permissionDecision: PermissionDecision.DENY,
+              permissionDecisionReason: err.reason
+            }
+          };
+        return {
+          fields: failClosedFields(ctx.parsedOk, ctx.err, {
+            messages: ctx.messages,
+            hint: ctx.hint
+          })
+        };
+      }
     });
     if (isMain(import.meta.url)) {
       await cliMain();
@@ -57202,7 +57418,12 @@ function judgeSanitizeUserPrompt(event, strip = stripAnsiFully3, overrides = USE
   const messages = { ...USER_PROMPT_MESSAGES, ...overrides };
   const { Decision: Decision3, EventKind: EventKind3 } = controlPlane();
   if (event.event === EventKind3.UNKNOWN)
-    return { decision: Decision3.DENY, reason: messages.unknownEvent };
+    throw Object.assign(
+      new Error(
+        "sanitize-user-prompt: unrecognized hook payload (not UserPromptSubmit)"
+      ),
+      { code: UNKNOWN_EVENT_CODE2, reason: messages.unknownEvent }
+    );
   if (event.event !== EventKind3.PROMPT_SUBMIT)
     return { decision: Decision3.ALLOW };
   if (typeof strip !== "function")
@@ -57257,7 +57478,7 @@ async function main(read, write, opts = {}) {
     }
   );
 }
-var classifyPrompt2, stripAnsiFully3, USER_PROMPT_MESSAGES, HOOK_NAME3;
+var classifyPrompt2, stripAnsiFully3, USER_PROMPT_MESSAGES, HOOK_NAME3, UNKNOWN_EVENT_CODE2;
 var init_sanitize_user_prompt = __esm({
   async "claude-hooks/sanitize-user-prompt.mjs"() {
     "use strict";
@@ -57277,18 +57498,21 @@ var init_sanitize_user_prompt = __esm({
       remedy: DEFAULT_MISSING_PACKAGE_REMEDY
     });
     HOOK_NAME3 = "sanitize-user-prompt";
+    UNKNOWN_EVENT_CODE2 = "UNKNOWN_EVENT";
     registerFaultPolicy(HOOK_NAME3, {
       event: HookEvent.USER_PROMPT_SUBMIT,
       guarded: "prompt",
-      closed: (ctx) => ({
-        envelope: {
-          decision: "block",
-          reason: {
-            ...USER_PROMPT_MESSAGES,
-            ...ctx.messages
-          }.hookFailed(ctx.message)
-        }
-      })
+      closed: (ctx) => {
+        const err = (
+          /** @type {{ code?: unknown, reason?: string } | null} */
+          ctx.err
+        );
+        const reason = err?.code === UNKNOWN_EVENT_CODE2 ? (
+          /** @type {string} */
+          err.reason
+        ) : { ...USER_PROMPT_MESSAGES, ...ctx.messages }.hookFailed(ctx.message);
+        return { envelope: { decision: "block", reason } };
+      }
     });
     ({ classifyPrompt: classifyPrompt2 } = /** @type {typeof import("agent-sanitizer/prompt")} */
     await lazyImport("agent-sanitizer/prompt"));
@@ -57389,13 +57613,31 @@ async function ensureSanitizerLoaded() {
 function faultLine(ctx) {
   return `${HOOK_NAME4}: ${ctx.message}. Instruction files were NOT fully scanned for hidden Unicode, so any payload in them reaches the model unvetted.`;
 }
-function reportFault(err) {
-  const outcome = hookFaultOutcome(HOOK_NAME4, err);
-  process.exitCode = writeFaultOutcome(outcome);
-  return outcome.armAlert ? [
-    /** @type {string} */
-    outcome.stderr
-  ] : [];
+function openGapParts(ctx) {
+  if (ctx.gapNotice === void 0) return null;
+  const warning2 = `${ctx.gapNotice}
+${HOOK_NAME4}: failing open \u2014 nothing is blocked. Set AGENT_SANITIZER_FAIL_OPEN=0 to have the next tool call ask instead.`;
+  return {
+    stderr: `${warning2}
+`,
+    envelope: {
+      systemMessage: warning2,
+      hookSpecificOutput: {
+        hookEventName: HookEvent.SESSION_START,
+        additionalContext: warning2
+      }
+    }
+  };
+}
+function reportFault(err, gapNotice, out) {
+  const outcome = hookFaultOutcome(HOOK_NAME4, err, { gapNotice });
+  process.exitCode = writeFaultOutcome(
+    outcome,
+    (chunk) => out.add(JSON.parse(chunk))
+  );
+  if (!outcome.armAlert) return [];
+  return [gapNotice ?? /** @type {string} */
+  outcome.stderr];
 }
 function persistAlert(parts2, sessionId) {
   for (const part of parts2) appendAlert(part, sessionId);
@@ -57450,9 +57692,10 @@ function formatSkipped(skipped) {
 }
 async function cliMain3(opts = {}) {
   const timer = startHookTimer();
+  const out = createEnvelopeBuffer();
   try {
     await excludeConcurrentProvisioning(
-      () => runScanCli(opts),
+      () => runScanCli(opts, out),
       () => setupRunning(hookgateMarkerPath())
     );
   } finally {
@@ -57460,7 +57703,7 @@ async function cliMain3(opts = {}) {
       HOOK_NAME4,
       timer.wallMs(),
       HookEvent.SESSION_START,
-      emitHookResponse,
+      out.emit,
       void 0,
       // All four windows, including the two this scan normally leaves empty: a
       // measured 0 rules a window OUT, where an omitted one leaves the notice
@@ -57471,9 +57714,10 @@ async function cliMain3(opts = {}) {
         hostMs: timer.hostMs()
       }
     );
+    out.flush();
   }
 }
-async function runScanCli({ trace: sink, scan: runScan, sessionId }) {
+async function runScanCli({ trace: sink, scan: runScan, sessionId }, out) {
   const emitTrace = hookTrace(sink);
   const alertParts = [];
   if (!await ensureSanitizerLoaded()) {
@@ -57482,10 +57726,13 @@ async function runScanCli({ trace: sink, scan: runScan, sessionId }) {
       ...reportFault(
         new Error(
           "agent-sanitizer failed to load (node deps not installed and session-setup did not finish in time); run `pnpm install`"
-        )
+        ),
+        void 0,
+        out
       )
     );
     persistAlert(alertParts, sessionId);
+    out.flush();
     process.exit(1);
   }
   sweepStaleSessions(sessionId);
@@ -57496,7 +57743,7 @@ async function runScanCli({ trace: sink, scan: runScan, sessionId }) {
     scan2 = (runScan ?? scanProject)();
   } catch (err) {
     emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, { outcome: "skipped" });
-    alertParts.push(...reportFault(err));
+    alertParts.push(...reportFault(err, void 0, out));
     persistAlert(alertParts, sessionId);
     return;
   }
@@ -57509,9 +57756,13 @@ async function runScanCli({ trace: sink, scan: runScan, sessionId }) {
       absent: absent.length,
       files: allFindings.length
     });
-    const notice = formatSkipped(skipped);
-    process.stderr.write(notice + "\n");
-    alertParts.push(notice);
+    alertParts.push(
+      ...reportFault(
+        new Error(`${skipped.length} instruction file(s) could not be read`),
+        formatSkipped(skipped),
+        out
+      )
+    );
   } else if (allFindings.length === 0) {
     emitTrace(TraceEvent.SCAN_INVISIBLE_CHARS_RAN, {
       outcome: "clean",
@@ -57595,17 +57846,18 @@ var init_scan_invisible_chars = __esm({
     registerFaultPolicy(HOOK_NAME4, {
       event: HookEvent.SESSION_START,
       guarded: "instruction files",
-      open: (ctx) => ({
+      open: (ctx) => openGapParts(ctx) ?? {
         stderr: `${faultLine(ctx)} Passing through unguarded; set AGENT_SANITIZER_FAIL_OPEN=0 to arm the tool-call gate instead.
 `,
         exitCode: 1
-      }),
-      closed: (ctx) => ({
+      },
+      closed: (ctx) => ctx.gapNotice === void 0 ? {
         stderr: `${faultLine(ctx)} Arming the tool-call gate (AGENT_SANITIZER_FAIL_OPEN=0).
 `,
         exitCode: 1,
         armAlert: true
-      })
+      } : { stderr: `${ctx.gapNotice}
+`, armAlert: true }
     });
     if (isMain(import.meta.url)) {
       await cliMain3({ sessionId: await sessionIdFromStdin() });
@@ -57692,9 +57944,10 @@ ${tail}`;
 async function cliMain4({ trace: sink } = {}) {
   const timer = startHookTimer();
   const emitTrace = hookTrace(sink);
+  const out = createEnvelopeBuffer();
   try {
     await excludeConcurrentProvisioning(
-      () => runLoadedScanCli(emitTrace),
+      () => runLoadedScanCli(emitTrace, out),
       () => setupRunning(hookgateMarkerPath())
     );
   } finally {
@@ -57702,7 +57955,7 @@ async function cliMain4({ trace: sink } = {}) {
       HOOK_NAME5,
       timer.wallMs(),
       HookEvent.INSTRUCTIONS_LOADED,
-      emitHookResponse,
+      out.emit,
       void 0,
       // All four windows, including the two this scan normally leaves empty: a
       // measured 0 rules a window OUT, where an omitted one leaves the notice
@@ -57713,9 +57966,10 @@ async function cliMain4({ trace: sink } = {}) {
         hostMs: timer.hostMs()
       }
     );
+    out.flush();
   }
 }
-async function runLoadedScanCli(emitTrace) {
+async function runLoadedScanCli(emitTrace, out) {
   let sessionId;
   try {
     const payload = await readStdinJson();
@@ -57739,19 +57993,20 @@ async function runLoadedScanCli(emitTrace) {
     const message = loadedFileMessage(result, loaded2.filePath);
     process.stderr.write(message + "\n");
     if (!result.cleaned) appendAlert(message, sessionId);
-    process.stdout.write(
-      JSON.stringify({
-        systemMessage: message,
-        hookSpecificOutput: {
-          hookEventName: HookEvent.INSTRUCTIONS_LOADED,
-          additionalContext: message
-        }
-      })
-    );
+    out.add({
+      systemMessage: message,
+      hookSpecificOutput: {
+        hookEventName: HookEvent.INSTRUCTIONS_LOADED,
+        additionalContext: message
+      }
+    });
   } catch (err) {
     emitTrace(TraceEvent.SCAN_LOADED_INSTRUCTIONS_RAN, { outcome: "skipped" });
     const outcome = hookFaultOutcome(HOOK_NAME5, err);
-    process.exitCode = writeFaultOutcome(outcome);
+    process.exitCode = writeFaultOutcome(
+      outcome,
+      (chunk) => out.add(JSON.parse(chunk))
+    );
     if (outcome.armAlert)
       appendAlert(
         /** @type {string} */
@@ -57799,16 +58054,20 @@ var init_scan_loaded_instructions = __esm({
 init_hook_io();
 init_hook_fault();
 var HOOK_NAME6 = "plugin-hooks";
-var unknownMode = (ctx) => ({
-  stderr: `${HOOK_NAME6}: ${ctx.message}
-`,
-  exitCode: 2
-});
+var unknownModeLine = (ctx) => `${HOOK_NAME6}: ${ctx.message} \u2014 hooks.json names a hook this bundle does not dispatch (known: ${HOOK_MODES.join(", ")}); reinstall or update the plugin.`;
 registerFaultPolicy(HOOK_NAME6, {
   event: null,
   guarded: "hook payload",
-  open: unknownMode,
-  closed: unknownMode
+  open: (ctx) => ({
+    stderr: `${unknownModeLine(ctx)} This event is UNGUARDED; set AGENT_SANITIZER_FAIL_OPEN=0 to block it instead.
+`,
+    exitCode: 1
+  }),
+  closed: (ctx) => ({
+    stderr: `${unknownModeLine(ctx)} Blocking (AGENT_SANITIZER_FAIL_OPEN=0).
+`,
+    exitCode: 2
+  })
 });
 var LAZY_LOADERS = {
   "agent-control-plane-core/claude": () => Promise.resolve().then(() => (init_claude(), claude_exports)),
@@ -57894,14 +58153,14 @@ async function main2() {
   const mode = readFlag(process.argv, "hook");
   const hook = mode === void 0 ? void 0 : HOOKS[mode];
   if (mode === void 0 || hook === void 0) {
-    process.exit(
-      writeFaultOutcome(
-        hookFaultOutcome(
-          HOOK_NAME6,
-          new Error(`unknown hook mode ${JSON.stringify(mode)}`)
-        )
+    process.exitCode = writeFaultOutcome(
+      hookFaultOutcome(
+        HOOK_NAME6,
+        new Error(`unknown hook mode ${JSON.stringify(mode)}`)
       )
     );
+    process.stdin.resume();
+    return;
   }
   if (disabledHooks(HOOK_MODES).has(mode)) {
     process.stderr.write(

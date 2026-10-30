@@ -69,6 +69,10 @@ subprocess over a fixture directory, the CLI, the collector) and assert its
 observable effect: the skip and its reason, the emitted argv. Never exempt the
 orphan instead.
 
+## Derive a classification from the code, never hand-key it per site
+
+**A test that enumerates every site in the tree with a hand-written label is a second copy of the tree.** A table of ~100 keys, each paired with a category the code's own structure already decides (which branch it sits in, which helper it calls, whether it carries a tag), costs a re-key on every unrelated refactor and reviews like a ledger. Compute the label from the AST — position, callee, tag — and assert the invariant over the computed labels. Keep a short exceptions list only for the sites where position misleads, each with its reason, and prove the derivation non-vacuous by mutating a real site and watching the check go red.
+
 ## Drift guards are a smell to NAME, not launder
 
 A test that asserts two duplicated sources agree — a hand-maintained copy (a

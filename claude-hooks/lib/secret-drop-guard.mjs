@@ -1,5 +1,6 @@
 /**
- * Clobber-by-omission guard for whole-file Writes.
+ * Clobber-by-omission guard for whole-file Writes, and the confirm-by-exact-
+ * re-issue sentinel it shares with every other releasable PreToolUse refusal.
  *
  * Rehydration (agent-sanitizer/rehydrate) only engages when a Write's content
  * carries a placeholder; a Write that REGENERATES a secret-bearing file and
@@ -65,10 +66,60 @@ export const CONFIRM_TTL_MS = 10 * 60_000;
  * @returns {string}
  */
 export function dropFingerprint(filePath, content, dropped = []) {
-  const digest = createHash("sha256").update(filePath).update("\0");
+  const digest = createHash("sha256").update("drop\0").update(filePath);
+  digest.update("\0");
   digest.update(content);
   for (const secret of dropped) digest.update("\0").update(secret);
   return digest.digest("hex").slice(0, 32);
+}
+
+/**
+ * Fingerprint of one refusal of one exact tool call — same refusing site, same
+ * tool, same input — released by re-issuing that call. Keyed on the site too, so
+ * a call refused by two sites in turn needs a confirmation for each and one
+ * re-issue never releases a refusal the model was not shown. The input is
+ * hashed in canonical key order, so a re-issue whose keys arrive reordered is
+ * still the same call. Distinct domain tags keep it disjoint from
+ * {@link dropFingerprint}.
+ * @param {string} site
+ * @param {unknown} tool
+ * @param {unknown} toolInput
+ * @returns {string}
+ */
+export function reissueFingerprint(site, tool, toolInput) {
+  return createHash("sha256")
+    .update("reissue\0")
+    .update(canonicalJson([site, tool ?? null, toolInput ?? null]))
+    .digest("hex")
+    .slice(0, 32);
+}
+
+/**
+ * JSON with every object's keys sorted, so two encodings of one value agree.
+ * @param {unknown} value
+ * @returns {string}
+ */
+function canonicalJson(value) {
+  return JSON.stringify(value, (_key, v) =>
+    v !== null && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(
+          Object.keys(v)
+            .sort()
+            .map((k) => [k, v[k]]),
+        )
+      : v,
+  );
+}
+
+/**
+ * Record a confirm sentinel for `fingerprint`, so the identical re-issue is
+ * approved by {@link consumeConfirm}. False when it could not be recorded: the
+ * caller then must not refuse, because nothing could ever release the refusal.
+ * @param {string} fingerprint
+ * @returns {boolean}
+ */
+export function recordConfirm(fingerprint) {
+  return writeSentinelFile(confirmMarkerPath(fingerprint));
 }
 
 /**
@@ -80,6 +131,9 @@ export function dropFingerprint(filePath, content, dropped = []) {
 export function confirmMarkerPath(fingerprint) {
   return join(tmpdir(), `.claude-secret-drop-${PROJECT_HASH}-${fingerprint}`);
 }
+
+/** readdir codes meaning the confirm store's directory cannot be used at all. */
+const UNUSABLE_DIR_CODES = new Set(["ENOENT", "ENOTDIR", "EACCES", "EPERM"]);
 
 /**
  * Delete this project's confirm sentinels older than {@link CONFIRM_TTL_MS}.
@@ -95,7 +149,18 @@ export function sweepStaleConfirms() {
   const dir = tmpdir();
   const prefix = `.claude-secret-drop-${PROJECT_HASH}-`;
   const cutoff = Date.now() - CONFIRM_TTL_MS;
-  for (const name of readdirSync(dir)) {
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch (err) {
+    // An unusable $TMPDIR holds no sentinel to sweep, and recordConfirm already
+    // answers for it on every call; letting it throw here would abort the
+    // SessionStart scan this sweep merely rides along with.
+    const code = /** @type {NodeJS.ErrnoException} */ (err).code;
+    if (UNUSABLE_DIR_CODES.has(String(code))) return;
+    throw err;
+  }
+  for (const name of names) {
     if (!name.startsWith(prefix)) continue;
     const path = join(dir, name);
     try {
@@ -150,14 +215,34 @@ export function gitTracked(filePath, spawn = spawnSync) {
 /**
  * @param {number} count
  * @param {string} filePath
+ * @param {boolean} [confirmable] false when no confirmation could be recorded,
+ *   so the reason must not offer a re-issue that would only be refused again
  * @returns {string}
  */
-function dropDeny(count, filePath) {
-  return (
+function dropDeny(count, filePath, confirmable = true) {
+  const head =
     `this Write removes ${count} redacted secret value(s) from ${filePath}, and the ` +
-    `file is not tracked by git, so the secrets may be unrecoverable. If removing ` +
-    `them is intended, re-issue this exact Write to confirm; otherwise keep each ` +
-    `[REDACTED…] placeholder (or its secret's line) in the new content`
+    `file is not tracked by git, so the secrets may be unrecoverable. `;
+  const placeholders = `[REDACTED…] placeholder (or its secret's line) in the new content`;
+  return confirmable
+    ? `${head}If removing them is intended, re-issue this exact Write to confirm; ` +
+        `otherwise keep each ${placeholders}`
+    : `${head}Keep each ${placeholders}, or ask the user to remove them`;
+}
+
+/**
+ * The `fault` a drop deny carries when its confirmation could not be recorded:
+ * the deny could then never be released by a re-issue, so it is a sanitizer
+ * fault rather than a verdict, and the hook's fault posture decides it.
+ * @param {number} count
+ * @param {string} filePath
+ * @returns {string}
+ */
+function dropUnconfirmable(count, filePath) {
+  return (
+    `the secret-drop confirmation could not be recorded under ${tmpdir()}, so ` +
+    `this Write removes ${count} redacted secret value(s) from untracked ` +
+    `${filePath} without a confirmed re-issue`
   );
 }
 
@@ -167,22 +252,22 @@ function dropDeny(count, filePath) {
  * rehydration substituted any placeholders — so a preserved secret shows up as
  * its real value in `content`. `io` is the rehydrate-shaped I/O bag (readFile /
  * redact / redactMap). Injectable seams: `isTracked` (the git probe),
- * `confirmSeen`/`recordConfirm` (the sentinel state).
+ * `confirmSeen`/`recordConfirm` (the sentinel state). A deny whose confirmation
+ * could not be recorded carries `fault` (see {@link dropUnconfirmable}).
  * @param {{file_path?: unknown, content?: unknown}} toolInput
  * @param {import("agent-sanitizer/rehydrate").RehydrateIo} io
  * @param {{
  *   isTracked?: (filePath: string) => boolean,
  *   confirmSeen?: (fingerprint: string) => boolean,
- *   recordConfirm?: (fingerprint: string) => void,
+ *   recordConfirm?: (fingerprint: string) => boolean,
  * }} [opts]
- * @returns {Promise<{deny: string} | null>}
+ * @returns {Promise<{deny: string, fault?: string} | null>}
  */
 export async function secretDropGuard(toolInput, io, opts = {}) {
   const {
     isTracked = gitTracked,
     confirmSeen = consumeConfirm,
-    recordConfirm = (fingerprint) =>
-      writeSentinelFile(confirmMarkerPath(fingerprint)),
+    recordConfirm: record = recordConfirm,
   } = opts;
   const { file_path: filePath, content } = toolInput ?? {};
   if (typeof filePath !== "string" || typeof content !== "string") return null;
@@ -225,8 +310,11 @@ export async function secretDropGuard(toolInput, io, opts = {}) {
   // context, or a marker left by an abandoned attempt becomes a standing
   // auto-approval for a Write the user never saw.
   if (confirmSeen(fingerprint)) return null;
-  recordConfirm(fingerprint);
-  return { deny: dropDeny(dropped.length, filePath) };
+  if (record(fingerprint)) return { deny: dropDeny(dropped.length, filePath) };
+  return {
+    deny: dropDeny(dropped.length, filePath, false),
+    fault: dropUnconfirmable(dropped.length, filePath),
+  };
 }
 
 /**
@@ -235,8 +323,12 @@ export async function secretDropGuard(toolInput, io, opts = {}) {
  * substitution — so a rehydrated secret counts as preserved and only a
  * genuinely dropped one can trip it. A rehydrate deny short-circuits (the
  * guard never runs), non-Write tools skip the guard entirely, and a guard
- * deny wins over a pass/rewrite result.
- * @typedef {{updatedInput: any, context: string} | {deny: string} | null} RehydrateResult
+ * deny wins over a pass/rewrite result. A guard FAULT deny carries the
+ * rewrite as `release`: the open posture lets that call proceed, and it must
+ * proceed rehydrated, or every secret the rewrite restored is overwritten by
+ * its placeholder.
+ * @typedef {{updatedInput: any, context: string}} RehydrateRewrite
+ * @typedef {RehydrateRewrite | {deny: string, fault?: string, release?: RehydrateRewrite} | null} RehydrateResult
  * @param {(tool: string, toolInput: any) => Promise<RehydrateResult>} rehydrate
  * @param {import("agent-sanitizer/rehydrate").RehydrateIo} io
  * @param {typeof secretDropGuard} [guard]
@@ -250,37 +342,52 @@ export function withSecretDropGuard(rehydrate, io, guard = secretDropGuard) {
     const finalInput =
       rehydrated === null ? toolInput : rehydrated.updatedInput;
     const drop = await guard(finalInput, io);
-    return drop ?? rehydrated;
+    if (drop === null) return rehydrated;
+    if (drop.fault === undefined || rehydrated === null) return drop;
+    return { ...drop, release: rehydrated };
   };
 }
 
 /**
  * True when a trusted, fresh confirm sentinel exists for `fingerprint`,
- * consuming it so one confirmation approves exactly one Write. A sentinel
+ * consuming it so one confirmation approves exactly one call. A sentinel
  * older than {@link CONFIRM_TTL_MS} is stale — an abandoned deny from a
  * previous session, not a live confirmation — so it is removed and NOT
  * honored, preventing a leftover marker from acting as a standing
  * auto-approval. Removal is best-effort: a fresh marker we could not unlink
  * still counted as consumed for THIS call, and a leftover empty sentinel only
- * ever re-approves the identical (path, bytes, drop-set) Write the model
- * already confirmed — and only within the TTL.
+ * ever re-approves the identical fingerprinted call the model already
+ * confirmed — and only within the TTL.
  * @param {string} fingerprint
  * @returns {boolean}
  */
-function consumeConfirm(fingerprint) {
+export function consumeConfirm(fingerprint) {
   const marker = confirmMarkerPath(fingerprint);
   if (!markerIsTrusted(marker)) return false;
-  let fresh;
-  try {
-    fresh = Date.now() - lstatSync(marker).mtimeMs <= CONFIRM_TTL_MS;
-  } catch {
-    // Raced away between the trust check and the stat: no sentinel, no confirm.
-    return false;
-  }
+  const fresh = confirmFresh(fingerprint);
   try {
     unlinkSync(marker);
   } catch {
     // Best-effort consume — see doc.
   }
   return fresh;
+}
+
+/**
+ * True when a trusted confirm sentinel younger than {@link CONFIRM_TTL_MS}
+ * exists for `fingerprint`, WITHOUT consuming it — for a caller that learns
+ * only later whether the call it confirms actually proceeds, and consumes it
+ * then.
+ * @param {string} fingerprint
+ * @returns {boolean}
+ */
+export function confirmFresh(fingerprint) {
+  const marker = confirmMarkerPath(fingerprint);
+  if (!markerIsTrusted(marker)) return false;
+  try {
+    return Date.now() - lstatSync(marker).mtimeMs <= CONFIRM_TTL_MS;
+  } catch {
+    // Raced away between the trust check and the stat: no sentinel, no confirm.
+    return false;
+  }
 }

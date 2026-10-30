@@ -35,6 +35,7 @@ import {
   readFileSync,
   copyFileSync,
   cpSync,
+  realpathSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -350,8 +351,8 @@ const BUILT = [PYZ_PATH, WHEEL_PATH].every((path) => existsSync(path));
 if (BUILT && process.argv.includes("--if-missing")) {
   process.stderr.write("redactor already built, skipping (--if-missing)\n");
 } else if (
-  import.meta.url === new URL(`file://${process.argv[1]}`).href ||
-  process.argv[1]?.endsWith("build-redactor-pyz.mjs")
+  process.argv[1] &&
+  realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
   buildRedactorPyz();
 }

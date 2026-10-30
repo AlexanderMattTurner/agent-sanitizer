@@ -365,8 +365,9 @@ function processLayer1(text, sgrCarveOut) {
  * Refuse to START a parse with no budget left. Each of Layers 2/3 parses the
  * whole document in ONE synchronous call, so nothing interrupts it, and a host
  * that kills the overrun hook shows the RAW text. Called before EACH parse, and
- * only after a pre-gate passed, so a declined call costs no time. Fails closed,
- * as Layer 4 does.
+ * only after a pre-gate passed, so a declined call costs no time. Throws, as
+ * Layer 4 does: whether the unchecked text then passes or is withheld is the
+ * caller's fault posture, never this layer's.
  * @param {Deadline | undefined} deadline
  * @returns {void}
  */
@@ -374,8 +375,8 @@ function refuseIfSpent(deadline) {
   if (deadline && deadline.remainingMs() <= 0)
     throw new Error(
       "CRITICAL: the sanitization time budget ran out before the hidden-HTML " +
-        "and exfil-URL layers finished, so this text was not fully checked. " +
-        "Failing closed — tool output suppressed.",
+        "and exfil-URL layers finished, so this text was not fully checked " +
+        "and must be treated as UNSANITIZED.",
     );
 }
 

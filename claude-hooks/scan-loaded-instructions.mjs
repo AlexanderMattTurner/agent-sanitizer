@@ -19,7 +19,7 @@
  */
 import { readFileSync } from "node:fs";
 import {
-  emitHookResponse,
+  createEnvelopeBuffer,
   EmptyStdinError,
   hookgateMarkerPath,
   HookEvent,
@@ -268,12 +268,15 @@ export { HOOK_NAME };
 export async function cliMain({ trace: sink } = {}) {
   const timer = startHookTimer();
   const emitTrace = hookTrace(sink);
+  // One stdout document per run: the finding/fault envelope and the slow-hook
+  // notice below fold into it, never written as two.
+  const out = createEnvelopeBuffer();
   try {
     // Charged to provisioning when the session's setup is installing THROUGHOUT
     // this run: that install saturates the machine, and a scan that merely
     // waited it out has no per-call cost to report (see hook-timing.mjs).
     await excludeConcurrentProvisioning(
-      () => runLoadedScanCli(emitTrace),
+      () => runLoadedScanCli(emitTrace, out),
       () => setupRunning(hookgateMarkerPath()),
     );
   } finally {
@@ -281,7 +284,7 @@ export async function cliMain({ trace: sink } = {}) {
       HOOK_NAME,
       timer.wallMs(),
       HookEvent.INSTRUCTIONS_LOADED,
-      emitHookResponse,
+      out.emit,
       undefined,
       // All four windows, including the two this scan normally leaves empty: a
       // measured 0 rules a window OUT, where an omitted one leaves the notice
@@ -292,6 +295,7 @@ export async function cliMain({ trace: sink } = {}) {
         hostMs: timer.hostMs(),
       },
     );
+    out.flush();
   }
 }
 
@@ -300,9 +304,11 @@ export async function cliMain({ trace: sink } = {}) {
  * single call to bracket — every early return here is an exit that wrapper must
  * still measure.
  * @param {import("./lib/trace.mjs").TraceFn} emitTrace
+ * @param {import("./lib/hook-io.mjs").EnvelopeBuffer} out  this run's one stdout
+ *   buffer
  * @returns {Promise<void>}
  */
-async function runLoadedScanCli(emitTrace) {
+async function runLoadedScanCli(emitTrace, out) {
   /** @type {string | undefined} */
   let sessionId;
   try {
@@ -340,19 +346,19 @@ async function runLoadedScanCli(emitTrace) {
     // systemMessage reaches the user, additionalContext the model. Both, because
     // this hook cannot block and the file is already loaded: the user is the one
     // who can act on it, and the model is the one currently reading it.
-    process.stdout.write(
-      JSON.stringify({
-        systemMessage: message,
-        hookSpecificOutput: {
-          hookEventName: HookEvent.INSTRUCTIONS_LOADED,
-          additionalContext: message,
-        },
-      }),
-    );
+    out.add({
+      systemMessage: message,
+      hookSpecificOutput: {
+        hookEventName: HookEvent.INSTRUCTIONS_LOADED,
+        additionalContext: message,
+      },
+    });
   } catch (err) {
     emitTrace(TraceEvent.SCAN_LOADED_INSTRUCTIONS_RAN, { outcome: "skipped" });
     const outcome = hookFaultOutcome(HOOK_NAME, err);
-    process.exitCode = writeFaultOutcome(outcome);
+    process.exitCode = writeFaultOutcome(outcome, (chunk) =>
+      out.add(JSON.parse(chunk)),
+    );
     // `sessionId`, captured before the throw: a payload read that itself failed
     // leaves it undefined, and the fault then lands in the shared fallback store
     // rather than in no store at all.

@@ -1,0 +1,74 @@
+name: Syscall faults
+
+# Drives every wired plugin hook through the real launcher and bundle under
+# strace fault injection (openat/read/write/rename/mkdir/unlink/connect/stat x
+# EIO/EACCES/ENOSPC/EMFILE x first/last/every call), asserting no fault blocks
+# under the default posture and that some close under AGENT_SANITIZER_FAIL_OPEN=0.
+#
+# No paths filter: syscall-faults-passed is a required check, and a path-gated
+# required check hangs at "Expected — Waiting" on a PR that does not touch the
+# filtered paths. What the matrix exercises (hooks, engine, launcher, bundle
+# build, redactor) is most of the tree anyway.
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  syscall-faults:
+    # Pinned with strace below: the version is noble/main's release build.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      # `pnpm install` (prepare) builds the hook bundle; the redactor zipapp the
+      # secrets-on scenarios spawn needs PyPI and Python, so it is built here.
+      - name: Setup base environment
+        uses: ./.github/actions/setup-base-env
+        with:
+          setup-python: "true"
+
+      - name: Build the redactor zipapp
+        run: pnpm build:redactor
+
+      # strace is not part of the runner image's documented toolset. Tracing
+      # needs no ptrace_scope change: Yama's default (1) permits tracing one's
+      # own descendants, the only relationship strace -f uses here.
+      - name: Install strace
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq strace=6.8-0ubuntu2
+
+      # The full matrix (~530 cells); a sampled run takes --budget=N, and the
+      # printed seed replays it with --seed.
+      - name: Run the syscall fault matrix
+        run: node .github/scripts/syscall-fault-matrix.mjs --jobs="$(nproc)"
+
+  # Stable Required check: runs even when the matrix is cancelled or skipped, so
+  # a protected branch never waits on a check that never reports.
+  syscall-faults-passed: # required-check: true
+    if: always()
+    needs: [syscall-faults]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          sparse-checkout: |
+            .github/actions/report-job-result
+          persist-credentials: false
+
+      - name: Report result
+        uses: ./.github/actions/report-job-result
+        with:
+          run: "true"
+          decide-result: "success"
+          result: ${{ needs.syscall-faults.result }}

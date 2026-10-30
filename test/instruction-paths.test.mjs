@@ -434,7 +434,10 @@ describe("every scanner-rendered untrusted string goes through displayUntrusted"
     },
     "claude-hooks/scan-invisible-chars.mjs": {
       ...HOOK_FAULT,
-      notice: "formatSkipped's output, whose file and reason are wrapped",
+      "ctx.gapNotice":
+        "formatSkipped's output, whose file and reason are wrapped",
+      warning: "ctx.gapNotice and HOOK_NAME around fixed prose",
+      "skipped.length": "a count of unreadable files",
       cleaned: "a count of cleaned files",
     },
     "claude-hooks/scan-loaded-instructions.mjs": {
@@ -492,6 +495,10 @@ describe("every scanner-rendered untrusted string goes through displayUntrusted"
     // The daemon's error text, quoted only as one printable-ASCII line (DAEMON_REASON).
     "claude-hooks/lib/redactor-client.mjs::reason",
     "claude-hooks/pretooluse-sanitize.mjs::safeErrMessage(err)",
+    // A refusal reason this package composed — a stage's own deny text, or the
+    // closed arm's safeErrMessage-reduced fault text — restated before the
+    // re-issue note.
+    "claude-hooks/pretooluse-sanitize.mjs::reason",
   ]);
 
   it("covers every untrusted-shaped interpolation in the hooks and the engine", () => {

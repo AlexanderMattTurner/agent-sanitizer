@@ -25,6 +25,18 @@ sets are exactly complementary, so a new dynamically built pattern is a red
 build. A count over the inventory cannot do that job — an unresolved site
 contributes no inventory entry, so no count moves when one appears.
 
+Backtracking is half the hazard; the other half is SIZE. A pattern whose
+source is built from data that exists only at call time — a parameter, tool
+output, a prompt, ``process.env`` — is as long as that data, and V8 refuses
+one past its size limit with ``Invalid regular expression: regular expression
+too large``, on every call. The extractor reports, per construction site, every
+binding through which its pattern can read such data (``callTimeInputs``), and
+``test_no_construction_site_reads_call_time_data`` requires none: a pattern
+derived only from module constants or shipped data has a size fixed when the
+package is built. ``test_no_string_is_compiled_as_a_regex_implicitly`` closes
+the same hole for ``.match``/``.matchAll``/``.search``, which compile a string
+argument with ``new RegExp`` behind the call.
+
 JS-only syntax regexploit's parser cannot read is handled explicitly, never
 silently:
 
@@ -51,9 +63,11 @@ from tests._helpers import REPO_ROOT
 # Every `RegExp(…)` construction site the extractor cannot resolve to static
 # text, keyed by (file, normalized expression) with the reason. The pattern such
 # a site builds is invisible to regexploit, so each entry is a hole in this
-# guard's coverage and has to earn its place. Keying by the expression rather
-# than by the line number means an entry goes stale loudly when the site
-# changes, and moving the site around its file does not.
+# guard's coverage and has to earn its place on both halves of the hazard: why
+# it cannot backtrack, and why its size is fixed at build time. The size half is
+# also checked mechanically — every site here must report no call-time input.
+# Keying by the expression rather than by the line number means an entry goes
+# stale loudly when the site changes, and moving it around its file does not.
 UNRESOLVABLE_SITES = {
     (
         "claude-hooks/lib/secret-annotate.mjs",
@@ -62,8 +76,9 @@ UNRESOLVABLE_SITES = {
         '.join("") + "]", "gu", )',
     ): (
         "The class members come from the generated invisible-charset JSON, a "
-        "data import with no static spelling here. It is a bare character "
-        "class, so the pattern carries no quantifier."
+        "data import with no static spelling here. Size: one class over that "
+        "shipped charset, built once at module load. Backtracking: a bare "
+        "character class carries no quantifier."
     ),
     (
         "src/ansi.mjs",
@@ -71,26 +86,21 @@ UNRESOLVABLE_SITES = {
     ): (
         "ESC_DIRECT_FINAL_CLASS is built by calling charClass() over 0x30-0x7E "
         "minus `[` and the string introducers, and ansi.mjs does not export it. "
-        "It is a bare character class, so the pattern carries no quantifier."
+        "Size: at most 79 members, fixed in source. Backtracking: a bare "
+        "character class carries no quantifier."
     ),
     (
         "src/gates.mjs",
         'new RegExp( credentialNames().fieldNamePatterns.join("|"), "i", )',
     ): (
         "The secret pre-gate's keyword arm is the credential vocabulary's "
-        "field-value nouns, joined: data validated from credential-names.json "
-        "at first use. Each noun is `[a-z0-9]+` parts joined by `[_-]?`, so every "
-        "alternative is a bounded literal and the alternation has no nested "
-        "quantifier. test_redos_js_exemption_instances.py builds it from the "
-        "shipped vocabulary and analyzes it."
-    ),
-    (
-        "src/html.mjs",
-        'new RegExp(`</${rawText}(?![a-z0-9-])`, "i")',
-    ): (
-        "`rawText` is the raw-text tag name the markdown walk is currently "
-        "inside — a runtime value. The pattern is a literal tag name plus a "
-        "negative lookahead over a character class, with no quantifier."
+        "field-value nouns, joined: data validated from the packaged "
+        "credential-names.json at first use. Size: that shipped vocabulary, "
+        "built once per process by a zero-parameter memo. Backtracking: each "
+        "noun is `[a-z0-9]+` parts joined by `[_-]?`, so every alternative is a "
+        "bounded literal and the alternation has no nested quantifier. "
+        "test_redos_js_exemption_instances.py builds it from the shipped "
+        "vocabulary and analyzes it."
     ),
     (
         "src/invisible.mjs",
@@ -98,9 +108,9 @@ UNRESOLVABLE_SITES = {
     ): (
         "CF_CLASS_SOURCE is built by calling cfClassSource(CF_CODEPOINTS), and "
         "invisible.mjs does not export it, so there is no live value to read "
-        "either. It is a bare character class, and that same text IS analyzed "
-        "as the first alternative of STRIP (src/invisible.mjs:123), which this "
-        "guard does resolve."
+        "either. Size: one class over the generated Cf table, built at module "
+        "load. Backtracking: a bare character class, and that same text IS "
+        "analyzed as the first alternative of STRIP, which this guard resolves."
     ),
 }
 
@@ -203,6 +213,40 @@ def test_construction_sites_are_resolved_or_exempted() -> None:
         "reason; an entry it now resolves must be removed from it.\n"
         f"unresolved but unlisted: {sorted(unresolved - set(UNRESOLVABLE_SITES))}\n"
         f"listed but now resolved: {sorted(set(UNRESOLVABLE_SITES) - unresolved)}"
+    )
+
+
+def test_no_construction_site_reads_call_time_data() -> None:
+    # The size invariant, over EVERY site — a resolved one included, since a
+    # module-scope `new RegExp(process.env.X ?? "a")` resolves to whatever the
+    # extractor's own environment held. The unresolved sites are the ones this
+    # walk is the only check on, so they must be in the inventory it covered.
+    assert len(_SITES) >= 20, f"only {len(_SITES)} construction sites found"
+    assert {(s["file"], s["expr"]) for s in _SITES} >= set(UNRESOLVABLE_SITES)
+    reads = {
+        f"{s['file']}:{s['line']} {s['expr']}": s["callTimeInputs"]
+        for s in _SITES
+        if s["callTimeInputs"]
+    }
+    assert not reads, (
+        "RegExp construction sites whose pattern can read call-time data, so "
+        "its size scales with that data (V8 throws `regular expression too "
+        "large` past its limit). Build the pattern from module constants or "
+        "shipped data, or match without a regex (substring search):\n"
+        + json.dumps(reads, indent=2)
+    )
+
+
+def test_no_string_is_compiled_as_a_regex_implicitly() -> None:
+    # `s.match(x)` / `s.matchAll(x)` / `s.search(x)` run `new RegExp(x)` when x
+    # is not already a RegExp — a construction site no `RegExp(` token marks.
+    # The floor proves the type-checked walk saw the calls it is judging.
+    assert len(_EXTRACTED["coercionSites"]) >= 10
+    coerced = [c for c in _EXTRACTED["coercionSites"] if not c["isRegExp"]]
+    assert not coerced, (
+        "string methods handed a non-RegExp argument, which the engine compiles "
+        "as a pattern; pass a RegExp built from constants:\n"
+        + json.dumps(coerced, indent=2)
     )
 
 
@@ -396,3 +440,305 @@ def test_extractor_declines_a_shadowed_const(tmp_path) -> None:
     extracted = _run_extractor(str(fixture))
     assert [s["resolved"] for s in extracted["constructionSites"]] == [False]
     assert extracted["patterns"] == []
+
+
+# The defect this guard's size half is for: a pattern spliced from an env
+# secret's VALUE, a ~4 KB invisible-character class between every pair of
+# characters, so a 10 000-character key overflows V8's regex size limit on every
+# tool output. Its pattern reads the value through `visible`.
+_ENV_VALUE_FIXTURE = r"""
+import charset from "./charset.json" with { type: "json" };
+const ENV_INVIS_CODEPOINTS = [...new Set(charset.cf_codepoints)].sort((a, b) => a - b);
+const ENV_INVIS_SET = new Set(ENV_INVIS_CODEPOINTS);
+const ENV_INVIS_RUN =
+  "[" + ENV_INVIS_CODEPOINTS.map((cp) => `\\u{${cp.toString(16)}}`).join("") + "]*";
+const escapeLiteral = (ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** @param {string} value */
+export function envValueRegex(value) {
+  const visible = [...value].filter((ch) => !ENV_INVIS_SET.has(ch.codePointAt(0)));
+  return new RegExp(visible.map(escapeLiteral).join(ENV_INVIS_RUN), "u");
+}
+"""
+
+_CONFIG_BUILD = 'export const build = () => new RegExp(["a", "b"].join(CONFIG.sep));\n'
+
+# A caller's data reaching a module binding the pattern reads by a write that
+# is not `NAME = …`: into the value's contents, through an alias of it, or by
+# another reassignment shape. Each write runs in an exported function, so it
+# also lands once per call: `write <name>` is that input.
+_WRITE_FIXTURES = {
+    "container-method": (
+        "const parts = [];\n"
+        "export function add(p) {\n"
+        "  parts.push(p);\n"
+        "}\n"
+        'export const build = () => new RegExp(parts.join("|"));\n',
+        ["parameter p", "write parts"],
+    ),
+    "property-assignment": (
+        'const CONFIG = { sep: "|" };\n'
+        "export function configure(p) {\n"
+        "  CONFIG.sep = p;\n"
+        "}\n" + _CONFIG_BUILD,
+        ["parameter p", "write CONFIG"],
+    ),
+    "map-set": (
+        "/** @type {Map<string, string>} */\n"
+        "const cache = new Map();\n"
+        "export function remember(k, v) {\n"
+        "  cache.set(k, v);\n"
+        "}\n"
+        'export const build = () => new RegExp([...cache.values()].join("|"));\n',
+        ["parameter k", "parameter v", "write cache"],
+    ),
+    "object-assign": (
+        'const CONFIG = { sep: "|" };\n'
+        "export function configure(opts) {\n"
+        "  Object.assign(CONFIG, opts);\n"
+        "}\n" + _CONFIG_BUILD,
+        ["parameter opts", "write CONFIG"],
+    ),
+    "aliased-object": (
+        'const CONFIG = { sep: "|" };\n'
+        "const settings = CONFIG;\n"
+        "export function configure(p) {\n"
+        "  settings.sep = p;\n"
+        "}\n" + _CONFIG_BUILD,
+        ["parameter p", "write CONFIG"],
+    ),
+    "array-destructuring": (
+        'let SOURCE = "a+";\n'
+        "export function configure(source) {\n"
+        "  [SOURCE] = [source];\n"
+        "}\n"
+        "export const build = () => new RegExp(SOURCE);\n",
+        ["parameter source", "write SOURCE"],
+    ),
+    "object-destructuring": (
+        'let SOURCE = "a+";\n'
+        "export function configure(opts) {\n"
+        "  ({ SOURCE } = opts);\n"
+        "}\n"
+        "export const build = () => new RegExp(SOURCE);\n",
+        ["parameter opts", "write SOURCE"],
+    ),
+    "for-of-target": (
+        'let SOURCE = "a+";\n'
+        "export function configure(list) {\n"
+        "  for (SOURCE of list);\n"
+        "}\n"
+        "export const build = () => new RegExp(SOURCE);\n",
+        ["parameter list", "write SOURCE"],
+    ),
+    "increment": (
+        "let WIDTH = 1;\n"
+        "export function widen() {\n"
+        "  WIDTH++;\n"
+        "}\n"
+        "export const build = () => new RegExp(`a{${WIDTH}}`);\n",
+        ["write WIDTH"],
+    ),
+    "compound-constant": (
+        'let SOURCE = "a";\n'
+        "export function extend() {\n"
+        '  SOURCE += "a";\n'
+        "}\n"
+        "export const build = () => new RegExp(SOURCE);\n",
+        ["write SOURCE"],
+    ),
+    "regexp-recompile": (
+        "const RE = /a+/;\n"
+        "export function retarget(p) {\n"
+        "  RE.compile(p);\n"
+        "}\n"
+        "export const build = () => new RegExp(RE.source);\n",
+        ["parameter p", "write RE"],
+    ),
+}
+
+# A construction of the global RegExp under another spelling, or through a
+# call that is handed the constructor.
+_CALLEE_FIXTURES = {
+    "aliased-constructor": (
+        "const R = RegExp;\nexport const build = (p) => new R(p);\n",
+        ["parameter p"],
+    ),
+    "parenthesized-constructor": (
+        "export const build = (p) => new (RegExp)(p);\n",
+        ["parameter p"],
+    ),
+    "global-this-constructor": (
+        "export const build = (p) => globalThis.RegExp(p);\n",
+        ["parameter p"],
+    ),
+    "reflect-construct": (
+        "export const build = (p) => Reflect.construct(RegExp, [p]);\n",
+        ["global RegExp", "parameter p"],
+    ),
+}
+
+# Each fixture's one construction site reads call-time data through a different
+# route, with the kind of input the walk must name for it.
+_CALL_TIME_FIXTURES = {
+    "parameter": (_DYNAMIC_FIXTURE, ["parameter parts"]),
+    "env-value-splice": (_ENV_VALUE_FIXTURE, ["parameter value"]),
+    "module-scope-env": (
+        'export const RE = new RegExp(process.env.PATTERN ?? "a+");\n',
+        ["global process"],
+    ),
+    "env-through-const-and-function": (
+        "function readPattern() {\n"
+        '  return process.env.PATTERN ?? "a+";\n'
+        "}\n"
+        "const SOURCE = readPattern();\n"
+        "export const RE = new RegExp(SOURCE);\n",
+        ["global process"],
+    ),
+    "module-let-set-by-a-caller": (
+        'let SOURCE = "a+";\n'
+        "export function configure(source) {\n"
+        "  SOURCE = source;\n"
+        "}\n"
+        "export const build = () => new RegExp(SOURCE);\n",
+        ["parameter source", "write SOURCE"],
+    ),
+    # A const the site's function computes from its parameter is followed to
+    # that parameter rather than reported as an opaque local.
+    "local-from-parameter": (
+        "export function build(p) {\n"
+        "  const source = p;\n"
+        "  return new RegExp(source);\n"
+        "}\n",
+        ["parameter p"],
+    ),
+    **_WRITE_FIXTURES,
+    **_CALLEE_FIXTURES,
+    "math-random": (
+        "export const RE = new RegExp(String(Math.random()));\n",
+        ["global Math"],
+    ),
+    "regexp-last-match": (
+        "export const again = () => new RegExp(RegExp.$1);\n",
+        ["global RegExp"],
+    ),
+}
+
+# Patterns that cannot depend on call-time data even though the site sits in a
+# function or reads data with no static spelling: the gates.mjs memoized
+# builder over a shipped JSON vocabulary, and a module-scope class over shipped
+# charset data.
+_LOAD_TIME_FIXTURES = {
+    "memoized-builder-over-shipped-json": (
+        'import names from "./charset.json" with { type: "json" };\n'
+        "let memo;\n"
+        "function nounPattern() {\n"
+        '  return (memo ??= new RegExp(names.nouns.join("|"), "i"));\n'
+        "}\n"
+        "export const hasNoun = (text) => nounPattern().test(text);\n"
+    ),
+    "module-scope-class-over-shipped-json": (
+        'import charset from "./charset.json" with { type: "json" };\n'
+        "const INVIS = new RegExp(\n"
+        '  "[" + charset.cf_codepoints.map((cp) => `\\\\u{${cp.toString(16)}}`)'
+        '.join("") + "]",\n'
+        '  "gu",\n'
+        ");\n"
+        "export const hasInvisible = (text) => INVIS.test(text);\n"
+    ),
+    # Writes and reads beside a pattern's bindings that cannot change it: a
+    # load-time fill with constants, a RegExp's `lastIndex`, read-only methods
+    # handed call-time arguments, a function-local constant, and a frozen table
+    # stored elsewhere.
+    "load-time-container-fill": (
+        "const parts = [];\n"
+        'parts.push("a", "b");\n'
+        'export const build = () => new RegExp(parts.join("|"));\n'
+    ),
+    "read-only-uses-at-call-time": (
+        "const RE = /a+/g;\n"
+        "/** @type {Set<number>} */\n"
+        "const SEEN = new Set([1, 2]);\n"
+        "/** @param {string} text @param {number} cp */\n"
+        "export function count(text, cp) {\n"
+        "  RE.lastIndex = 0;\n"
+        "  return RE.test(text) && SEEN.has(cp);\n"
+        "}\n"
+        'export const build = () => new RegExp([...SEEN].join("|") + RE.source);\n'
+    ),
+    "function-local-constant": (
+        "export function build() {\n"
+        '  const sep = "|";\n'
+        '  return new RegExp(["a", "b"].join(sep));\n'
+        "}\n"
+    ),
+    "frozen-table-stored-elsewhere": (
+        "const CPS = Object.freeze([173, 8203]);\n"
+        "export const TABLE = [[1, CPS]];\n"
+        "export const build = () =>\n"
+        '  new RegExp(CPS.map((cp) => `\\\\u{${cp.toString(16)}}`).join(""), "u");\n'
+    ),
+}
+
+_CHARSET_JSON = '{"cf_codepoints": [173, 8203], "nouns": ["token", "secret"]}\n'
+
+
+def _write_fixture(tmp_path, name: str, source: str) -> str:
+    (tmp_path / "charset.json").write_text(_CHARSET_JSON, encoding="utf-8")
+    fixture = tmp_path / f"{name}.mjs"
+    fixture.write_text(source, encoding="utf-8")
+    return str(fixture)
+
+
+@pytest.mark.parametrize("name", sorted(_CALL_TIME_FIXTURES))
+def test_extractor_names_a_call_time_input(tmp_path, name: str) -> None:
+    source, expected = _CALL_TIME_FIXTURES[name]
+    sites = _run_extractor(_write_fixture(tmp_path, name, source))["constructionSites"]
+    assert len(sites) == 1, sites
+    kinds = [entry.split(" at ")[0] for entry in sites[0]["callTimeInputs"]]
+    assert kinds == expected
+
+
+@pytest.mark.parametrize("name", sorted(_LOAD_TIME_FIXTURES))
+def test_extractor_passes_a_load_time_construction(tmp_path, name: str) -> None:
+    sites = _run_extractor(_write_fixture(tmp_path, name, _LOAD_TIME_FIXTURES[name]))[
+        "constructionSites"
+    ]
+    # Positive marker: the site was found, and it is one the static resolver
+    # cannot spell — so the empty input list is the walk's verdict, not a
+    # resolved literal's.
+    assert [(s["resolved"], s["callTimeInputs"]) for s in sites] == [(False, [])]
+
+
+def test_extractor_reports_an_implicit_string_to_regex_coercion(tmp_path) -> None:
+    fixture = _write_fixture(
+        tmp_path,
+        "coercion",
+        "/** @param {string} text @param {string} needle */\n"
+        "export const find = (text, needle) => text.search(needle);\n"
+        "/** @param {string} text */\n"
+        "export const digits = (text) => text.match(/[0-9]+/g);\n",
+    )
+    coercions = _run_extractor(fixture)["coercionSites"]
+    assert [(c["expr"], c["isRegExp"]) for c in coercions] == [
+        ("text.search(needle)", False),
+        ("text.match(/[0-9]+/g)", True),
+    ]
+
+
+def test_extractor_ignores_a_local_named_regexp(tmp_path) -> None:
+    # Sites are recognised by the callee's type, so a module function that
+    # shadows the name is not the global constructor. The aliased-constructor
+    # fixtures above are the other half: the global under another name is.
+    fixture = _write_fixture(
+        tmp_path,
+        "shadowed-regexp",
+        "/** @param {string} s */\n"
+        "function RegExp(s) {\n"
+        "  return s;\n"
+        "}\n"
+        "export const label = (p) => new RegExp(p);\n"
+        'export const real = () => new globalThis.RegExp("a+");\n',
+    )
+    assert [s["expr"] for s in _run_extractor(fixture)["constructionSites"]] == [
+        'new globalThis.RegExp("a+")'
+    ]

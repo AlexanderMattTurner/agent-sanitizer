@@ -145,13 +145,21 @@ grep -q 'AKIAIOSFODNN7EXAMPLE' <<<"$closed_out" && {
 }
 
 # An unknown mode is a wiring typo in someone's settings.json; it must fail loud
-# with the blocking exit code rather than silently doing nothing.
-unknown_rc=0
-printf '{}' | node "$hook_entry" --hook=no-such-hook >/dev/null 2>&1 || unknown_rc=$?
-[ "$unknown_rc" -eq 2 ] || {
-  echo "ERROR: unknown --hook exited $unknown_rc, expected 2" >&2
-  exit 1
-}
+# rather than silently doing nothing: a non-blocking exit 1 under the default
+# fail-open posture, the blocking exit 2 under AGENT_SANITIZER_FAIL_OPEN=0.
+for posture in open:1 closed:2; do
+  expected="${posture#*:}"
+  unknown_rc=0
+  if [ "${posture%%:*}" = closed ]; then
+    printf '{}' | AGENT_SANITIZER_FAIL_OPEN=0 node "$hook_entry" --hook=no-such-hook >/dev/null 2>&1 || unknown_rc=$?
+  else
+    printf '{}' | env -u AGENT_SANITIZER_FAIL_OPEN node "$hook_entry" --hook=no-such-hook >/dev/null 2>&1 || unknown_rc=$?
+  fi
+  [ "$unknown_rc" -eq "$expected" ] || {
+    echo "ERROR: unknown --hook exited $unknown_rc under fail-${posture%%:*}, expected $expected" >&2
+    exit 1
+  }
+done
 cd "$workdir"
 echo "::endgroup::"
 

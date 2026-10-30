@@ -41,6 +41,7 @@ import {
   safeErrMessage,
   HookEvent,
   PermissionDecision,
+  FAIL_OPEN_ENV,
 } from "./lib/hook-io.mjs";
 import {
   registerFaultPolicy,
@@ -68,7 +69,13 @@ import {
 import { redactViaDaemon } from "./lib/redactor-client.mjs";
 import { secretsEnabled } from "./lib/env-config.mjs";
 import { readKnob } from "./lib/knobs.mjs";
-import { withSecretDropGuard } from "./lib/secret-drop-guard.mjs";
+import {
+  withSecretDropGuard,
+  reissueFingerprint,
+  recordConfirm,
+  confirmFresh,
+  consumeConfirm,
+} from "./lib/secret-drop-guard.mjs";
 import {
   containsPlaceholder,
   placeholderNotice,
@@ -80,6 +87,20 @@ import { readSpan, spanPath } from "./lib/reveal.mjs";
 import { hookTrace, TraceEvent } from "./lib/trace.mjs";
 
 const HOOK_NAME = "pretooluse-sanitize";
+
+/**
+ * The non-throw sites that route a sanitizer fault through this hook's fault
+ * policy, as `ctx.site`. A fault rendered by hookFailureFields (a throw the CLI
+ * caught, a pipeline that never settled) carries no site.
+ *   - STAGE: a stage denied only because it could not do its job (its result
+ *     carries `fault`); the closed arm keeps that deny.
+ *   - GATE_ACK: the invisible-char gate's one-time ask could not be recorded as
+ *     shown; the closed arm keeps the ask.
+ */
+const FaultSite = Object.freeze({ STAGE: "stage", GATE_ACK: "gate-ack" });
+
+/** The `code` of the error a payload the adapter cannot classify raises. */
+const UNKNOWN_EVENT_CODE = "UNKNOWN_EVENT";
 
 /**
  * A host-supplied deny gate: given the PreToolUse input, the reason this call
@@ -104,6 +125,8 @@ const HOOK_NAME = "pretooluse-sanitize";
  * }>}
  */
 export const PRE_TOOL_USE_MESSAGES = Object.freeze({
+  // The CLOSED posture's reason for a payload the adapter cannot classify; the
+  // open posture lets that payload through with the shared fault warning.
   unknownEvent:
     "PreToolUse sanitization blocked (fail-closed): unrecognized hook payload.",
   failed: (cause) => `PreToolUse sanitization failed (fail-closed): ${cause}`,
@@ -188,12 +211,13 @@ const guardedRehydrate = withSecretDropGuard(
 /**
  * Substitute every keyed Layer-2 placeholder in `text` with the stored original
  * from the reveal store's span files, in ONE ordered pass (spliceOrdered).
- * A key with NO stored span fails CLOSED — the placeholder stands for real
- * content this store cannot produce, so writing it through literally would
- * silently persist the loss the keyed grammar exists to prevent.
+ * A key with NO stored span (never persisted, or the store is unusable) denies
+ * as a `fault` — the placeholder stands for real content this store cannot
+ * produce, so writing it through literally persists the loss the keyed grammar
+ * exists to prevent, and only the hook's fault posture may let that happen.
  * @param {string} text
  * @param {string} field the tool-input field being rehydrated, for the deny prose
- * @returns {{ text: string, restored: number } | { deny: string } | null}
+ * @returns {{ text: string, restored: number } | { deny: string, fault: string } | null}
  */
 function substituteLayer2(text, field) {
   const matches = [...text.matchAll(LAYER2_PLACEHOLDER_RE)].map((match) => ({
@@ -211,16 +235,22 @@ function substituteLayer2(text, field) {
     if (stored === null) missing.push(key);
     else byKey.set(key, stored);
   }
-  if (missing.length > 0)
+  if (missing.length > 0) {
+    const files = missing.map((key) => spanPath(key)).join(", ");
     return {
       deny:
         `${field} contains Layer-2 removed-content placeholder(s) whose original is not ` +
         `in the span store (missing key(s): ${missing.join(", ")}; expected file(s): ` +
-        `${missing.map((key) => spanPath(key)).join(", ")}), so the removed content ` +
+        `${files}), so the removed content ` +
         `cannot be restored automatically. Reconstruct that content yourself, ` +
         `deliberately drop the placeholder(s) if the removed content should stay ` +
         `removed, or ask the user to make this change`,
+      fault:
+        `the Layer-2 removed-content placeholder(s) with key(s) ${missing.join(", ")} ` +
+        `in ${field} have no stored original (expected file(s): ${files}), so ` +
+        `they are written to the file literally and the removed content is not restored`,
     };
+  }
   // `i` is the match's index in `matches` (stable across spliceOrdered's
   // overlap skips — impossible here, distinct non-overlapping literals), so the
   // key rides positionally.
@@ -263,7 +293,7 @@ function substituteLayer2(text, field) {
  * @param {boolean} [secretsOn]  the run's secret opt-in (decided once by
  *   buildPreToolUseResponse; a direct caller reads the env); only with it on
  *   does the context claim the restored bytes were redacted
- * @returns {{ updatedInput: any, context: string } | { deny: string } | null}
+ * @returns {{ updatedInput: any, context: string } | { deny: string, fault?: string } | null}
  */
 export function rehydrateLayer2(tool, toolInput, secretsOn = secretsEnabled()) {
   const hasL2 = (/** @type {unknown} */ text) =>
@@ -338,6 +368,52 @@ function emitTraced(emitTrace, toolName, fields) {
 }
 
 /**
+ * What the stage table hands back besides the pipeline's own result: the
+ * warnings of fault denies the open posture let through (the pipeline drops a
+ * stage's note when the input is unchanged, and these calls proceed unchanged),
+ * and the re-issue confirmations they rode on, consumed only once the call is
+ * known to proceed.
+ * @typedef {{ warnings: string[], released: string[] }} FaultLedger
+ */
+
+/**
+ * Resolve one stage's deny. A deny without `fault` is the stage's verdict on
+ * the input and stands in every posture. A deny WITH one exists only because
+ * the stage could not do its job, so this hook's registered fault policy
+ * decides it: it stands under the closed posture, and under the open one it is
+ * refused once with a re-issue escape, then let through with a warning —
+ * carrying the stage's `release` rewrite when it has one, else unchanged.
+ * @param {string} tool
+ * @param {any} toolInput
+ * @param {{ deny: string, fault?: string, release?: { updatedInput: any, context: string } }} result
+ * @param {string} site  the refusing stage, keying its re-issue confirmation
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
+ * @param {FaultLedger} ledger
+ * @returns {{ deny: string } | { updatedInput: any, context: string } | null}
+ */
+function resolveStageDeny(tool, toolInput, result, site, env, ledger) {
+  if (result.fault === undefined) return { deny: result.deny };
+  const fingerprint = reissueFingerprint(site, tool, toolInput);
+  const { fields } = hookFaultOutcome(HOOK_NAME, new Error(result.fault), {
+    env,
+    site: FaultSite.STAGE,
+    fingerprint,
+    reason: result.deny,
+    warning:
+      `WARNING: agent-sanitizer could not complete its ${site} stage on this ` +
+      `${tool} call and let it proceed ${result.release ? "rehydrated" : "unchanged"} ` +
+      `(fail-open): ${result.fault}. ` +
+      `Set ${FAIL_OPEN_ENV}=0 to refuse such calls instead.`,
+  });
+  const verdict = /** @type {Record<string, unknown>} */ (fields);
+  if (verdict.permissionDecision === PermissionDecision.DENY)
+    return { deny: String(verdict.permissionDecisionReason) };
+  ledger.warnings.push(String(verdict.additionalContext));
+  ledger.released.push(fingerprint);
+  return result.release ?? null;
+}
+
+/**
  * The declared stage chain after the gate. Every entry states the two properties
  * the driver reasons about — whether it ERASES code points another layer reads,
  * and whether its own decision is SKIP-BASED and therefore invalidated by such
@@ -353,13 +429,33 @@ function emitTraced(emitTrace, toolName, fields) {
  * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [env]
  * @param {boolean} [secretsOn]  the run's secret opt-in (see
  *   buildPreToolUseResponse, which decides it once and passes it here)
+ * @param {FaultLedger} [ledger]  where a fault deny the open posture lets
+ *   through leaves its warning; required as soon as a stage reports a fault,
+ *   since a warning with nowhere to go would let the call through silently
  * @returns {import("./lib/layer-pipeline.mjs").Layer[]}
  */
 export function preToolUseLayers(
   rehydrate,
   env = process.env,
   secretsOn = secretsEnabled(env),
+  ledger,
 ) {
+  /** @type {(tool: string, toolInput: any, result: { deny: string, fault?: string, release?: { updatedInput: any, context: string } }, site: string) => ReturnType<typeof resolveStageDeny>} */
+  const resolveDeny = (tool, toolInput, result, site) => {
+    if (result.fault !== undefined && ledger === undefined)
+      throw new Error(
+        `preToolUseLayers: the ${site} stage reported a fault but no ledger ` +
+          "was passed to carry its warning",
+      );
+    return resolveStageDeny(
+      tool,
+      toolInput,
+      result,
+      site,
+      env,
+      /** @type {FaultLedger} */ (ledger),
+    );
+  };
   /** @type {import("./lib/layer-pipeline.mjs").Layer[]} */
   const layers = [
     {
@@ -410,7 +506,8 @@ export function preToolUseLayers(
           rehydrate
         )(tool, toolInput);
         if (!rehydrated) return null;
-        if ("deny" in rehydrated) return { deny: rehydrated.deny };
+        if ("deny" in rehydrated)
+          return resolveDeny(tool, toolInput, rehydrated, "rehydrate");
         return {
           updatedInput: rehydrated.updatedInput,
           context: rehydrated.context,
@@ -426,7 +523,12 @@ export function preToolUseLayers(
       // legitimately contain [REDACTED…] text — must not be re-fed to the
       // secret resolver or re-stripped by an earlier layer.
       terminal: true,
-      run: (tool, toolInput) => rehydrateLayer2(tool, toolInput, secretsOn),
+      run: (tool, toolInput) => {
+        const result = rehydrateLayer2(tool, toolInput, secretsOn);
+        return result !== null && "deny" in result
+          ? resolveDeny(tool, toolInput, result, "layer2-rehydrate")
+          : result;
+      },
     },
   ];
   return layers.filter(
@@ -473,13 +575,13 @@ export async function buildPreToolUseResponse(input, rehydrate, sink, layers) {
   // cleaned. It asks ONCE (a hard checkpoint, recorded once emitted) then
   // degrades to a passive reminder, so it doesn't prompt on every tool call.
   const findings = invisibleCharAlert(input.session_id);
-  let pendingGateAck = false;
+  /** @type {string | null} */
+  let gateAsk = null;
   if (findings) {
     if (alertAcknowledged(input.session_id)) {
       contexts.push(gateReminderContext());
     } else {
-      asks.push(gateAskReason(findings));
-      pendingGateAck = true;
+      gateAsk = gateAskReason(findings);
     }
   }
 
@@ -496,6 +598,8 @@ export async function buildPreToolUseResponse(input, rehydrate, sink, layers) {
   // The rewriting stages, run by the declared pipeline: the driver — not this
   // call order — is what keeps the confusable fold's soundness precondition
   // true once an erasing stage follows it (see lib/layer-pipeline.mjs).
+  /** @type {FaultLedger} */
+  const ledger = { warnings: [], released: [] };
   const {
     updatedInput: current,
     changed,
@@ -510,6 +614,7 @@ export async function buildPreToolUseResponse(input, rehydrate, sink, layers) {
         rehydrate ?? (secretsOn ? guardedRehydrate : null),
         process.env,
         secretsOn,
+        ledger,
       ),
   );
   if (deny !== undefined)
@@ -517,7 +622,7 @@ export async function buildPreToolUseResponse(input, rehydrate, sink, layers) {
       permissionDecision: PermissionDecision.DENY,
       permissionDecisionReason: deny,
     });
-  contexts.push(...layerContexts);
+  contexts.push(...layerContexts, ...ledger.warnings);
   // A body that never settled: the pipeline hands back its LAST pass's sanitized
   // input plus the reason, and the verdict is this hook's registered fault
   // posture — never a verdict decided here. Open proceeds with `current` (the
@@ -528,11 +633,16 @@ export async function buildPreToolUseResponse(input, rehydrate, sink, layers) {
     const faultFields = hookFailureFields(true, new Error(fault), {
       input: { tool_name: tool, tool_input: current },
     });
+    if (faultFields.permissionDecision === PermissionDecision.DENY)
+      return emitTraced(emitTrace, input.tool_name, faultFields);
     if (faultFields.permissionDecisionReason !== undefined)
       asks.push(String(faultFields.permissionDecisionReason));
     if (faultFields.additionalContext !== undefined)
       contexts.push(String(faultFields.additionalContext));
   }
+  // The call proceeds past every refusal, so the confirmations it rode on are
+  // spent: each approves exactly one re-issue.
+  for (const fingerprint of ledger.released) consumeConfirm(fingerprint);
 
   // Placeholder advisory for tools OUTSIDE the rehydrated set (Bash, MCP,
   // anything unknown): rehydration cannot re-anchor these, so a placeholder in
@@ -558,7 +668,7 @@ export async function buildPreToolUseResponse(input, rehydrate, sink, layers) {
       current,
       asks,
       contexts,
-      pendingGateAck,
+      gateAsk,
       pendingGapNotice: gapNotice !== null,
       sessionId: input.session_id,
     }),
@@ -566,12 +676,38 @@ export async function buildPreToolUseResponse(input, rehydrate, sink, layers) {
 }
 
 /**
+ * Record the gate's acknowledgement and render its one-time ask. When the ack
+ * cannot be recorded, the next call would ask again, and the one after — so the
+ * fault posture decides: closed keeps the ask, open carries the findings as a
+ * warning instead of prompting on every tool call for the rest of the session.
+ * @param {string} gateAsk
+ * @param {string} [sessionId]
+ * @returns {{ ask: string } | { context: string }}
+ */
+function gateVerdict(gateAsk, sessionId) {
+  if (acknowledgeAlert(sessionId)) return { ask: gateAsk };
+  const fields = /** @type {Record<string, unknown>} */ (
+    hookFaultOutcome(
+      HOOK_NAME,
+      new Error(
+        "the invisible-char gate's acknowledgement could not be recorded",
+      ),
+      { site: FaultSite.GATE_ACK, gateAsk },
+    ).fields
+  );
+  return fields.permissionDecision === PermissionDecision.ASK
+    ? { ask: String(fields.permissionDecisionReason) }
+    : { context: String(fields.additionalContext) };
+}
+
+/**
  * Assemble the hookSpecificOutput fields from the per-layer results, or null
  * for a clean no-op (nothing asked, changed, or annotated). Records the gate
  * acknowledgement and the coverage-gap notice only when they actually land in
- * the response.
+ * the response — a deny above returns first, so a preempted ask is not marked
+ * seen.
  * @param {{ changed: boolean, current: any, asks: string[], contexts: string[],
- *   pendingGateAck: boolean, pendingGapNotice: boolean, sessionId?: string }} parts
+ *   gateAsk: string | null, pendingGapNotice: boolean, sessionId?: string }} parts
  * @returns {Record<string, unknown> | null}
  */
 function assembleResponse({
@@ -579,10 +715,15 @@ function assembleResponse({
   current,
   asks,
   contexts,
-  pendingGateAck,
+  gateAsk,
   pendingGapNotice,
   sessionId,
 }) {
+  if (gateAsk !== null) {
+    const gate = gateVerdict(gateAsk, sessionId);
+    if ("ask" in gate) asks.unshift(gate.ask);
+    else contexts.unshift(gate.context);
+  }
   if (asks.length === 0 && !changed && contexts.length === 0) return null;
 
   /** @type {Record<string, unknown>} */
@@ -596,9 +737,6 @@ function assembleResponse({
     fields.permissionDecisionReason = asks.join("\n\n");
   }
   if (contexts.length > 0) fields.additionalContext = contexts.join(" ");
-  // Record the gate ack only now that the ask is actually in the response — a
-  // rehydrate deny above returns first, so a preempted ask is not marked seen.
-  if (pendingGateAck) acknowledgeAlert(sessionId);
   if (pendingGapNotice) recordInstructionsLoadedNotice(sessionId);
   return fields;
 }
@@ -608,9 +746,11 @@ function assembleResponse({
  * ToolCallEvent and returns a Verdict, so a non-Claude host can run the same
  * sanitization pipeline through its own adapter. The wired Claude CLI below
  * routes through this judge and renders the Verdict with the Claude adapter; on
- * any throw (a control-plane package-load failure included) it falls back to
- * hookFailureFields — a native response that needs no package — so the
- * caller's fault posture holds even when the adapter never loaded.
+ * any throw (a control-plane package-load failure, or an event the adapter
+ * could not classify) it falls back to hookFailureFields — a native response
+ * that needs no package — so the caller's fault posture holds even when the
+ * adapter never loaded. A host calling this directly renders its throws the
+ * same way.
  * @param {import("agent-control-plane-core").ToolCallEvent} event
  * @param {(tool: string, toolInput: any) => ReturnType<typeof rehydrateRedacted>} [rehydrate]
  * @param {{
@@ -636,13 +776,18 @@ export async function judgePreToolUseSanitize(event, rehydrate, opts = {}) {
   const messages = { ...PRE_TOOL_USE_MESSAGES, ...opts.messages };
   const { Decision, EventKind } = controlPlane();
   // A payload the adapter cannot classify (a missing/unexpected hook_event_name)
-  // would drive the pipeline with an empty event and no-op to ALLOW — a silent
-  // fail-OPEN of the gate. This hook is wired only to PreToolUse, so an
-  // unclassifiable payload is harness-contract drift or an out-of-band caller,
-  // never a real call: deny-when-blind. Rewarding an unclassifiable payload with
-  // a pass is the one incentive a gate must never create.
+  // would drive the pipeline with an empty event and no-op to a CLEAN allow,
+  // reporting a sanitized call nobody vetted. This hook is wired only to
+  // PreToolUse, so it is harness-contract drift: a fault, thrown so the fault
+  // policy decides — a warning by default, a deny carrying the error's `reason`
+  // (this host's `messages.unknownEvent`) under AGENT_SANITIZER_FAIL_OPEN=0.
   if (event.event === EventKind.UNKNOWN)
-    return { decision: Decision.DENY, reason: messages.unknownEvent };
+    throw Object.assign(
+      new Error(
+        "pretooluse-sanitize: unrecognized hook payload (not PreToolUse)",
+      ),
+      { code: UNKNOWN_EVENT_CODE, reason: messages.unknownEvent },
+    );
   // The session identity and the permission mode travel in `meta`, not alongside
   // the tool input. A gate keyed on the session (a once-per-session checkpoint)
   // cannot tell two sessions apart without the first, and a gate keyed on the
@@ -769,8 +914,8 @@ export const REDACTION_HINT = "[REDACTED";
 
 /**
  * True when a faulting PreToolUse call is the one case the OPEN posture must
- * still not pass: a write-shaped tool whose input carries a redaction
- * placeholder, matched by the real grammar (containsPlaceholder) so
+ * not pass on the first try: a write-shaped tool whose input carries a
+ * redaction placeholder, matched by the real grammar (containsPlaceholder) so
  * hint-prefixed prose such as `[REDACTED…]` is not mistaken for one. Such a
  * placeholder stands for a secret the sanitizer redacted out of the model's
  * view; with the sanitizer down, rehydration cannot translate it back, so
@@ -781,7 +926,7 @@ export const REDACTION_HINT = "[REDACTED";
  *
  * Deliberately NOT exhaustive over every clobber path: Bash can also write a
  * placeholder to disk (`>`, `tee`, `sed -i`, a heredoc), but command strings
- * mention "[REDACTED" benignly far too often for an ask to hold precision
+ * mention "[REDACTED" benignly far too often for a refusal to hold precision
  * there. That is an accepted gap, named in THREAT-MODEL.md's carve-out.
  * @param {unknown} input raw parsed PreToolUse payload (undefined if unparsed)
  * @returns {boolean}
@@ -804,8 +949,9 @@ export function hintedWriteFault(input) {
  * fail-CLOSED verdict of {@link failClosedFields} when the caller set
  * AGENT_SANITIZER_FAIL_OPEN=0. The open default has ONE carve-out, declared in
  * this hook's fault policy below: a write-shaped call whose input carries a
- * `[REDACTED…]` placeholder asks instead of passing (see
- * {@link hintedWriteFault}) — pass `input` so the policy can see it.
+ * `[REDACTED…]` placeholder is refused once, and its exact re-issue proceeds
+ * with a warning (see {@link hintedWriteFault}) — pass `input` so the policy
+ * can see it.
  *
  * The posture covers this hook's own failures, whatever their cause. What it
  * does NOT cover is the verdict of a sanitizer that ran: a payload
@@ -832,19 +978,71 @@ export function hookFailureFields(parsedOk, err, opts = {}) {
   );
 }
 
+/** Appended to a releasable refusal: the escape that keeps it from looping. */
+const REISSUE_NOTE =
+  "If writing this text as-is is intended, re-issue this exact call (same " +
+  "tool, same input) to confirm: the re-issue proceeds and writes it literally.";
+
+/**
+ * The open posture's answer to a fault that would clobber real file content.
+ * A refusal the model cannot get past is a stuck session, so the refusal is
+ * issued only once it has a release: the first call is refused naming the
+ * re-issue escape, the confirmed re-issue proceeds with `warning`, and when the
+ * confirmation cannot be recorded at all the call proceeds with `warning` on
+ * the first try, since nothing could ever release that refusal.
+ * @param {string} fingerprint  the refusal's {@link reissueFingerprint}
+ * @param {boolean} consume  spend the confirmation now; false for a caller that
+ *   learns later whether the call proceeds and consumes it then
+ * @param {string} reason  the refusal, without the re-issue note
+ * @param {string} warning  what proceeding writes, for the model
+ * @returns {import("./lib/hook-fault.mjs").FaultParts}
+ */
+function releasableRefusal(fingerprint, consume, reason, warning) {
+  if (consume ? consumeConfirm(fingerprint) : confirmFresh(fingerprint))
+    return {
+      fields: {
+        additionalContext: `${warning} It proceeded as the confirmed re-issue of a call refused for this reason.`,
+      },
+    };
+  if (!recordConfirm(fingerprint))
+    return {
+      fields: {
+        additionalContext:
+          `${warning} It proceeded without a refusal: the re-issue ` +
+          `confirmation could not be recorded, so a refusal could never be released.`,
+      },
+    };
+  const sentence = /[.!?]$/u.test(reason) ? reason : `${reason}.`;
+  return {
+    fields: {
+      permissionDecision: PermissionDecision.DENY,
+      permissionDecisionReason: `${sentence} ${REISSUE_NOTE}`,
+    },
+  };
+}
+
 // This hook's entry in the one posture table (lib/hook-fault.mjs). The OPEN arm
-// keeps the shared default — a warning context and no verdict — with ONE
-// carve-out: a write-shaped input carrying a [REDACTED… placeholder asks
-// instead. The open posture trades enforcement for availability on the
-// sanitizer's own breakage, and that trade is sound for a missed SCAN; a
-// placeholder-bearing write is not a scan but a guaranteed clobber — the
-// placeholder would be persisted literally over the secret it stands for (see
-// hintedWriteFault). The ask keeps a human in the loop exactly as the closed
-// posture's clean-parse arm does.
+// keeps the shared default — a warning context and no verdict — except where
+// proceeding would clobber real content: a write-shaped input carrying a
+// [REDACTED… placeholder on a hook fault (see hintedWriteFault), and a STAGE
+// fault deny. Those take {@link releasableRefusal}. The two `site` arms are the
+// non-throw faults {@link FaultSite} lists.
 registerFaultPolicy(HOOK_NAME, {
   event: HookEvent.PRE_TOOL_USE,
   guarded: "tool input",
   open: (ctx) => {
+    if (ctx.site === FaultSite.GATE_ACK)
+      return {
+        fields: {
+          additionalContext:
+            "WARNING: agent-sanitizer could not record that its instruction-file " +
+            "alert was shown this session, so it is reported here rather than as " +
+            `a permission prompt on every tool call (fail-open; set ${FAIL_OPEN_ENV}=0 ` +
+            `to be asked instead).\n\n${ctx.gateAsk}`,
+        },
+      };
+    if (ctx.site === FaultSite.STAGE)
+      return releasableRefusal(ctx.fingerprint, false, ctx.reason, ctx.warning);
     // Non-carve-out faults take the SHARED open rendering, not a copy of it —
     // hook-fault.mjs owns that body, and a restated one would silently drift.
     // The carve-out itself rides the secret opt-in: with secrets off no
@@ -852,32 +1050,60 @@ registerFaultPolicy(HOOK_NAME, {
     // in a write is literal prose and holding it would be a false positive.
     if (!secretsEnabled(ctx.env) || !hintedWriteFault(ctx.input))
       return defaultOpen(ctx);
-    // parsedOk is hardcoded true (the ASK arm): hintedWriteFault(undefined)
-    // is false, so an unparsed input can never reach this line — reaching it
-    // proves the payload parsed.
+    // parsedOk is hardcoded true: hintedWriteFault(undefined) is false, so an
+    // unparsed input can never reach this line. This is the final decision on
+    // the call, so the confirmation is spent here.
     const closed = failClosedFields(true, ctx.err, {
       messages: ctx.messages,
       hint: ctx.hint,
     });
+    return releasableRefusal(
+      reissueFingerprint(
+        "hook-fault",
+        ctx.input.tool_name,
+        ctx.input.tool_input,
+      ),
+      true,
+      `${closed.permissionDecisionReason} This input would write ` +
+        `${REDACTION_HINT}…] placeholder text, which stands for a redacted ` +
+        `secret the unavailable sanitizer cannot translate back; proceeding ` +
+        `overwrites the real secret with the placeholder.`,
+      `${ctx.openContext} This input carries ${REDACTION_HINT}…] placeholder ` +
+        `text, which is written literally over the real secret it stands for.`,
+    );
+  },
+  closed: (ctx) => {
+    if (ctx.site === FaultSite.GATE_ACK)
+      return {
+        fields: {
+          permissionDecision: PermissionDecision.ASK,
+          permissionDecisionReason: ctx.gateAsk,
+        },
+      };
+    if (ctx.site === FaultSite.STAGE)
+      return {
+        fields: {
+          permissionDecision: PermissionDecision.DENY,
+          permissionDecisionReason: ctx.reason,
+        },
+      };
+    const err = /** @type {{ code?: unknown, reason?: unknown } | null} */ (
+      ctx.err
+    );
+    if (err?.code === UNKNOWN_EVENT_CODE)
+      return {
+        fields: {
+          permissionDecision: PermissionDecision.DENY,
+          permissionDecisionReason: err.reason,
+        },
+      };
     return {
-      fields: {
-        ...closed,
-        permissionDecisionReason:
-          `${closed.permissionDecisionReason} This input would write ` +
-          `${REDACTION_HINT}…] placeholder text, which stands for a redacted ` +
-          `secret the unavailable sanitizer cannot translate back; proceeding ` +
-          `would overwrite the real secret with the placeholder, so the call ` +
-          `is held even under the fail-open posture. Retry once the sanitizer ` +
-          `recovers, or ask the user to make this change.`,
-      },
+      fields: failClosedFields(ctx.parsedOk, ctx.err, {
+        messages: ctx.messages,
+        hint: ctx.hint,
+      }),
     };
   },
-  closed: (ctx) => ({
-    fields: failClosedFields(ctx.parsedOk, ctx.err, {
-      messages: ctx.messages,
-      hint: ctx.hint,
-    }),
-  }),
 });
 
 // Stryker disable all: CLI wiring — it runs only in the spawned hook

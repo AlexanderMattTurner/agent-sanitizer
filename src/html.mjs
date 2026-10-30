@@ -1592,16 +1592,17 @@ function isSelfClosedForeign(tagName, value) {
 // under fragment parsing (scripting disabled) parse5 parses its content as
 // normal markup, so scanning it is correct. Once `plaintext` opens it runs to
 // EOF and never closes.
-const RAW_TEXT_ELEMENTS = new Set([
-  "script",
-  "style",
-  "textarea",
-  "title",
-  "xmp",
-  "iframe",
-  "noembed",
-  "noframes",
-  "plaintext",
+// Each end-tag matcher is spelled per tag, so none compiles a document's text.
+const RAW_TEXT_END_TAGS = new Map([
+  ["script", /<\/script(?![a-z0-9-])/i],
+  ["style", /<\/style(?![a-z0-9-])/i],
+  ["textarea", /<\/textarea(?![a-z0-9-])/i],
+  ["title", /<\/title(?![a-z0-9-])/i],
+  ["xmp", /<\/xmp(?![a-z0-9-])/i],
+  ["iframe", /<\/iframe(?![a-z0-9-])/i],
+  ["noembed", /<\/noembed(?![a-z0-9-])/i],
+  ["noframes", /<\/noframes(?![a-z0-9-])/i],
+  ["plaintext", /<\/plaintext(?![a-z0-9-])/i],
 ]);
 
 // Keywords that take the parent's value of an inherited property: `revert`
@@ -2608,9 +2609,9 @@ function scanInlineChildren(node, text, ranges, warned) {
   // "Inside an unterminated tag / bogus comment" — parse5 absorbs following
   // markup into it until the next `>`.
   let absorbing = false;
-  // Non-null while inside a raw-text element (its lowercased tag name); content
-  // is opaque until the matching end tag.
-  let rawText = /** @type {string | null} */ (null);
+  // Non-null while inside a raw-text element (the matcher for its end tag);
+  // content is opaque until that end tag.
+  let rawTextEnd = /** @type {RegExp | null} */ (null);
   // End offset of the last html node processed; the raw slice from here to the
   // next html node is what parse5 tokenizes between them.
   let prevEnd = node.position.start.offset;
@@ -2622,10 +2623,9 @@ function scanInlineChildren(node, text, ranges, warned) {
     // into the absorb state before deciding what to do with this html node.
     absorbing = foldAbsorb(absorbing, text.slice(prevEnd, base));
 
-    if (rawText) {
+    if (rawTextEnd) {
       // Raw-text content is opaque; only the matching end tag ends the region.
-      if (new RegExp(`</${rawText}(?![a-z0-9-])`, "i").test(value))
-        rawText = null;
+      if (rawTextEnd.test(value)) rawTextEnd = null;
     } else if (state.depth > 0) {
       updateHiddenState(state, value, end, ranges);
     } else if (!absorbing) {
@@ -2655,7 +2655,7 @@ function scanInlineChildren(node, text, ranges, warned) {
         if (el) {
           // A raw-text open tag starts an opaque region (a self-closing `/>`
           // does not apply to these in HTML — they always open).
-          if (RAW_TEXT_ELEMENTS.has(el.tagName)) rawText = el.tagName;
+          rawTextEnd = RAW_TEXT_END_TAGS.get(el.tagName) ?? null;
           // `el` is one tag parsed alone, so a `<template>` inside an inline
           // `<svg>`/`<math>` reads as HTML here and is reported, where the
           // source branch, which sees the namespace, does not: this errs toward

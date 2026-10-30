@@ -2393,7 +2393,7 @@ describe("splice fidelity and regressions", () => {
     ["textarea", "</b"],
     ["title", "<!--t-->"],
     // Hidden-ELEMENT literals: these are the load-bearing cases for the kept
-    // rawText tracking — without it the balance walk would read the literal as
+    // raw-text tracking — without it the balance walk would read the literal as
     // a real hidden element and splice source these tags preserve verbatim.
     ["style", '<div hidden="">payload</div>'],
     ["textarea", "<span hidden>payload</span>"],
