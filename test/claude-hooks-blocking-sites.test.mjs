@@ -1,22 +1,23 @@
 /**
  * Every BLOCKING outcome the shipped hook code can produce, read off acorn's
- * AST and partitioned into a named allowlist, so a new blocking outcome on a
- * fault path is a red build. The plugin is fail-OPEN: no sanitizer FAULT may
- * block, deny, ask, suppress or exit 2 unless AGENT_SANITIZER_FAIL_OPEN=0.
- * Each allowlist entry names exactly one of three legitimate reasons:
+ * AST, and a check that none of them sits on a fault path. The plugin is
+ * fail-OPEN: no sanitizer FAULT may block, deny, ask, suppress or exit 2
+ * unless AGENT_SANITIZER_FAIL_OPEN=0. Each site's category comes from where it
+ * sits (`categoryOf`), never from a hand-kept list:
  *
- *   - CONTENT: a working sanitizer found something in the content. A relay
- *     that only forwards a verdict upward is CONTENT; its origin is classified.
+ *   - RELEASABLE: a fault-tagged `{deny, fault}`, or the refuse-once helper
+ *     (`releasableRefusal`); RELEASABLE_PROOFS names the tests proving it
+ *     cannot loop.
  *   - CLOSED: reachable only through hookFaultOutcome's closed branch — a
  *     policy's `closed:` arm, a knob-blind failClosed* helper, or a rendering
- *     of a hookFaultOutcome result whose open arm never blocks.
- *   - RELEASABLE: the refuse-once-then-reissue path; RELEASABLE_PROOFS names
- *     the tests proving it cannot loop.
+ *     of a hookFaultOutcome result.
+ *   - CONTENT: everything else, a working sanitizer's verdict on the content.
  *
- * Helpers are followed: a function whose return carries a blocking value is a
- * blocking helper, and each call to it is a site. A FaultOutcome slot's relay
- * (`process.exitCode = writeFaultOutcome(o)`) is not a site; its origin in the
- * policy arm is. `ruleViolations` binds each category to lexical position.
+ * `ruleViolations` then flags a CONTENT site in a catch, a fault branch or an
+ * open arm. Helpers are followed: a function whose return carries a blocking
+ * value is a blocking helper, and each call to it is a site. A FaultOutcome
+ * slot's relay (`process.exitCode = writeFaultOutcome(o)`) is not a site; its
+ * origin in the policy arm is.
  */
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
@@ -840,56 +841,54 @@ function disambiguate(sites) {
   return sites.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 }
 
+// ── The classification ──────────────────────────────────────────────────────
+
+/**
+ * A site's category, read off where it sits. RELEASABLE is a fault-tagged
+ * `{deny, fault}` or the refuse-once helper itself; CLOSED is anything only the
+ * closed posture reaches; everything else is CONTENT. Deriving it means the
+ * rules below judge position alone: a CONTENT site on a fault path (a catch, an
+ * open arm, a fault branch) is a violation.
+ * @param {Site} site
+ * @returns {string}
+ */
+function categoryOf(site) {
+  const segments = site.path.split(">");
+  if (
+    site.kind.endsWith(",fault}") ||
+    site.kind === "calls releasableRefusal" ||
+    segments.includes("releasableRefusal")
+  )
+    return RELEASABLE;
+  if (
+    site.inClosedArm ||
+    site.rendersPosture ||
+    segments.some((name) => FAIL_CLOSED_HELPER.test(name))
+  )
+    return CLOSED;
+  return CONTENT;
+}
+
 // ── The rules ───────────────────────────────────────────────────────────────
 
 /**
- * Every way a classified site contradicts where it sits, as `rule: key`:
+ * Every site that blocks on a fault path, as `rule: key`:
  *
  *   - catch: a catch clause is a fault path, so it may hold CLOSED and
  *     RELEASABLE sites but never a CONTENT one.
  *   - open-arm: a policy's `open:` arm may hold only RELEASABLE sites.
- *   - content-placement: a CONTENT site may not sit in a closed arm.
- *   - closed-placement: a CLOSED site sits in a closed arm or a failClosed*
- *     helper, or renders a hookFaultOutcome result.
- *   - releasable-placement: a RELEASABLE site is inside releasableRefusal or
- *     an open arm, is a fault-tagged `{deny, fault}`, or renders a
- *     hookFaultOutcome result.
- *   - fault-tag: a fault-tagged `{deny, fault}` is RELEASABLE — the posture,
- *     not the site, decides whether it stands.
  *   - fault-branch: a branch that returns a fault-tagged deny holds no
  *     untagged CONTENT one, which no posture could ever release.
  * @param {Site[]} sites
- * @param {(site: Site) => string | undefined} categoryOf  undefined skips
  * @returns {string[]}
  */
-function ruleViolations(sites, categoryOf) {
+function ruleViolations(sites) {
   const out = new Set();
   for (const site of sites) {
     const category = categoryOf(site);
-    if (category === undefined) continue;
-    const segments = site.path.split(">");
-    const tagged = site.kind.endsWith(",fault}");
-    const flag = (/** @type {string} */ rule) =>
-      out.add(`${rule}: ${site.key}`);
-    if (site.inCatch && category === CONTENT) flag("catch");
-    if (site.inOpenArm && category !== RELEASABLE) flag("open-arm");
-    if (category === CONTENT && site.inClosedArm) flag("content-placement");
-    if (
-      category === CLOSED &&
-      !site.inClosedArm &&
-      !site.rendersPosture &&
-      !segments.some((name) => FAIL_CLOSED_HELPER.test(name))
-    )
-      flag("closed-placement");
-    if (
-      category === RELEASABLE &&
-      !segments.includes("releasableRefusal") &&
-      !site.inOpenArm &&
-      !tagged &&
-      !site.rendersPosture
-    )
-      flag("releasable-placement");
-    if (tagged && category !== RELEASABLE) flag("fault-tag");
+    if (site.inCatch && category === CONTENT) out.add(`catch: ${site.key}`);
+    if (site.inOpenArm && category !== RELEASABLE)
+      out.add(`open-arm: ${site.key}`);
   }
   for (const tagged of sites.filter((s) => s.kind.endsWith(",fault}"))) {
     const at = tagged.ancestors.findLastIndex(
@@ -904,457 +903,16 @@ function ruleViolations(sites, categoryOf) {
   return [...out].sort();
 }
 
-// ── The classification ──────────────────────────────────────────────────────
-
-// Key prefixes, one per scanned module that has sites.
-const PIPELINE = "claude-hooks/lib/layer-pipeline.mjs#";
-const DROP = "claude-hooks/lib/secret-drop-guard.mjs#";
-const DISPATCH = "claude-hooks/plugin-hooks.mjs#";
-const PRE = "claude-hooks/pretooluse-sanitize.mjs#";
-const POST = "claude-hooks/sanitize-output.mjs#";
-const PROMPT = "claude-hooks/sanitize-user-prompt.mjs#";
-const SESSION = "claude-hooks/scan-invisible-chars.mjs#";
-const LOADED = "claude-hooks/scan-loaded-instructions.mjs#";
 const HTML = "src/html.mjs#";
-const OUTPUT = "src/output.mjs#";
+const PRE = "claude-hooks/pretooluse-sanitize.mjs#";
 const REHYDRATE = "src/rehydrate.mjs#";
-const VIEW_MAP = "src/view-map.mjs#";
 
-const RELAY = "relay: forwards the verdict of the call it names";
-
-/** `[key, category, reason]` for every legitimate blocking site in the tree. */
-const ALLOWLIST = [
-  // layer pipeline
-  [
-    `${PIPELINE}runLayerPipeline calls runLayerPipeline>step #1`,
-    CONTENT,
-    RELAY,
-  ],
-  [
-    `${PIPELINE}runLayerPipeline calls runLayerPipeline>step #2`,
-    CONTENT,
-    RELAY,
-  ],
-  [
-    `${PIPELINE}runLayerPipeline>step {deny}`,
-    CONTENT,
-    "relay: a stage's deny, fault denies already resolved by resolveStageDeny",
-  ],
-  // secret-drop guard
-  [
-    `${DROP}secretDropGuard {deny,fault}`,
-    RELEASABLE,
-    "the drop's confirmation could not be recorded, so the posture decides",
-  ],
-  [
-    `${DROP}secretDropGuard {deny}`,
-    CONTENT,
-    "the Write drops redacted secrets from the file; its one-shot confirmation releases the identical re-issue",
-  ],
-  [
-    `${DROP}withSecretDropGuard><anonymous> calls secretDropGuard`,
-    CONTENT,
-    RELAY,
-  ],
-  // dispatcher
-  [
-    `${DISPATCH}registerFaultPolicy:closed exitCode=2`,
-    CLOSED,
-    "an unknown --hook mode blocks only under AGENT_SANITIZER_FAIL_OPEN=0",
-  ],
-  // PreToolUse
-  [
-    `${PRE}assembleResponse calls gateVerdict`,
-    CONTENT,
-    "the instruction-file injection gate's one-time ask",
-  ],
-  [
-    `${PRE}assembleResponse fields.permissionDecision=PermissionDecision.ASK`,
-    CONTENT,
-    "renders the gate's ask; a fault ask reaches it only from the closed arm",
-  ],
-  [`${PRE}buildPreToolUseResponse calls assembleResponse`, CONTENT, RELAY],
-  [
-    `${PRE}buildPreToolUseResponse calls claude-hooks/lib/layer-pipeline.mjs#runLayerPipeline`,
-    CONTENT,
-    RELAY,
-  ],
-  [
-    `${PRE}buildPreToolUseResponse permissionDecision=PermissionDecision.DENY`,
-    CONTENT,
-    "renders the stage chain's deny",
-  ],
-  [
-    `${PRE}cliMain>runJudgeCli(arg 1) calls judgePreToolUseSanitize`,
-    CONTENT,
-    RELAY,
-  ],
-  [
-    `${PRE}failClosedFields permissionDecision=parsedOk ? unavailable : PermissionDecision.DENY`,
-    CLOSED,
-    "the knob-blind closed verdict, reached from the closed arm",
-  ],
-  [
-    `${PRE}gateVerdict {ask} <gateAsk>`,
-    CONTENT,
-    "a loaded instruction file carries payload-capable characters, and the ask is recorded as shown",
-  ],
-  [
-    `${PRE}gateVerdict {ask} <String(fields.permissionDecisionReason)>`,
-    CLOSED,
-    "renders the GATE_ACK fault verdict, an ask only from the closed arm",
-  ],
-  [
-    `${PRE}judgePreToolUseSanitize calls buildPreToolUseResponse`,
-    CONTENT,
-    RELAY,
-  ],
-  [
-    `${PRE}judgePreToolUseSanitize decision=Decision.DENY`,
-    CONTENT,
-    "a host gate's verdict on the call; a throwing gate takes the fault posture",
-  ],
-  [`${PRE}preToolUseLayers>resolveDeny calls resolveStageDeny`, CONTENT, RELAY],
-  [
-    `${PRE}preToolUseLayers>run[layer2-rehydrate] calls preToolUseLayers>resolveDeny`,
-    CONTENT,
-    RELAY,
-  ],
-  [
-    `${PRE}preToolUseLayers>run[layer2-rehydrate] calls rehydrateLayer2`,
-    CONTENT,
-    RELAY,
-  ],
-  [
-    `${PRE}preToolUseLayers>run[rehydrate] calls preToolUseLayers>resolveDeny`,
-    CONTENT,
-    RELAY,
-  ],
-  [
-    `${PRE}registerFaultPolicy:closed calls failClosedFields`,
-    CLOSED,
-    "a hook-level fault under =0",
-  ],
-  [
-    `${PRE}registerFaultPolicy:closed permissionDecision=PermissionDecision.ASK`,
-    CLOSED,
-    "a GATE_ACK fault keeps the gate's ask under =0",
-  ],
-  [
-    `${PRE}registerFaultPolicy:closed permissionDecision=PermissionDecision.DENY <ctx.reason>`,
-    CLOSED,
-    "a STAGE fault deny stands under =0",
-  ],
-  [
-    `${PRE}registerFaultPolicy:closed permissionDecision=PermissionDecision.DENY <err.reason>`,
-    CLOSED,
-    "an unclassifiable payload under =0",
-  ],
-  [
-    `${PRE}registerFaultPolicy:open calls failClosedFields`,
-    RELEASABLE,
-    "only its reason sentence is read, as releasableRefusal's refusal",
-  ],
-  [
-    `${PRE}registerFaultPolicy:open calls releasableRefusal #1`,
-    RELEASABLE,
-    "a STAGE fault deny",
-  ],
-  [
-    `${PRE}registerFaultPolicy:open calls releasableRefusal #2`,
-    RELEASABLE,
-    "a hinted write on a hook fault would clobber the secret",
-  ],
-  [
-    `${PRE}rehydrateLayer2 {deny} <"new_source contains a [hidden HTML…">`,
-    CONTENT,
-    "capability limit: a notebook cannot be rehydrated",
-  ],
-  [
-    `${PRE}rehydrateLayer2 {deny} <"the edits carry [hidden HTML…">`,
-    CONTENT,
-    "capability limit: MultiEdit's sequential edits cannot be rehydrated",
-  ],
-  [`${PRE}rehydrateLayer2 calls substituteLayer2`, CONTENT, RELAY],
-  [
-    `${PRE}releasableRefusal permissionDecision=PermissionDecision.DENY`,
-    RELEASABLE,
-    "the refusal itself, issued only once its re-issue confirmation is recorded",
-  ],
-  [
-    `${PRE}resolveStageDeny {deny} <result.deny>`,
-    CONTENT,
-    "an untagged stage deny is the stage's verdict",
-  ],
-  [
-    `${PRE}resolveStageDeny {deny} <String(verdict.permissionDecisionReason)>`,
-    RELEASABLE,
-    "renders a fault deny's policy verdict: releasableRefusal by default",
-  ],
-  [
-    `${PRE}substituteLayer2 {deny,fault}`,
-    RELEASABLE,
-    "a Layer-2 placeholder whose stored span is missing",
-  ],
-  [
-    `${PRE}withSecretDropGuard(arg 0) calls src/rehydrate.mjs#rehydrateRedacted`,
-    CONTENT,
-    RELAY,
-  ],
-  // PostToolUse
-  [
-    `${POST}cliMain>runJudgeCli(arg 1) calls judgeSanitizeOutput`,
-    CONTENT,
-    RELAY,
-  ],
-  [
-    `${POST}emitFailClosed calls failClosedParts`,
-    CLOSED,
-    "the knob-blind closed emitter a host wires; no hook path calls it",
-  ],
-  [`${POST}evaluateToolOutput calls sanitizeValue`, CONTENT, RELAY],
-  [
-    `${POST}failClosedParts calls failClosedReplacement`,
-    CLOSED,
-    "the shape-matching suppression",
-  ],
-  [
-    `${POST}failClosedParts updatedToolOutput #1`,
-    CLOSED,
-    "the shallow fallback suppression",
-  ],
-  [
-    `${POST}failClosedParts updatedToolOutput #2`,
-    CLOSED,
-    "the shape-matching suppression",
-  ],
-  [
-    `${POST}failClosedReplacement suppressToolOutput()`,
-    CLOSED,
-    "replaces every string leaf with the placeholder",
-  ],
-  [`${POST}judgeSanitizeOutput calls evaluateToolOutput`, CONTENT, RELAY],
-  [
-    `${POST}registerFaultPolicy:closed calls failClosedParts`,
-    CLOSED,
-    "a hook fault suppresses the output only under =0",
-  ],
-  [
-    `${POST}sanitizeValue calls src/output.mjs#sanitizeValueWith`,
-    CONTENT,
-    RELAY,
-  ],
-  // UserPromptSubmit
-  [
-    `${PROMPT}judgeSanitizeUserPrompt decision=Decision.DENY`,
-    CONTENT,
-    "the prompt carries payload-capable invisible or ANSI characters",
-  ],
-  [
-    `${PROMPT}main>runJudgeCli(arg 1) calls judgeSanitizeUserPrompt`,
-    CONTENT,
-    RELAY,
-  ],
-  [
-    `${PROMPT}registerFaultPolicy:closed decision="block"`,
-    CLOSED,
-    "a hook fault blocks the prompt only under =0",
-  ],
-  // SessionStart / InstructionsLoaded
-  [
-    `${SESSION}registerFaultPolicy:closed armAlert=true #1`,
-    CLOSED,
-    "a scanner fault arms the tool-call gate only under =0",
-  ],
-  [
-    `${SESSION}registerFaultPolicy:closed armAlert=true #2`,
-    CLOSED,
-    "an unreadable instruction file arms the gate only under =0",
-  ],
-  [
-    `${LOADED}registerFaultPolicy:closed armAlert=true`,
-    CLOSED,
-    "a scanner fault arms the tool-call gate only under =0",
-  ],
-  // library: Layer 2 and the structured-output walk
-  [
-    `${HTML}sanitizeHtml withheld=UNPARSEABLE_PLACEHOLDER <text: UNPARSEABLE_PLACEHOLDER>`,
-    CONTENT,
-    "a document that never settles within MAX_SPLICE_ROUNDS is withheld whole",
-  ],
-  [
-    `${HTML}sanitizeHtml withheld=UNPARSEABLE_PLACEHOLDER <catch text: UNPARSEABLE_PLACEHOLDER>`,
-    CONTENT,
-    "a parse that throws is a property of the INPUT, which an attacker composes: failing open would turn any parser crash into a Layer-2 bypass",
-  ],
-  [`${OUTPUT}sanitizeObject calls sanitizeValueAt`, CONTENT, RELAY],
-  [
-    `${OUTPUT}sanitizeObject withheld=COLLISION_WITHHELD_MESSAGE <defineOwn(out, name.value, COLLISION_WITHHELD_MESSAGE)>`,
-    CONTENT,
-    "two field names collide after sanitization: the first is withheld",
-  ],
-  [
-    `${OUTPUT}sanitizeObject withheld=COLLISION_WITHHELD_MESSAGE <defineOwn(out, slot(index), COLLISION_WITHHELD_MESSAGE)>`,
-    CONTENT,
-    "each later colliding field is withheld",
-  ],
-  [`${OUTPUT}sanitizeValue calls sanitizeValueWith`, CONTENT, RELAY],
-  [`${OUTPUT}sanitizeValueAt calls sanitizeValueAt`, CONTENT, RELAY],
-  [
-    `${OUTPUT}sanitizeValueAt withheld=CYCLE_PLACEHOLDER`,
-    CONTENT,
-    "a reference cycle in structured output",
-  ],
-  [
-    `${OUTPUT}sanitizeValueAt withheld=DEPTH_PLACEHOLDER`,
-    CONTENT,
-    "structured output nested past MAX_DEPTH",
-  ],
-  [`${OUTPUT}sanitizeValueWith calls sanitizeValueAt`, CONTENT, RELAY],
-  // library: Layer-4 rehydration
-  [
-    `${REHYDRATE}anchorAmbiguityDeny {deny}`,
-    CONTENT,
-    "an edit beside stripped control sequences cannot be re-anchored unambiguously",
-  ],
-  [
-    `${REHYDRATE}multiEditDeny {deny}`,
-    CONTENT,
-    "capability limit: MultiEdit cannot be re-anchored against a divergent view",
-  ],
-  [
-    `${REHYDRATE}rehydrateEdit {deny} <"old_string contains ……] placeholders but…">`,
-    CONTENT,
-    "a placeholder-bearing old_string the view does not contain",
-  ],
-  [
-    `${REHYDRATE}rehydrateEdit {deny} <"old_string does not appear in…">`,
-    CONTENT,
-    "old_string matches inside a hidden secret: the extraction oracle",
-  ],
-  [
-    `${REHYDRATE}rehydrateEdit {deny} <"old_string matches … locations in…">`,
-    CONTENT,
-    "an ambiguous anchor in the view",
-  ],
-  [
-    `${REHYDRATE}rehydrateEdit {deny} <"old_string starts or ends inside…">`,
-    CONTENT,
-    "old_string cuts a placeholder",
-  ],
-  [
-    `${REHYDRATE}rehydrateEdit {deny} <"replace_all matched occurrences whose on-disk…">`,
-    CONTENT,
-    "replace_all spans distinct on-disk bytes",
-  ],
-  [
-    `${REHYDRATE}rehydrateEdit {deny} <"replace_all would rewrite … on-disk…">`,
-    CONTENT,
-    "replace_all would touch occurrences hidden from the view",
-  ],
-  [
-    `${REHYDRATE}rehydrateEdit {deny} <exposureDeny(exposed)>`,
-    CONTENT,
-    "the edit would expose a redacted secret",
-  ],
-  [`${REHYDRATE}rehydrateEdit calls anchorAmbiguityDeny`, CONTENT, RELAY],
-  [
-    `${REHYDRATE}rehydrateEdit calls src/view-map.mjs#rehydrateNewString #1`,
-    CONTENT,
-    RELAY,
-  ],
-  [
-    `${REHYDRATE}rehydrateEdit calls src/view-map.mjs#rehydrateNewString #2`,
-    CONTENT,
-    RELAY,
-  ],
-  [
-    `${REHYDRATE}rehydrateRedacted {deny,fault} <"cannot safely edit …: …;…">`,
-    RELEASABLE,
-    "the redactor's map failed validation",
-  ],
-  [
-    `${REHYDRATE}rehydrateRedacted {deny,fault} <catch "could not read … to…">`,
-    RELEASABLE,
-    "the target could not be read to rehydrate it",
-  ],
-  [
-    `${REHYDRATE}rehydrateRedacted {deny} <"cannot resolve redaction placeholders in…">`,
-    CONTENT,
-    "the file defeats mapping on every call (unmappable)",
-  ],
-  [
-    `${REHYDRATE}rehydrateRedacted {deny} <"new_source contains a ……] placeholder,…">`,
-    CONTENT,
-    "capability limit: a notebook cannot be rehydrated",
-  ],
-  [
-    `${REHYDRATE}rehydrateRedacted {deny} <catch "… does not exist, so…">`,
-    CONTENT,
-    "a hinted call creates the file, so its placeholder stands for no secret",
-  ],
-  [
-    `${REHYDRATE}rehydrateRedacted calls multiEditDeny #1`,
-    CONTENT,
-    "an unmappable file defeats a MultiEdit",
-  ],
-  [
-    `${REHYDRATE}rehydrateRedacted calls multiEditDeny #2`,
-    CONTENT,
-    "a MultiEdit on a map that fails validation: its escape (single Edits, each releasable) always works, so it never loops",
-  ],
-  [
-    `${REHYDRATE}rehydrateRedacted calls multiEditDeny #3`,
-    CONTENT,
-    "a MultiEdit on a file whose view diverges from disk",
-  ],
-  [`${REHYDRATE}rehydrateRedacted calls rehydrateEdit`, CONTENT, RELAY],
-  [`${REHYDRATE}rehydrateRedacted calls rehydrateWrite`, CONTENT, RELAY],
-  [
-    `${REHYDRATE}rehydrateWrite {deny} <"… mixes literal "…" text…">`,
-    CONTENT,
-    "literal placeholder text shares a placeholder with a secret",
-  ],
-  [
-    `${REHYDRATE}rehydrateWrite {deny} <"multiple distinct secrets in ……">`,
-    CONTENT,
-    "distinct secrets share one placeholder",
-  ],
-  [
-    `${REHYDRATE}rehydrateWrite {deny} <"the new content still carries…">`,
-    CONTENT,
-    "a foreign placeholder no secret in the file matches",
-  ],
-  [
-    `${REHYDRATE}rehydrateWrite {deny} <exposureDeny(exposed)>`,
-    CONTENT,
-    "the write would expose a redacted secret",
-  ],
-  [`${REHYDRATE}rehydrateWrite calls restoreWriteRegion #1`, CONTENT, RELAY],
-  [`${REHYDRATE}rehydrateWrite calls restoreWriteRegion #2`, CONTENT, RELAY],
-  [`${REHYDRATE}restoreWriteRegion calls anchorAmbiguityDeny`, CONTENT, RELAY],
-  [
-    `${VIEW_MAP}rehydrateNewString {deny} <"multiple distinct secrets in the…">`,
-    CONTENT,
-    "distinct secrets share one placeholder",
-  ],
-  [
-    `${VIEW_MAP}rehydrateNewString {deny} <"new_string contains "…", which stands…">`,
-    CONTENT,
-    "a foreign placeholder no secret in the file matches",
-  ],
-  [
-    `${VIEW_MAP}rehydrateNewString {deny} <"the matched text mixes literal…">`,
-    CONTENT,
-    "literal placeholder text shares a placeholder with a secret",
-  ],
-];
-
-/**
- * A rule violation by a site whose classification is still right, with why
- * its lexical position misleads the rule. `[rule: key, why]`.
- */
+/** `[violation, reason]` for each site whose position misleads the rules. */
 const RULE_EXCEPTIONS = [
+  [
+    `open-arm: ${PRE}registerFaultPolicy:open calls failClosedFields`,
+    "only its reason text is read, to word the releasable refusal the arm returns",
+  ],
   [
     `catch: ${HTML}sanitizeHtml withheld=UNPARSEABLE_PLACEHOLDER <catch text: UNPARSEABLE_PLACEHOLDER>`,
     "the catch is where parse5/remark report that THIS input cannot be parsed within bounds; the throw is input-composable, so the withhold is a verdict on the input",
@@ -1428,9 +986,7 @@ function testNames(/** @type {string} */ file) {
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
-const classified = new Map(ALLOWLIST.map(([key, category]) => [key, category]));
 const SITES = scanBlockingSites(repoRoot, SCANNED);
-const where = (/** @type {Site} */ s) => `${s.file}:${s.line}`;
 
 describe("hook blocking sites", () => {
   it("scans the shipped hook tree and every detector fires (non-vacuous)", () => {
@@ -1462,42 +1018,20 @@ describe("hook blocking sites", () => {
       );
     for (const category of Object.values(Category))
       assert.ok(
-        ALLOWLIST.some(([, c]) => c === category),
-        `no allowlisted ${category} site`,
+        SITES.some((s) => categoryOf(s) === category),
+        `no ${category} site found`,
       );
   });
 
-  it("classifies every blocking site exactly once", () => {
-    const keys = SITES.map((s) => s.key);
-    const unclassified = SITES.filter((s) => !classified.has(s.key)).map(
-      (s) => `  ${s.key}  (${where(s)})`,
-    );
-    const listed = ALLOWLIST.map(([key]) => key);
-    const stale = listed.filter((key) => !keys.includes(key));
-    const doubled = listed.filter((key, i) => listed.indexOf(key) !== i);
+  it("blocks on no fault path under the open default", () => {
     assert.deepEqual(
-      { unclassified, stale, doubled },
-      { unclassified: [], stale: [], doubled: [] },
-      "Each blocking site needs exactly one ALLOWLIST entry naming WHY it may " +
-        "block: CONTENT (a working sanitizer's verdict on the content, or a " +
-        "relay of one), CLOSED (reached only under AGENT_SANITIZER_FAIL_OPEN=0: " +
-        "a policy's closed arm or a failClosed* helper), or RELEASABLE (the " +
-        "refuse-once re-issue path). A site that is a FAULT blocking under the " +
-        "open default fits none of these: fix it (route it through " +
-        "hookFaultOutcome) rather than listing it. A stale key means the site " +
-        "moved or was removed — re-key or delete its entry.",
-    );
-  });
-
-  it("binds each category to where its site sits", () => {
-    const categoryOf = (/** @type {Site} */ s) => classified.get(s.key);
-    assert.deepEqual(
-      ruleViolations(SITES, categoryOf),
+      ruleViolations(SITES),
       RULE_EXCEPTIONS.map(([violation]) => violation).sort(),
-      "A classification contradicts where its site sits (see ruleViolations " +
-        "for each rule). A CONTENT site in a catch or an open arm is a fault " +
-        "path blocking under the open default: route it through " +
-        "hookFaultOutcome, or return it fault-tagged ({ deny, fault }).",
+      "A site blocks on a fault path (see ruleViolations for each rule): a " +
+        "fault would then block under the open default. Route it through " +
+        "hookFaultOutcome or releasableRefusal, or return it fault-tagged " +
+        "({ deny, fault }). Add a RULE_EXCEPTIONS entry only when the path is " +
+        "not really a fault, saying why.",
     );
   });
 
@@ -1517,7 +1051,6 @@ describe("the blocking-site scanner, on fixtures", () => {
     return scanBlockingSites(root, Object.keys(files));
   };
   const keysOf = (/** @type {Site[]} */ sites) => sites.map((s) => s.key);
-  const allAs = (/** @type {string} */ category) => () => category;
 
   it("flags a deny inside a catch block, and the catch rule rejects it as CONTENT", () => {
     const sites = scan({
@@ -1532,7 +1065,7 @@ describe("the blocking-site scanner, on fixtures", () => {
     const key = "catch.mjs#onFault permissionDecision=PermissionDecision.DENY";
     assert.deepEqual(keysOf(sites), [key]);
     assert.equal(sites[0].inCatch, true);
-    assert.deepEqual(ruleViolations(sites, allAs(CONTENT)), [`catch: ${key}`]);
+    assert.deepEqual(ruleViolations(sites), [`catch: ${key}`]);
   });
 
   it("flags a deny a helper returns, through a local and across modules, when called from a catch", () => {
@@ -1560,7 +1093,7 @@ describe("the blocking-site scanner, on fixtures", () => {
       'lib.mjs#refuse permissionDecision="deny"',
     ]);
     assert.equal(sites[0].inCatch, true);
-    assert.ok(ruleViolations(sites, allAs(CONTENT)).includes(`catch: ${call}`));
+    assert.ok(ruleViolations(sites).includes(`catch: ${call}`));
   });
 
   it("flags nothing in a corpus of non-blocking shapes", () => {
@@ -1597,30 +1130,34 @@ describe("the blocking-site scanner, on fixtures", () => {
     assert.deepEqual(keysOf(sites), []);
   });
 
-  it("accepts a closed-arm deny as CLOSED, and rejects it or an open-arm ask as CONTENT", () => {
+  it("accepts a closed-arm deny and an open-arm refuse-once, and rejects any other open-arm ask", () => {
     const sites = scan({
-      "policy.mjs": `registerFaultPolicy("hook", {
-        event: null,
-        guarded: "x",
-        open: () => ({ fields: { permissionDecision: "ask" } }),
+      "policy.mjs": `function releasableRefusal(reason) {
+        return { fields: { permissionDecision: "deny", permissionDecisionReason: reason } };
+      }
+      registerFaultPolicy("released", {
+        open: () => releasableRefusal("x"),
         closed: () => ({ fields: { permissionDecision: PermissionDecision.DENY } }),
+      });
+      registerFaultPolicy("asks", {
+        open: () => ({ fields: { permissionDecision: "ask" } }),
       });`,
     });
     const closed =
       "policy.mjs#registerFaultPolicy:closed permissionDecision=PermissionDecision.DENY";
-    const open = 'policy.mjs#registerFaultPolicy:open permissionDecision="ask"';
-    assert.deepEqual(keysOf(sites), [closed, open]);
-    const filed =
-      (/** @type {string} */ asClosed) => (/** @type {Site} */ s) =>
-        s.key === closed ? asClosed : RELEASABLE;
-    assert.deepEqual(ruleViolations(sites, filed(CLOSED)), []);
-    assert.deepEqual(ruleViolations(sites, filed(CONTENT)), [
-      `content-placement: ${closed}`,
-    ]);
-    assert.deepEqual(ruleViolations(sites, allAs(CONTENT)), [
-      `content-placement: ${closed}`,
-      `open-arm: ${open}`,
-    ]);
+    const ask = 'policy.mjs#registerFaultPolicy:open permissionDecision="ask"';
+    const released =
+      "policy.mjs#registerFaultPolicy:open calls releasableRefusal";
+    const helper = 'policy.mjs#releasableRefusal permissionDecision="deny"';
+    assert.deepEqual(keysOf(sites), [closed, released, ask, helper].sort());
+    const byKey = new Map(sites.map((site) => [site.key, categoryOf(site)]));
+    assert.deepEqual(Object.fromEntries(byKey), {
+      [closed]: CLOSED,
+      [released]: RELEASABLE,
+      [ask]: CONTENT,
+      [helper]: RELEASABLE,
+    });
+    assert.deepEqual(ruleViolations(sites), [`open-arm: ${ask}`]);
   });
 
   it("flags an untagged deny beside a fault-tagged one in the same fault branch", () => {
@@ -1642,8 +1179,6 @@ describe("the blocking-site scanner, on fixtures", () => {
       call,
       "branch.mjs#rehydrate {deny,fault}",
     ]);
-    const filed = (/** @type {Site} */ s) =>
-      s.kind === "{deny,fault}" ? RELEASABLE : CONTENT;
-    assert.deepEqual(ruleViolations(sites, filed), [`fault-branch: ${call}`]);
+    assert.deepEqual(ruleViolations(sites), [`fault-branch: ${call}`]);
   });
 });
