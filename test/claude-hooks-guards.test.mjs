@@ -937,6 +937,31 @@ describe("secret-drop-guard: an unrecordable confirmation", () => {
       assert.match(fields.additionalContext, /could not be recorded/);
     }));
 
+  it("releases the rehydrated Write, so a preserved secret is not clobbered", () =>
+    withEnv({ TMPDIR: UNWRITABLE_TMPDIR }, async () => {
+      const SECRET_B = ["hunter2hunter2", "hunter2xB"].join("");
+      const PH_B = "[REDACTED: Secret Keyword]";
+      const secrets = [
+        { value: SECRET_A, placeholder: PH },
+        { value: SECRET_B, placeholder: PH_B },
+      ];
+      const io = {
+        readFile: () => `keep=${SECRET_A}\ndrop=${SECRET_B}\n`,
+        redact: (text) => (text.includes(SECRET_A) ? "redacted" : null),
+        redactMap: (text) => mkView(text, secrets),
+      };
+      const fields = await buildPreToolUseResponse(
+        {
+          tool_name: "Write",
+          tool_input: { file_path: "/w/.env", content: `keep=${PH}\n` },
+        },
+        realLayer4(io),
+      );
+      assert.equal(fields.permissionDecision, undefined);
+      assert.match(fields.additionalContext, /could not be recorded/);
+      assert.equal(fields.updatedInput?.content, `keep=${SECRET_A}\n`);
+    }));
+
   it("keeps denying under AGENT_SANITIZER_FAIL_OPEN=0", () =>
     withEnv(
       { TMPDIR: UNWRITABLE_TMPDIR, AGENT_SANITIZER_FAIL_OPEN: "0" },

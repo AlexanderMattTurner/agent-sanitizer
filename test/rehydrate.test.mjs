@@ -2325,6 +2325,27 @@ describe("rehydrate: a defective redactor map is never spliced", () => {
       assert.ok(!out.fault.includes(SECRET_A));
     }
   });
+
+  it("names the secrets an unhinted Write on a defective map may remove", async () => {
+    const io = () => mapIo([{ placeholder: PH, original: SECRET_A, start: 2 }]);
+    const write = await rehydrateRedacted(
+      "Write",
+      { file_path: "/f", content: "k=1\n" },
+      io(),
+    );
+    for (const text of [write.deny, write.fault])
+      assert.match(
+        text,
+        /any redacted secret it does not reproduce is removed/,
+      );
+    // Non-vacuity: an Edit replaces no whole file, so it carries no such note.
+    const edit = await rehydrateRedacted(
+      "Edit",
+      { file_path: "/f", old_string: "key=", new_string: "k=" },
+      io(),
+    );
+    assert.doesNotMatch(edit.fault, /does not reproduce/);
+  });
 });
 
 describe("rehydrate: which denies are faults", () => {

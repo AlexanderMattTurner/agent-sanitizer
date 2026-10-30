@@ -132,6 +132,9 @@ export function confirmMarkerPath(fingerprint) {
   return join(tmpdir(), `.claude-secret-drop-${PROJECT_HASH}-${fingerprint}`);
 }
 
+/** readdir codes meaning the confirm store's directory cannot be used at all. */
+const UNUSABLE_DIR_CODES = new Set(["ENOENT", "ENOTDIR", "EACCES", "EPERM"]);
+
 /**
  * Delete this project's confirm sentinels older than {@link CONFIRM_TTL_MS}.
  *
@@ -146,7 +149,18 @@ export function sweepStaleConfirms() {
   const dir = tmpdir();
   const prefix = `.claude-secret-drop-${PROJECT_HASH}-`;
   const cutoff = Date.now() - CONFIRM_TTL_MS;
-  for (const name of readdirSync(dir)) {
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch (err) {
+    // An unusable $TMPDIR holds no sentinel to sweep, and recordConfirm already
+    // answers for it on every call; letting it throw here would abort the
+    // SessionStart scan this sweep merely rides along with.
+    const code = /** @type {NodeJS.ErrnoException} */ (err).code;
+    if (UNUSABLE_DIR_CODES.has(String(code))) return;
+    throw err;
+  }
+  for (const name of names) {
     if (!name.startsWith(prefix)) continue;
     const path = join(dir, name);
     try {
@@ -309,8 +323,12 @@ export async function secretDropGuard(toolInput, io, opts = {}) {
  * substitution — so a rehydrated secret counts as preserved and only a
  * genuinely dropped one can trip it. A rehydrate deny short-circuits (the
  * guard never runs), non-Write tools skip the guard entirely, and a guard
- * deny wins over a pass/rewrite result.
- * @typedef {{updatedInput: any, context: string} | {deny: string, fault?: string} | null} RehydrateResult
+ * deny wins over a pass/rewrite result. A guard FAULT deny carries the
+ * rewrite as `release`: the open posture lets that call proceed, and it must
+ * proceed rehydrated, or every secret the rewrite restored is overwritten by
+ * its placeholder.
+ * @typedef {{updatedInput: any, context: string}} RehydrateRewrite
+ * @typedef {RehydrateRewrite | {deny: string, fault?: string, release?: RehydrateRewrite} | null} RehydrateResult
  * @param {(tool: string, toolInput: any) => Promise<RehydrateResult>} rehydrate
  * @param {import("agent-sanitizer/rehydrate").RehydrateIo} io
  * @param {typeof secretDropGuard} [guard]
@@ -324,7 +342,9 @@ export function withSecretDropGuard(rehydrate, io, guard = secretDropGuard) {
     const finalInput =
       rehydrated === null ? toolInput : rehydrated.updatedInput;
     const drop = await guard(finalInput, io);
-    return drop ?? rehydrated;
+    if (drop === null) return rehydrated;
+    if (drop.fault === undefined || rehydrated === null) return drop;
+    return { ...drop, release: rehydrated };
   };
 }
 

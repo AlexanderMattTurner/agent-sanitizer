@@ -1012,15 +1012,22 @@ export async function rehydrateRedacted(
     // nothing can vet (the R1 hidden-span oracle). Deny, as a fault: the
     // engine, not the input, is what is wrong.
     if (tool === "MultiEdit") return multiEditDeny(toolInput.file_path);
+    // A Write replaces the whole file, and the secret-drop guard reads this
+    // same broken map, so the loss it would name has to be named here instead.
+    const dropped =
+      tool === "Write"
+        ? `; it replaces the whole file, so any redacted secret it does not ` +
+          `reproduce is removed, and which secrets those are cannot be checked`
+        : "";
     return {
       deny:
         `cannot safely edit ${toolInput.file_path}: ${mapDefect}; the file holds ` +
         `redacted content whose location cannot be trusted, so no edit can be ` +
-        `verified. Retry later, or ask the user to make this change`,
+        `verified${dropped}. Retry later, or ask the user to make this change`,
       fault:
         `${mapDefect} for ${toolInput.file_path}, so this call is not ` +
         `rehydrated: any ${hint}…] placeholder text in it is written to the ` +
-        `file literally, and it is applied without the redacted-span checks`,
+        `file literally, and it is applied without the redacted-span checks${dropped}`,
     };
   }
   // View identical to disk: any placeholders in an Edit's old_string are

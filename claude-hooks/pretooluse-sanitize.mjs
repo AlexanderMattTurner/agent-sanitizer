@@ -381,14 +381,15 @@ function emitTraced(emitTrace, toolName, fields) {
  * the input and stands in every posture. A deny WITH one exists only because
  * the stage could not do its job, so this hook's registered fault policy
  * decides it: it stands under the closed posture, and under the open one it is
- * refused once with a re-issue escape, then let through with a warning.
+ * refused once with a re-issue escape, then let through with a warning —
+ * carrying the stage's `release` rewrite when it has one, else unchanged.
  * @param {string} tool
  * @param {any} toolInput
- * @param {{ deny: string, fault?: string }} result
+ * @param {{ deny: string, fault?: string, release?: { updatedInput: any, context: string } }} result
  * @param {string} site  the refusing stage, keying its re-issue confirmation
  * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
  * @param {FaultLedger} ledger
- * @returns {{ deny: string } | null}
+ * @returns {{ deny: string } | { updatedInput: any, context: string } | null}
  */
 function resolveStageDeny(tool, toolInput, result, site, env, ledger) {
   if (result.fault === undefined) return { deny: result.deny };
@@ -400,7 +401,8 @@ function resolveStageDeny(tool, toolInput, result, site, env, ledger) {
     reason: result.deny,
     warning:
       `WARNING: agent-sanitizer could not complete its ${site} stage on this ` +
-      `${tool} call and let it proceed unchanged (fail-open): ${result.fault}. ` +
+      `${tool} call and let it proceed ${result.release ? "rehydrated" : "unchanged"} ` +
+      `(fail-open): ${result.fault}. ` +
       `Set ${FAIL_OPEN_ENV}=0 to refuse such calls instead.`,
   });
   const verdict = /** @type {Record<string, unknown>} */ (fields);
@@ -408,7 +410,7 @@ function resolveStageDeny(tool, toolInput, result, site, env, ledger) {
     return { deny: String(verdict.permissionDecisionReason) };
   ledger.warnings.push(String(verdict.additionalContext));
   ledger.released.push(fingerprint);
-  return null;
+  return result.release ?? null;
 }
 
 /**
@@ -438,7 +440,7 @@ export function preToolUseLayers(
   secretsOn = secretsEnabled(env),
   ledger,
 ) {
-  /** @type {(tool: string, toolInput: any, result: { deny: string, fault?: string }, site: string) => { deny: string } | null} */
+  /** @type {(tool: string, toolInput: any, result: { deny: string, fault?: string, release?: { updatedInput: any, context: string } }, site: string) => ReturnType<typeof resolveStageDeny>} */
   const resolveDeny = (tool, toolInput, result, site) => {
     if (result.fault !== undefined && ledger === undefined)
       throw new Error(

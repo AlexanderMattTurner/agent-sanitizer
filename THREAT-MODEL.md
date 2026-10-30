@@ -971,7 +971,9 @@ covers a write whose placeholder cannot be restored — a Layer-2 span missing
 from the store, an unreadable target, a redactor map that fails validation.
 Releasing an unhinted Edit on a file whose redactor map fails validation reopens
 the hidden-span probing oracle the rehydrator closes, at the price of one refusal
-per distinct probe, for as long as the redactor stays broken. The check is
+per distinct probe, for as long as the redactor stays broken. An unhinted Write
+there skips the secret-drop guard, which reads the same broken map, so its
+refusal and warning say instead that any redacted secret it omits is removed. The check is
 package-free (a literal-string test on the already-parsed payload), so
 it holds even when the failure IS the missing package. Two accepted gaps: a
 launcher-level failure (no `node`, corrupt bundle, a provisioned hook binary
