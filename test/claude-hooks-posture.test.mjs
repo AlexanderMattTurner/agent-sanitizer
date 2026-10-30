@@ -394,8 +394,8 @@ describe("an unreadable instruction file is a COVERAGE GAP, not a hook fault", (
 describe("a stale-state sweep that cannot reach its store still scans", () => {
   // TMPDIR names no directory and there is no plugin data dir, so the session
   // store the sweep ages out lives nowhere and its readdir fails ENOENT. The
-  // sweep is housekeeping: its failure may not take the scan down with it,
-  // which under the opt-out left a session with no scan and no armed gate.
+  // sweep is housekeeping: its failure may not take the scan down with it, or
+  // under the opt-out the session gets no scan and no armed gate.
   for (const [label, env] of POSTURES)
     it(`under ${label}`, () => {
       const project = mkdtempSync(join(tmpdir(), "sanitizer-sweep-proj-"));

@@ -259,8 +259,8 @@ export function straceArgv({ group, errno, when, paths, log }) {
     "-q",
     "-y",
     "--seccomp-bpf",
-    // `-o FILE` defaults strace to -I3, which blocks SIGTERM, so the detach
-    // that ends a run whose fault respawned the redactor never happened.
+    // `-o FILE` defaults strace to -I3, which blocks SIGTERM; -I1 lets through
+    // the SIGTERM that detaches a run whose fault respawned the redactor.
     "-I1",
     "-o",
     log,
