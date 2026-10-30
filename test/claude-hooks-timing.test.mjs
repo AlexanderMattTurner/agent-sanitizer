@@ -17,6 +17,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   chargeHostExtension,
   chargeHostExtensionSync,
+  chargeRedactorRoundTrip,
   CONCURRENT_PROVISION_CEILING_MS,
   excludeConcurrentProvisioning,
   excludeProvisioning,
@@ -33,6 +34,20 @@ import { runJudgeCli } from "../claude-hooks/lib/control-plane.mjs";
 import { awaitLazyDependency } from "../claude-hooks/lib/hook-io.mjs";
 import { redactViaDaemon } from "../claude-hooks/lib/redactor-client.mjs";
 import { driveClocks } from "./helpers/driven-clock.mjs";
+
+/**
+ * Wait `SLOW_HOOK_THRESHOLD_MS + 100` ms inside `charge`'s bracket, so the run
+ * owns more than the budget and a notice is the right answer. A bare sleep would
+ * be the machine's wait and report nothing.
+ * @param {(work: () => Promise<void>) => Promise<unknown>} charge
+ */
+const overrunInside = (charge) =>
+  charge(
+    () =>
+      new Promise((resolve) =>
+        setTimeout(resolve, SLOW_HOOK_THRESHOLD_MS + 100),
+      ),
+  );
 
 /** A clock that advances by exactly the deltas it is given. */
 function fakeClock(...deltas) {
@@ -431,6 +446,74 @@ describe("slowHookNotice", () => {
     );
   });
 
+  it("says nothing when the machine, not the hook, spent the wait", () => {
+    // The reported case: 1.3s of wall against 0.1s of CPU, no redactor round
+    // trip and no host callback. The owned share is 0.1s, so the other 1.2s is
+    // the machine's and neither a notice nor a report request is the answer.
+    assert.equal(
+      slowHookNotice("scan-invisible-chars", 1_300, 1_000, {
+        cpuMs: 100,
+        redactorMs: 0,
+        hostMs: 0,
+      }),
+      null,
+    );
+    assert.equal(
+      slowHookNotice("scan-invisible-chars", 1_300, 1_000, {
+        cpuMs: 100,
+        redactorMs: 0,
+      }),
+      null,
+    );
+  });
+
+  it("says nothing when the owned share sits exactly at the budget", () => {
+    // 400 + 300 + 300 = 1000: the same `<=` boundary the wall-clock gate uses.
+    assert.equal(
+      slowHookNotice("h", 5_000, 1_000, {
+        cpuMs: 400,
+        redactorMs: 300,
+        hostMs: 300,
+      }),
+      null,
+    );
+  });
+
+  it("reports once the owned share is one millisecond over the budget", () => {
+    const notice = slowHookNotice("h", 5_000, 1_000, {
+      cpuMs: 401,
+      redactorMs: 300,
+      hostMs: 300,
+    });
+    assert.match(
+      notice,
+      /^agent-sanitizer PERFORMANCE: the h hook took 5\.0s/u,
+    );
+    assert.match(
+      notice,
+      /0\.4s was this hook's own CPU, 0\.3s was inside redactor round trips and 0\.3s was inside host extensions/u,
+    );
+    assert.match(notice, /The largest share is none of those three/u);
+    assert.match(notice, /hook name and all four timings/u);
+  });
+
+  it("counts a wait inside the redactor or a host callback as the owner's", () => {
+    // No CPU at all: a hook wedged on a dead redactor socket, or a composer's
+    // callback stuck on an unreachable sink, is exactly what the notice is for.
+    assert.match(
+      slowHookNotice("h", 1_300, 1_000, { cpuMs: 0, redactorMs: 1_200 }),
+      /The largest share was spent inside the redactor round trip/u,
+    );
+    assert.match(
+      slowHookNotice("h", 1_300, 1_000, {
+        cpuMs: 0,
+        redactorMs: 0,
+        hostMs: 1_200,
+      }),
+      /The largest share was spent inside a host extension/u,
+    );
+  });
+
   it("names the hook, the timing and where to report it", () => {
     const notice = slowHookNotice(
       "scan-invisible-chars",
@@ -514,12 +597,12 @@ describe("slowHookNotice", () => {
   });
 
   it("blames neither when the time went somewhere it can see neither of", () => {
-    // Same 7.2s-against-0.3s host contention as above, now with the redactor
-    // call ruled OUT by measurement rather than left as an unfalsified
-    // candidate — the one thing this side CAN settle.
+    // 7.2s of wall against 1.2s owned (0.6s CPU, 0.6s redactor): over the
+    // budget, so it reports, but the 6.0s remainder dwarfs every measured
+    // window and none of them is where it went.
     const notice = slowHookNotice("sanitize-output", 7_200, undefined, {
-      cpuMs: 300,
-      redactorMs: 120,
+      cpuMs: 600,
+      redactorMs: 600,
     });
     assert.match(
       notice,
@@ -835,8 +918,8 @@ describe("a composer's own hook", () => {
   const arms = {
     cpu: { cpuMs: 3_800, redactorMs: 100, hostMs: 0 },
     host: { cpuMs: 100, redactorMs: 100, hostMs: 3_700 },
-    remainderMeasured: { cpuMs: 100, redactorMs: 100, hostMs: 0 },
-    remainderUnmeasured: { cpuMs: 100, redactorMs: 100 },
+    remainderMeasured: { cpuMs: 600, redactorMs: 500, hostMs: 0 },
+    remainderUnmeasured: { cpuMs: 600, redactorMs: 600 },
     wallOnly: {},
   };
 
@@ -873,9 +956,7 @@ describe("a composer's own hook", () => {
       await runJudgeCli(
         "gate-bash-calls",
         async () => {
-          await new Promise((resolve) =>
-            setTimeout(resolve, SLOW_HOOK_THRESHOLD_MS + 100),
-          );
+          await overrunInside(chargeHostExtension);
           return { decision: "allow" };
         },
         {
@@ -918,9 +999,7 @@ describe("a composer's own hook", () => {
       await runJudgeCli(
         "gate-bash-calls",
         async () => {
-          await new Promise((resolve) =>
-            setTimeout(resolve, SLOW_HOOK_THRESHOLD_MS + 100),
-          );
+          await overrunInside(chargeHostExtension);
           throw new Error("judge exploded");
         },
         {
@@ -1122,9 +1201,7 @@ describe("runJudgeCli times every judge hook", () => {
       await runJudgeCli(
         "pretooluse-sanitize",
         async () => {
-          await new Promise((resolve) =>
-            setTimeout(resolve, SLOW_HOOK_THRESHOLD_MS + 100),
-          );
+          await overrunInside(chargeHostExtension);
           return { decision: "allow" };
         },
         {
@@ -1139,29 +1216,63 @@ describe("runJudgeCli times every judge hook", () => {
     const stdout = written.join("");
     assert.match(stdout, /PERFORMANCE/);
     assert.match(stdout, /pretooluse-sanitize/);
-    // A judge that SLEPT past the budget is the contended-host case in
-    // miniature: the wall-clock is real, most of it bought no work, and the
-    // notice has to say so rather than call the whole second sanitizer work.
-    // Compared, not pinned to 0.0s: the same window really does load the
-    // control plane, and on a cold runner that is a tenth of a second of CPU.
+    // A judge that WAITED inside a host callback past the budget: the wall-clock
+    // is real, none of it was this hook computing, and the notice has to say so
+    // rather than call the whole second sanitizer work. Compared, not pinned to
+    // 0.0s: the same window really does load the control plane, and on a cold
+    // runner that is a tenth of a second of CPU.
     const timings = stdout.match(
-      /took (\d+\.\d)s .*?of which (\d+\.\d)s was this hook's own CPU, (\d+\.\d)s was inside redactor round trips/u,
+      /took (\d+\.\d)s .*?of which (\d+\.\d)s was this hook's own CPU, (\d+\.\d)s was inside redactor round trips and (\d+\.\d)s was inside host extensions/u,
     );
     assert.ok(timings, stdout);
-    const [, wall, cpu, redactor] = timings;
+    const [, wall, cpu, redactor, host] = timings;
     assert.ok(
       Number(cpu) < Number(wall),
-      `a sleeping judge must report CPU (${cpu}s) below wall (${wall}s)`,
+      `a waiting judge must report CPU (${cpu}s) below wall (${wall}s)`,
     );
     // A judge that never dialled the daemon is the case the third number
     // exonerates the redactor in: the notice can only place a wait in that call
     // when a round trip actually happened.
     assert.equal(redactor, "0.0", stdout);
-    assert.match(stdout, /The largest share is none of those three/);
+    assert.ok(Number(host) >= 1.1, `host window ${host}s must hold the wait`);
+    assert.match(stdout, /The largest share was spent inside a host extension/);
     assert.ok(
       errs.some((line) => line.includes("PERFORMANCE")),
       "the timing must also reach stderr",
     );
+  });
+
+  it("says nothing when the judge merely waited, owning none of it", async () => {
+    // The machine's wait: a real sleep past the budget with no round trip and
+    // no host callback charged. The owned share is the hook's CPU alone, far
+    // under the budget, so nothing is reported on either channel.
+    const written = [];
+    const errs = [];
+    const realErr = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk) => {
+      errs.push(String(chunk));
+      return true;
+    };
+    try {
+      await runJudgeCli(
+        "pretooluse-sanitize",
+        async () => {
+          await new Promise((resolve) =>
+            setTimeout(resolve, SLOW_HOOK_THRESHOLD_MS + 100),
+          );
+          return { decision: "allow" };
+        },
+        {
+          onError: (err) => assert.fail(String(err)),
+          readInput: async () => event,
+          write: (chunk) => written.push(chunk),
+        },
+      );
+    } finally {
+      process.stderr.write = realErr;
+    }
+    assert.deepEqual(written, [], "an allow with no notice writes nothing");
+    assert.equal(errs.join("").includes("PERFORMANCE"), false);
   });
 
   it("reports the timing of a judge that overran AND THEN THREW", async () => {
@@ -1180,9 +1291,7 @@ describe("runJudgeCli times every judge hook", () => {
       await runJudgeCli(
         "sanitize-output",
         async () => {
-          await new Promise((resolve) =>
-            setTimeout(resolve, SLOW_HOOK_THRESHOLD_MS + 100),
-          );
+          await overrunInside(chargeRedactorRoundTrip);
           throw new Error("judge exploded");
         },
         {
@@ -1205,7 +1314,7 @@ describe("runJudgeCli times every judge hook", () => {
     // finding, and this stderr line is its only report.
     assert.match(
       stderr,
-      /of which \d+\.\ds was this hook's own CPU, 0\.0s was inside redactor round trips and 0\.0s was inside host extensions/u,
+      /of which \d+\.\ds was this hook's own CPU, 1\.\ds was inside redactor round trips and 0\.0s was inside host extensions/u,
     );
     // The posture still runs: the timing is an addition to the fault report,
     // never a replacement for it.
@@ -1221,9 +1330,7 @@ describe("runJudgeCli times every judge hook", () => {
     await runJudgeCli(
       "pretooluse-sanitize",
       async () => {
-        await new Promise((resolve) =>
-          setTimeout(resolve, SLOW_HOOK_THRESHOLD_MS + 100),
-        );
+        await overrunInside(chargeHostExtension);
         return { decision: "allow" };
       },
       {

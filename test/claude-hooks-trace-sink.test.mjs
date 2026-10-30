@@ -368,11 +368,11 @@ describe("the package's own sink is never charged as a host extension", () => {
       // The line that blocked, so the budget was spent inside the package's own
       // sink and not somewhere a faulting hook stopped short of.
       assert.match(stderr, new RegExp(`"event":"${hook.event}"`));
-      assert.match(stderr, /0\.0s was inside host extensions/);
-      assert.doesNotMatch(
-        stderr,
-        /The largest share was spent inside a host extension/,
-      );
+      // Charged to the host window, that blocked write would be an owned wait
+      // past the budget and the run would report it; uncharged, it is the
+      // machine's and the run says nothing.
+      assert.doesNotMatch(stderr, /PERFORMANCE/);
+      assert.doesNotMatch(stderr, /inside host extensions/);
     });
 });
 
