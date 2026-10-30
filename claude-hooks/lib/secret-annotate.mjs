@@ -50,6 +50,10 @@ const stripInvisibles = (s) => s.replace(ENV_INVIS_RE, "");
  * It is linear and independent of the value's length — a regex with an
  * invisible class at every gap grows ~4 KB per character, and a long secret (a
  * PEM key) overflows V8's regex size limit and throws on every output.
+ *
+ * Callers pass post-Layer-1 text: terminal escapes are already gone, so a value
+ * split by one is contiguous here. Raw text spliced with an escape is not
+ * matched.
  * @param {string} text
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {boolean}

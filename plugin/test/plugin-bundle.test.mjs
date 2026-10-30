@@ -1815,6 +1815,30 @@ test("a long env-bound secret does not fail plain output", (t) => {
   assert.match(leaked.stderr, /secret redaction failed/);
 });
 
+test("an env-bound secret split by a terminal escape still reaches the redactor", (t) => {
+  // The pre-gate runs on post-Layer-1 text, where no escape introducer
+  // survives, so it needs no escape-stripped view of its own. A value matching
+  // no generic hint isolates the env-bound gate; reaching the dead redactor
+  // under the closed knob is what proves the gate fired.
+  const value = "qwertyuiopasdfghjklzxcvbnm";
+  const env = { ...DEAD_REDACTOR, ...FAIL_CLOSED };
+  for (const split of ["\x1b[31m", "\x9b1m", "\x1b]8;;https://x\x07"]) {
+    const stdout = `x ${value.slice(0, 9)}${split}${value.slice(9)} y`;
+    const bound = launchOutputHook(t, stdout, {
+      ...env,
+      AIS_TEST_ONLY_DEPLOY_TOKEN: value,
+    });
+    assert.match(
+      bound.stderr,
+      /secret redaction failed/,
+      JSON.stringify(split),
+    );
+    // Negative control: unbound, the same text never touches the redactor.
+    const unbound = launchOutputHook(t, stdout, env);
+    assert.doesNotMatch(unbound.stderr, /secret redaction failed/);
+  }
+});
+
 test("a key collision withholds only the colliding fields, in either posture", (t) => {
   // Two field names that collapse to one after Layer 1 strips the zero-width
   // space. Whoever authored the tool response composes this, so it must not
