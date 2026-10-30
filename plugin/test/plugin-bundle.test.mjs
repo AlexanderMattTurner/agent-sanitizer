@@ -839,7 +839,7 @@ function withholds(updated, response) {
   );
 }
 
-/** The dead-daemon environment that drives the node hook's fail-closed arm. */
+/** Env pointing the redactor client at a daemon that does not exist. */
 const DEAD_REDACTOR = {
   _AGENT_SANITIZER_REDACTOR_SOCKET: join(tmpdir(), "no-such-redactor.sock"),
   _AGENT_SANITIZER_REDACTOR_DAEMON: "/nonexistent/agent-secret-redactor-daemon",
@@ -1754,8 +1754,13 @@ test("the repeat knob restores per-call context", (t) => {
     );
 });
 
-test("output hook withholds under the OPEN default when the redactor is unreachable", (t) => {
-  const res = launch(
+/**
+ * @param {import("node:test").TestContext} t
+ * @param {string} stdout
+ * @param {Record<string, string>} env
+ */
+const launchOutputHook = (t, stdout, env) =>
+  launch(
     stagePlugin(t),
     "PostToolUse",
     "sanitize-output",
@@ -1763,34 +1768,50 @@ test("output hook withholds under the OPEN default when the redactor is unreacha
       hook_event_name: "PostToolUse",
       tool_name: "Bash",
       tool_input: {},
-      tool_response: { stdout: "aws_key=AKIAIOSFODNN7EXAMPLE" },
+      tool_response: { stdout },
     },
-    {
-      env: {
-        _AGENT_SANITIZER_REDACTOR_SOCKET: join(
-          tmpdir(),
-          "no-such-redactor.sock",
-        ),
-        _AGENT_SANITIZER_REDACTOR_DAEMON:
-          "/nonexistent/agent-secret-redactor-daemon",
-        _AGENT_SANITIZER_REDACTOR_WAIT_MS: "300",
-        _AGENT_SANITIZER_REDACTOR_REQUEST_MS: "300",
-      },
-    },
+    { env },
+  );
+
+test("output hook passes the output through under the OPEN default when the redactor is unreachable", (t) => {
+  // Layer 4 is opted in (baseEnv). A dead redactor is an availability failure
+  // and must never block the session: the output stays in the model's view
+  // with an UNSANITIZED warning, and the operator's terminal hears about it.
+  const res = launchOutputHook(
+    t,
+    "aws_key=AKIAIOSFODNN7EXAMPLE",
+    DEAD_REDACTOR,
   );
   assert.equal(res.status, 0);
   const out = JSON.parse(res.stdout).hookSpecificOutput;
-  // A dead redactor is the commonest availability failure, but with Layer 4
-  // opted in (baseEnv) the output was never vetted for secrets, so it is
-  // withheld even though AGENT_SANITIZER_FAIL_OPEN is unset — the secret layer
-  // fails closed under either posture.
-  assert.match(out.updatedToolOutput.stdout, /SANITIZATION FAILED/);
+  assert.equal(out.updatedToolOutput, undefined);
+  assert.match(out.additionalContext, /UNSANITIZED/);
+  assert.match(res.stderr, /secret redaction failed/);
+});
+
+test("a long env-bound secret does not fail plain output", (t) => {
+  // A PEM key or service-account JSON bound to a credential-named var. The
+  // pre-gate runs on EVERY output, so a matcher that cannot handle the value's
+  // length fails `echo hello` too.
+  const longSecret = Array.from({ length: 20000 }, (_, i) =>
+    String.fromCharCode(33 + ((i * 7) % 90)),
+  ).join("");
+  const env = {
+    ...DEAD_REDACTOR,
+    ...FAIL_CLOSED,
+    AIS_TEST_ONLY_DEPLOY_TOKEN: longSecret,
+  };
+  const plain = launchOutputHook(t, "hello", env);
+  assert.equal(plain.status, 0);
+  assert.doesNotMatch(plain.stdout, /SANITIZATION FAILED/);
+  assert.doesNotMatch(plain.stderr, /secret redaction failed/);
+  // Positive marker: the var IS env-bound and the gate fires on its value —
+  // reaching the dead redactor under the closed knob is what proves it.
+  const leaked = launchOutputHook(t, `x ${longSecret} y`, env);
   assert.match(
-    out.updatedToolOutput.stdout,
-    /AGENT_SANITIZER_SECRETS_ENABLED=1/,
+    JSON.parse(leaked.stdout).hookSpecificOutput.updatedToolOutput.stdout,
+    /SANITIZATION FAILED/,
   );
-  assert.ok(!res.stdout.includes("AKIAIOSFODNN7EXAMPLE"));
-  assert.match(res.stderr, /hook error/);
 });
 
 test("a key collision withholds only the colliding fields, in either posture", (t) => {

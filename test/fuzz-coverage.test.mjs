@@ -340,7 +340,6 @@ const FUZZ_EXEMPT = Object.freeze({
   ),
   ...withReason("process lifecycle, shared state and lazy module loading", [
     "EmptyStdinError",
-    "KNOB_DECIDES",
     "adoptHookIoSharedState",
     "awaitLazyDependency",
     "claimCliEntry",

@@ -218,9 +218,10 @@ Worth knowing before you leave it open: some of those failures are reachable by
 whoever authored the content the hook is inspecting — colliding field names, a
 tool response nested deeply enough to overflow the sanitize walk, enough
 secret-shaped leaves to exhaust the redaction budget. Under the open posture a
-tool response that provokes one is shown to the model verbatim (with the secret
-layer on, the output hook withholds it instead). `=0` is the setting for a
-deployment where that matters more than the session staying unblocked.
+tool response that provokes one is shown to the model verbatim, with the secret
+layer on as well: a redactor that cannot run leaves the output unvetted and says
+so rather than blocking every tool call. `=0` is the setting for a deployment
+where that matters more than the session staying unblocked.
 
 What neither posture touches is a sanitizer that RAN: a prompt or tool output
 that the layers actually flagged is blocked or rewritten the same way either

@@ -183,9 +183,10 @@ function mutate(state, text, report) {
  * one field rather than suppressing the whole output. Adding a third site means
  * re-deciding both halves, so route through one of these two instead.
  *
- * Fails CLOSED: a redactor we could not run might have let a secret through, so
- * the throw is rethrown wrapped and the caller suppresses the output rather than
- * emitting an unvetted value with a warning.
+ * Throws rather than returning unvetted text: a redactor we could not run might
+ * have let a secret through, so the seam never hands back a value as if it were
+ * vetted. The throw is rethrown wrapped and the CALLER's fault posture decides
+ * what reaches the model (the Claude Code hooks: AGENT_SANITIZER_FAIL_OPEN).
  * @param {PipelineState} state
  * @param {SanitizeTextOptions} options
  * @returns {Promise<void>}
@@ -200,7 +201,7 @@ async function runRedact(state, options) {
   } catch (l4err) {
     throw new Error(
       `CRITICAL: secret redaction failed (${errMessage(l4err)}). ` +
-        "Failing closed — tool output suppressed.",
+        "This text was not vetted for secrets.",
       { cause: l4err },
     );
   }
@@ -677,7 +678,7 @@ export async function sanitizeText(text, options = {}) {
   const { reveal: revealText, splices: stageSplices } =
     await applyMarkdownPipeline(state, options);
 
-  // Layer 4 — fail closed (see runRedact).
+  // Layer 4 — throws on a redactor fault (see runRedact).
   await runRedact(state, options);
 
   // Layer 5 — secure span-deletion slot (see module doc). A warning-only result

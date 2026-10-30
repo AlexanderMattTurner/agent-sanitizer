@@ -26,7 +26,6 @@ import {
 } from "./lib/hook-io.mjs";
 import {
   registerFaultPolicy,
-  KNOB_DECIDES,
   hookFaultOutcome,
   writeFaultOutcome,
 } from "./lib/hook-fault.mjs";
@@ -55,7 +54,6 @@ const unknownMode = (/** @type {{ message: string }} */ ctx) => ({
 registerFaultPolicy(HOOK_NAME, {
   event: null,
   guarded: "hook payload",
-  alwaysClosed: KNOB_DECIDES,
   open: unknownMode,
   closed: unknownMode,
 });

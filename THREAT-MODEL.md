@@ -298,16 +298,17 @@ plugin injects the Python engine from `agent-sanitizer[secrets]`
 (`python/agent_sanitizer/secrets/engine.py`) over a local daemon;
 `plugin/scripts/provision-redactor.sh` installs it at SessionStart.
 
-**It is the one fail-closed layer.** A redactor that throws — unreachable
-daemon, engine error — is rethrown from `sanitizeValue` as `CRITICAL: secret
-redaction failed …` (`src/output.mjs`).
-With the layer opted in, the output hook's fault policy (`alwaysClosed` in
-`claude-hooks/sanitize-output.mjs`, resolved in `lib/hook-fault.mjs`) then
-suppresses the output under **either** `AGENT_SANITIZER_FAIL_OPEN` posture —
-and so does any other fault of that hook, since an output the hook failed on
-was never vetted for secrets either. One accepted gap: a launcher-level failure
-(no `node`, corrupt bundle) never runs the policy, so the launcher's own
-posture applies there, warning by default.
+**A redactor fault follows the operator's posture.** A redactor that throws —
+unreachable daemon, engine error, spent budget — is rethrown from
+`sanitizeValue` as `CRITICAL: secret redaction failed …` (`src/output.mjs`), so
+the seam never returns unvetted text as if it were vetted. The output hook then
+answers it like any other fault, under `AGENT_SANITIZER_FAIL_OPEN`
+(`lib/hook-fault.mjs`, the one posture resolver, which has no per-hook override):
+open by default — the output reaches the model with an UNSANITIZED warning, and
+the operator's terminal names the redactor failure — and withheld under `=0`.
+Accepted risk of the default: while the redactor is down, a credential in tool
+output reaches the model unredacted. The alternative blocks every tool call on
+an availability failure, which is what a deployment chooses with `=0`.
 
 **Lone surrogates are normalized to U+FFFD before the redactor sees the text.**
 A secret split by an interposed lone surrogate renders as contiguous to the
@@ -608,9 +609,9 @@ RECONSTITUTES during stripping is judged as the sequence it becomes.
 Layer order: 1 → 2–3 → 4 → 5 → 4, the second Layer 4 a re-scan of what Layer 5's
 deletions left. Shape matters
 (a harness that gets a shape-mismatched value silently shows the raw output).
-Layer 4 (secret redaction) is an **injected** redactor and is the one
-fail-closed path: a redactor that throws makes the pipeline rethrow, so the
-caller suppresses the output rather than emit an unvetted value. That
+Layer 4 (secret redaction) is an **injected** redactor: a redactor that throws
+makes the pipeline rethrow rather than return an unvetted value, and the
+caller's posture decides whether the output is suppressed. That
 suppression (`suppressToolOutput`) replaces string leaves in place so the
 placeholder still matches the tool's shape, with one exception it must make: an
 Anthropic **content block** is collapsed whole to `{ type: "text", text: … }`
@@ -978,8 +979,7 @@ to hold precision. All other faults keep the open default, and
 **The open default is not enforceable against content.** Several of those
 failures are composable by whoever authored the payload — in the output hook
 alone, a nesting depth that overflows the sanitize walk and a redaction budget
-exhausted by many secret-shaped leaves — though with Layer 4 opted in, the
-output hook withholds on any fault whatever the knob says (see Layer 4). (A
+exhausted by many secret-shaped leaves, or a redactor made unavailable. (A
 **key collision** — two field names that collapse to one after Layer 1 — used
 to be on that list. It no longer
 fails the hook at all: only the colliding fields are withheld, and every sibling
