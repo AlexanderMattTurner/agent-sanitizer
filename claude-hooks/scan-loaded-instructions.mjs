@@ -31,6 +31,7 @@ import {
   setupRunning,
 } from "./lib/hook-io.mjs";
 import {
+  advisoryParts,
   registerFaultPolicy,
   hookFaultOutcome,
   writeFaultOutcome,
@@ -104,18 +105,17 @@ function faultLine(ctx) {
  */
 function emptyPayloadParts(ctx) {
   if (!(ctx.err instanceof EmptyStdinError)) return null;
-  return {
-    stderr:
-      `${HOOK_NAME} hook error: ${ctx.message}. No instruction file was named, so nothing ` +
+  return advisoryParts(
+    HookEvent.INSTRUCTIONS_LOADED,
+    `${HOOK_NAME} hook error: ${ctx.message}. No instruction file was named, so nothing ` +
       "was scanned and nothing was left unguarded. Check how this hook is invoked: it reads " +
       "its InstructionsLoaded event as JSON on stdin, and one wired to a channel that " +
-      "delivers nothing scans nothing for the whole session.\n",
-    exitCode: 1,
-  };
+      "delivers nothing scans nothing for the whole session.",
+  );
 }
 
 // This hook's entry in the one posture table (lib/hook-fault.mjs). Like
-// scan-invisible-chars it has no stdout verdict channel — InstructionsLoaded
+// scan-invisible-chars it has no verdict to give — InstructionsLoaded
 // cannot block, and its exit code is ignored — so both arms are stated
 // explicitly and the only enforcement either can reach is the cross-hook alert,
 // which makes the PreToolUse gate ask once on the next tool call.
@@ -123,14 +123,17 @@ registerFaultPolicy(HOOK_NAME, {
   event: HookEvent.INSTRUCTIONS_LOADED,
   guarded: "a loaded instruction file",
   open: (ctx) =>
-    emptyPayloadParts(ctx) ?? {
-      stderr: `${faultLine(ctx)} Passing through unguarded; set AGENT_SANITIZER_FAIL_OPEN=0 to arm the tool-call gate instead.\n`,
-      exitCode: 1,
-    },
+    emptyPayloadParts(ctx) ??
+    advisoryParts(
+      HookEvent.INSTRUCTIONS_LOADED,
+      `${faultLine(ctx)} Passing through unguarded; set AGENT_SANITIZER_FAIL_OPEN=0 to arm the tool-call gate instead.`,
+    ),
   closed: (ctx) =>
     emptyPayloadParts(ctx) ?? {
-      stderr: `${faultLine(ctx)} Arming the tool-call gate (AGENT_SANITIZER_FAIL_OPEN=0).\n`,
-      exitCode: 1,
+      ...advisoryParts(
+        HookEvent.INSTRUCTIONS_LOADED,
+        `${faultLine(ctx)} Arming the tool-call gate (AGENT_SANITIZER_FAIL_OPEN=0).`,
+      ),
       armAlert: true,
     },
 });

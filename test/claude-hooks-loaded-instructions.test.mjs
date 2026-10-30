@@ -437,13 +437,24 @@ describe("the hook CLI, driven end to end on a real event", () => {
   });
 
   it("reports a malformed event instead of passing it as clean", () => {
-    const { stderr, status } = fire({
+    const { stderr, stdout, status } = fire({
       hook_event_name: "InstructionsLoaded",
       load_reason: "session_start",
     });
     assert.match(stderr, /scan-loaded-instructions/u);
     assert.match(stderr, /file_path/u);
-    assert.notEqual(status, 0);
+    // Exit 0 with the warning in the envelope: a non-zero exit with no envelope
+    // is what the launcher reports as a dead bundle ("reinstall the plugin").
+    assert.equal(status, 0);
+    const envelope = JSON.parse(stdout);
+    assert.match(
+      envelope.systemMessage,
+      /NOT scanned.*file_path|file_path.*NOT scanned/su,
+    );
+    assert.deepEqual(envelope.hookSpecificOutput, {
+      hookEventName: "InstructionsLoaded",
+      additionalContext: envelope.systemMessage,
+    });
   });
 
   // An empty stdin is a hook that was handed no event at all — a different
@@ -458,8 +469,13 @@ describe("the hook CLI, driven end to end on a real event", () => {
     // was malformed — `JSON.parse` never saw the empty buffer.
     assert.doesNotMatch(stderr, /NOT scanned/u);
     assert.doesNotMatch(stderr, /Unexpected end of JSON input/u);
-    assert.equal(stdout, "");
-    assert.notEqual(status, 0);
+    assert.equal(status, 0);
+    assert.equal(
+      JSON.parse(stdout).systemMessage,
+      stderr
+        .slice(stderr.indexOf("scan-loaded-instructions hook error"))
+        .trimEnd(),
+    );
   });
 
   it("does not arm the tool-call gate on an empty payload, even fail-closed", () => {
@@ -475,12 +491,16 @@ describe("the hook CLI, driven end to end on a real event", () => {
   // from passing vacuously: a non-empty payload that is malformed still reads
   // as an unscanned file and still arms the gate under the strict posture.
   it("still reports a non-empty malformed payload as an unscanned file", () => {
-    const { stderr, status } = fireRaw("{not json", {
+    const { stderr, stdout, status } = fireRaw("{not json", {
       AGENT_SANITIZER_FAIL_OPEN: "0",
     });
     assert.match(stderr, /NOT scanned/u);
     assert.doesNotMatch(stderr, /received no payload/u);
-    assert.notEqual(status, 0);
+    assert.equal(status, 0);
+    assert.match(
+      JSON.parse(stdout).systemMessage,
+      /Arming the tool-call gate/u,
+    );
     // The payload never parsed, so the hook had no session id to key by: the
     // finding lands in the shared fallback store, and the gate reads that store
     // alongside its own so the report still reaches a tool call.
