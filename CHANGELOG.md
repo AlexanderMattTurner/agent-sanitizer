@@ -8,6 +8,20 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.68.0] - 2026-10-30
+
+### Changed
+- Redactor faults now follow the `AGENT_SANITIZER_FAIL_OPEN` posture setting instead of always suppressing output.
+- Invisible-free views are now built once per text instead of once per environment secret, improving performance.
+- Environment-bound secret matching now uses substring comparison over the invisible-stripped view for efficiency.
+
+### Fixed
+- Fixed slow hook reporting to only trigger when a hook's own measured time exceeds its budget.
+- Fixed long environment-bound secrets from failing every tool output.
+
+### Security
+- Refined secret redaction to handle escape-split environment-bound secrets correctly.
+
 ## [2.67.2] - 2026-10-29
 
 ### Fixed
