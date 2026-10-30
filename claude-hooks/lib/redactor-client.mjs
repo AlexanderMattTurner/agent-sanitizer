@@ -129,17 +129,17 @@ function daemonCommand() {
 // margin; tests shorten it to exercise the give-up path quickly.
 const WAIT_DEADLINE_MS = readKnob("_AGENT_SANITIZER_REDACTOR_WAIT_MS");
 
-// A daemon that ACCEPTS the connection but then stalls — a deadlock, a
-// pathological detect-secrets input, or a half-written length prefix that never
-// completes — emits none of the errno codes isRespawnable reacts to and never
-// closes, so without a deadline connectAndRequest's Promise never settles.
-// redactViaDaemon would then hang until Claude Code kills the PostToolUse hook at
-// its own timeout, and a killed hook is non-blocking — so the RAW tool output is
-// shown with no warning at all. The total per-connect deadline below makes a
-// stall reject, so the caller's fault posture answers it, warning included. It
-// stays comfortably under the hook
-// timeout (two connects + the spawn wait must fit); tests shorten it via the env
-// override (read per call) or the deadlineMs parameter to exercise the path fast.
+/**
+ * The total per-connect deadline. A daemon that ACCEPTS and then stalls — a
+ * deadlock, a pathological detect-secrets input, a length prefix that never
+ * completes — emits no errno isRespawnable reacts to and never closes, so
+ * without it connectAndRequest never settles and the PostToolUse hook is killed
+ * at its timeout, which shows the RAW output with no warning. A stall instead
+ * rejects, and the caller's fault posture answers it, warning included. Two
+ * connects plus the spawn wait must fit under the hook timeout. Read per call,
+ * so tests shorten it through the env override (or the deadlineMs parameter).
+ * @returns {number}
+ */
 function requestDeadlineMs() {
   return readKnob("_AGENT_SANITIZER_REDACTOR_REQUEST_MS");
 }

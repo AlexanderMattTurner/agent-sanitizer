@@ -116,16 +116,17 @@ const HOOK_NAME = "sanitize-output";
 // reaches the model-facing context. Exported so tests assert it by reference.
 export const REVEAL_WITHHELD_WARNING = withheldWarning("reveal sidecar");
 
-// Total wall-clock budget for one hook invocation's blocking daemon calls — the
-// Layer-4 redactor — SHARED across every string leaf of the tool output. Each
-// call is handed the budget remaining at that moment; once it is spent, a further
-// secret-shaped leaf throws, answered under the operator's fault posture. The
-// per-call timeouts already bound each call, but not their SUM:
-// a structured output with many secret-shaped leaves could otherwise pile up past
-// the PostToolUse hook kill — a killed hook is non-blocking, so the RAW output
-// would be shown (fail OPEN). The default sits comfortably above one legitimately
-// slow leaf (a cold redactor respawn + a full scan) yet far under the hook
-// timeout; env-tunable so tests can drive the exhausted-budget path fast.
+/**
+ * Total wall-clock budget for one hook invocation's blocking Layer-4 redactor
+ * calls, SHARED across every string leaf of the tool output. Each call gets the
+ * budget remaining at that moment; once it is spent, a further secret-shaped
+ * leaf throws, answered under the operator's fault posture. The per-call
+ * timeouts bound each call but not their SUM, and a structured output with many
+ * secret-shaped leaves could otherwise run past the PostToolUse hook kill,
+ * which shows the RAW output with no warning. The default sits above one slow
+ * leaf (a cold redactor respawn plus a full scan) and far under the hook
+ * timeout; env-tunable so tests can drive the exhausted-budget path fast.
+ */
 const SANITIZE_BUDGET_MS = readKnob("_AGENT_SANITIZER_SANITIZE_BUDGET_MS");
 
 // Web-ingress tools always get the Layer 2 HTML rewrite; local tools — Read,
@@ -171,8 +172,10 @@ function isUntrustedIngress(toolName) {
  * Returns `{text, found}` or null when nothing was redacted; throws when
  * secret-shaped text cannot be vetted, which the CLI answers under the
  * operator's fault posture. The cheap pre-gate runs first so plain output never
- * touches the daemon. A transient daemon failure fails only THIS call — no session-wide
- * sentinel — and the client respawns a dead daemon on the next call.
+ * touches the daemon. `text` is post-Layer-1, so it carries no terminal escape
+ * and the pre-gate needs no escape-stripped view. A transient daemon failure
+ * fails only THIS call — no session-wide sentinel — and the client respawns a
+ * dead daemon on the next call.
  * @param {string} text
  * @param {boolean} webIngress
  * @param {{remainingMs: () => number}} [deadline] shared wall-clock budget

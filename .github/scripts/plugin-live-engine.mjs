@@ -47,6 +47,21 @@ function hook(event, mode, payload, env = {}) {
 }
 
 const failures = [];
+
+/**
+ * The hookSpecificOutput a hook emitted, or null when its stdout is not a JSON
+ * verdict — so a hook that printed nothing fails its named check instead of
+ * crashing the script on a bare SyntaxError.
+ * @param {{ stdout: string }} res
+ */
+function verdict(res) {
+  try {
+    return JSON.parse(res.stdout).hookSpecificOutput ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function check(name, condition, detail) {
   if (condition) {
     console.log(`ok   ${name}`);
@@ -257,10 +272,11 @@ const live = {
   // availability failure, so the output stays in the model's view with the
   // UNSANITIZED warning and the redactor failure reaches the operator's stderr.
   const dflt = hook("PostToolUse", "sanitize-output", payload, deadDaemon);
-  const dfltOut = JSON.parse(dflt.stdout).hookSpecificOutput;
+  const dfltOut = verdict(dflt);
   check(
     "a dead daemon fails OPEN under the default, with the warning attached",
-    dfltOut.updatedToolOutput === undefined &&
+    dfltOut !== null &&
+      dfltOut.updatedToolOutput === undefined &&
       /UNSANITIZED/.test(dfltOut.additionalContext ?? "") &&
       /secret redaction failed/.test(dflt.stderr),
     dflt.body.slice(0, 400),
@@ -290,10 +306,11 @@ const live = {
     ...deadDaemon,
     AGENT_SANITIZER_SECRETS_ENABLED: "",
   });
-  const openOut = JSON.parse(open.stdout).hookSpecificOutput;
+  const openOut = verdict(open);
   check(
     "with the secret layer off, a hook fault still fails OPEN by default, with the warning attached",
-    openOut.updatedToolOutput === undefined &&
+    openOut !== null &&
+      openOut.updatedToolOutput === undefined &&
       /UNSANITIZED/.test(openOut.additionalContext ?? ""),
     open.body.slice(0, 400),
   );
