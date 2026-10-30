@@ -431,6 +431,43 @@ process.stdin.on("data", (c) => (d += c)).on("end", () => process.stdout.write(J
   assert.ok(res.ms < 20000, `the real bundle took ${res.ms}ms`);
 });
 
+// The launcher TERMs the watchdog the moment the runtime exits. A runtime that
+// answers at once can land that TERM before the watchdog's subshell has reset
+// the traps it forked with, and the launcher's EXIT trap then ran THERE,
+// deleting the verdict file before it was forwarded: empty stdout, exit 0, a
+// silent pass. Only scheduling decides the window, so this drives it by
+// volume: a shell runtime that answers instantly, many launches at once.
+test("a runtime that answers at once never loses its verdict to the watchdog's teardown", async (t) => {
+  const plugin = stagePlugin(t);
+  const node = join(scratch(t), "node");
+  writeFileSync(node, `#!/bin/sh\ncat >/dev/null\nprintf '{"fast":true}'\n`);
+  chmodSync(node, 0o755);
+  const runs = 240;
+  const concurrency = 24;
+  const lost = [];
+  for (let start = 0; start < runs; start += concurrency) {
+    const batch = await Promise.all(
+      Array.from({ length: concurrency }, () =>
+        launch(
+          t,
+          plugin,
+          "PreToolUse",
+          "pretooluse-sanitize",
+          {},
+          {
+            env: { AGENT_SANITIZER_NODE: node },
+          },
+        ),
+      ),
+    );
+    for (const res of batch) {
+      assert.equal(res.status, 0, res.stderr);
+      if (res.stdout !== '{"fast":true}') lost.push(res.stderr);
+    }
+  }
+  assert.deepEqual(lost, [], `${lost.length}/${runs} verdicts lost`);
+});
+
 test("the kill reaches the runtime's whole process group but not a detached descendant", async (t) => {
   const plugin = stagePlugin(t);
   const pidFile = join(plugin, "pids");

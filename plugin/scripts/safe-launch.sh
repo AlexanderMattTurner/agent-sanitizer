@@ -399,6 +399,11 @@ run_under_watchdog() {
   local child watchdog child_rc watchdog_rc
   command -v sleep >/dev/null 2>&1 ||
     echo "agent-sanitizer: no sleep on PATH — the hook watchdog is off, so a hung hook stalls the session until hooks.json's timeout" >&2
+  # The EXIT trap is lifted across the two forks: a TERM that reaches the
+  # watchdog before its subshell has reset its traps (a runtime that answers
+  # at once, on a loaded host) otherwise runs the launcher's EXIT trap there,
+  # deleting the verdict file before it is forwarded.
+  trap - EXIT
   set -m
   "$@" &
   child=$!
@@ -412,6 +417,7 @@ run_under_watchdog() {
   ) </dev/null >/dev/null 2>&1 &
   watchdog=$!
   set +m
+  trap remove_temp_files EXIT
   # A harness that cancels the hook signals this shell, not the runtime's own
   # group: take both groups down with it rather than orphan a hung runtime.
   trap 'kill -KILL -- "-$child" 2>/dev/null; kill -TERM -- "-$watchdog" 2>/dev/null; exit 143' TERM HUP INT
@@ -436,7 +442,9 @@ emit_watchdog_timeout() {
 payload_file=""
 bin_stdout_file=""
 stdout_file=""
-trap 'rm -f "$payload_file" "$bin_stdout_file" "$stdout_file"' EXIT
+# shellcheck disable=SC2317 # invoked by the EXIT trap
+remove_temp_files() { rm -f "$payload_file" "$bin_stdout_file" "$stdout_file"; }
+trap remove_temp_files EXIT
 
 # The provisioned self-contained binary carries its own runtime, so while it
 # answers, the node search below never runs — the hosts where that search finds
