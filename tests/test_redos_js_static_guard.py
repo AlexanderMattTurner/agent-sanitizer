@@ -453,17 +453,135 @@ const ENV_INVIS_SET = new Set(ENV_INVIS_CODEPOINTS);
 const ENV_INVIS_RUN =
   "[" + ENV_INVIS_CODEPOINTS.map((cp) => `\\u{${cp.toString(16)}}`).join("") + "]*";
 const escapeLiteral = (ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** @param {string} value */
 export function envValueRegex(value) {
   const visible = [...value].filter((ch) => !ENV_INVIS_SET.has(ch.codePointAt(0)));
   return new RegExp(visible.map(escapeLiteral).join(ENV_INVIS_RUN), "u");
 }
 """
 
+_CONFIG_BUILD = 'export const build = () => new RegExp(["a", "b"].join(CONFIG.sep));\n'
+
+# A caller's data reaching a module binding the pattern reads by a write that
+# is not `NAME = …`: into the value's contents, through an alias of it, or by
+# another reassignment shape. Each write runs in an exported function, so it
+# also lands once per call: `write <name>` is that input.
+_WRITE_FIXTURES = {
+    "container-method": (
+        "const parts = [];\n"
+        "export function add(p) {\n"
+        "  parts.push(p);\n"
+        "}\n"
+        'export const build = () => new RegExp(parts.join("|"));\n',
+        ["parameter p", "write parts"],
+    ),
+    "property-assignment": (
+        'const CONFIG = { sep: "|" };\n'
+        "export function configure(p) {\n"
+        "  CONFIG.sep = p;\n"
+        "}\n" + _CONFIG_BUILD,
+        ["parameter p", "write CONFIG"],
+    ),
+    "map-set": (
+        "/** @type {Map<string, string>} */\n"
+        "const cache = new Map();\n"
+        "export function remember(k, v) {\n"
+        "  cache.set(k, v);\n"
+        "}\n"
+        'export const build = () => new RegExp([...cache.values()].join("|"));\n',
+        ["parameter k", "parameter v", "write cache"],
+    ),
+    "object-assign": (
+        'const CONFIG = { sep: "|" };\n'
+        "export function configure(opts) {\n"
+        "  Object.assign(CONFIG, opts);\n"
+        "}\n" + _CONFIG_BUILD,
+        ["parameter opts", "write CONFIG"],
+    ),
+    "aliased-object": (
+        'const CONFIG = { sep: "|" };\n'
+        "const settings = CONFIG;\n"
+        "export function configure(p) {\n"
+        "  settings.sep = p;\n"
+        "}\n" + _CONFIG_BUILD,
+        ["parameter p", "write CONFIG"],
+    ),
+    "array-destructuring": (
+        'let SOURCE = "a+";\n'
+        "export function configure(source) {\n"
+        "  [SOURCE] = [source];\n"
+        "}\n"
+        "export const build = () => new RegExp(SOURCE);\n",
+        ["parameter source", "write SOURCE"],
+    ),
+    "object-destructuring": (
+        'let SOURCE = "a+";\n'
+        "export function configure(opts) {\n"
+        "  ({ SOURCE } = opts);\n"
+        "}\n"
+        "export const build = () => new RegExp(SOURCE);\n",
+        ["parameter opts", "write SOURCE"],
+    ),
+    "for-of-target": (
+        'let SOURCE = "a+";\n'
+        "export function configure(list) {\n"
+        "  for (SOURCE of list);\n"
+        "}\n"
+        "export const build = () => new RegExp(SOURCE);\n",
+        ["parameter list", "write SOURCE"],
+    ),
+    "increment": (
+        "let WIDTH = 1;\n"
+        "export function widen() {\n"
+        "  WIDTH++;\n"
+        "}\n"
+        "export const build = () => new RegExp(`a{${WIDTH}}`);\n",
+        ["write WIDTH"],
+    ),
+    "compound-constant": (
+        'let SOURCE = "a";\n'
+        "export function extend() {\n"
+        '  SOURCE += "a";\n'
+        "}\n"
+        "export const build = () => new RegExp(SOURCE);\n",
+        ["write SOURCE"],
+    ),
+    "regexp-recompile": (
+        "const RE = /a+/;\n"
+        "export function retarget(p) {\n"
+        "  RE.compile(p);\n"
+        "}\n"
+        "export const build = () => new RegExp(RE.source);\n",
+        ["parameter p", "write RE"],
+    ),
+}
+
+# A construction of the global RegExp under another spelling, or through a
+# call that is handed the constructor.
+_CALLEE_FIXTURES = {
+    "aliased-constructor": (
+        "const R = RegExp;\nexport const build = (p) => new R(p);\n",
+        ["parameter p"],
+    ),
+    "parenthesized-constructor": (
+        "export const build = (p) => new (RegExp)(p);\n",
+        ["parameter p"],
+    ),
+    "global-this-constructor": (
+        "export const build = (p) => globalThis.RegExp(p);\n",
+        ["parameter p"],
+    ),
+    "reflect-construct": (
+        "export const build = (p) => Reflect.construct(RegExp, [p]);\n",
+        ["global RegExp", "parameter p"],
+    ),
+}
+
 # Each fixture's one construction site reads call-time data through a different
 # route, with the kind of input the walk must name for it.
 _CALL_TIME_FIXTURES = {
     "parameter": (_DYNAMIC_FIXTURE, ["parameter parts"]),
-    "env-value-splice": (_ENV_VALUE_FIXTURE, ["local visible"]),
+    "env-value-splice": (_ENV_VALUE_FIXTURE, ["parameter value"]),
     "module-scope-env": (
         'export const RE = new RegExp(process.env.PATTERN ?? "a+");\n',
         ["global process"],
@@ -482,7 +600,26 @@ _CALL_TIME_FIXTURES = {
         "  SOURCE = source;\n"
         "}\n"
         "export const build = () => new RegExp(SOURCE);\n",
-        ["parameter source"],
+        ["parameter source", "write SOURCE"],
+    ),
+    # A const the site's function computes from its parameter is followed to
+    # that parameter rather than reported as an opaque local.
+    "local-from-parameter": (
+        "export function build(p) {\n"
+        "  const source = p;\n"
+        "  return new RegExp(source);\n"
+        "}\n",
+        ["parameter p"],
+    ),
+    **_WRITE_FIXTURES,
+    **_CALLEE_FIXTURES,
+    "math-random": (
+        "export const RE = new RegExp(String(Math.random()));\n",
+        ["global Math"],
+    ),
+    "regexp-last-match": (
+        "export const again = () => new RegExp(RegExp.$1);\n",
+        ["global RegExp"],
     ),
 }
 
@@ -507,6 +644,38 @@ _LOAD_TIME_FIXTURES = {
         '  "gu",\n'
         ");\n"
         "export const hasInvisible = (text) => INVIS.test(text);\n"
+    ),
+    # Writes and reads beside a pattern's bindings that cannot change it: a
+    # load-time fill with constants, a RegExp's `lastIndex`, read-only methods
+    # handed call-time arguments, a function-local constant, and a frozen table
+    # stored elsewhere.
+    "load-time-container-fill": (
+        "const parts = [];\n"
+        'parts.push("a", "b");\n'
+        'export const build = () => new RegExp(parts.join("|"));\n'
+    ),
+    "read-only-uses-at-call-time": (
+        "const RE = /a+/g;\n"
+        "/** @type {Set<number>} */\n"
+        "const SEEN = new Set([1, 2]);\n"
+        "/** @param {string} text @param {number} cp */\n"
+        "export function count(text, cp) {\n"
+        "  RE.lastIndex = 0;\n"
+        "  return RE.test(text) && SEEN.has(cp);\n"
+        "}\n"
+        'export const build = () => new RegExp([...SEEN].join("|") + RE.source);\n'
+    ),
+    "function-local-constant": (
+        "export function build() {\n"
+        '  const sep = "|";\n'
+        '  return new RegExp(["a", "b"].join(sep));\n'
+        "}\n"
+    ),
+    "frozen-table-stored-elsewhere": (
+        "const CPS = Object.freeze([173, 8203]);\n"
+        "export const TABLE = [[1, CPS]];\n"
+        "export const build = () =>\n"
+        '  new RegExp(CPS.map((cp) => `\\\\u{${cp.toString(16)}}`).join(""), "u");\n'
     ),
 }
 
@@ -553,4 +722,23 @@ def test_extractor_reports_an_implicit_string_to_regex_coercion(tmp_path) -> Non
     assert [(c["expr"], c["isRegExp"]) for c in coercions] == [
         ("text.search(needle)", False),
         ("text.match(/[0-9]+/g)", True),
+    ]
+
+
+def test_extractor_ignores_a_local_named_regexp(tmp_path) -> None:
+    # Sites are recognised by the callee's type, so a module function that
+    # shadows the name is not the global constructor. The aliased-constructor
+    # fixtures above are the other half: the global under another name is.
+    fixture = _write_fixture(
+        tmp_path,
+        "shadowed-regexp",
+        "/** @param {string} s */\n"
+        "function RegExp(s) {\n"
+        "  return s;\n"
+        "}\n"
+        "export const label = (p) => new RegExp(p);\n"
+        'export const real = () => new globalThis.RegExp("a+");\n',
+    )
+    assert [s["expr"] for s in _run_extractor(fixture)["constructionSites"]] == [
+        'new globalThis.RegExp("a+")'
     ]

@@ -58,12 +58,17 @@ ENV_FREE_IMPORTS = {
     "functools": "pure combinators and caches",
     "itertools": "pure iteration",
     "json": "parses the shipped data files it is handed",
-    "pathlib": "names the package's own data files",
     "re": "pattern functions and escaping",
     "regex": "pattern functions and escaping",
     "typing": "annotations only",
     "detect_secrets.plugins.keyword": "upstream's constant noun table, DENYLIST",
 }
+
+#: The one host-path import a pattern may read, and only as
+#: ``Path(__file__)``: the module's own location, from which the package names
+#: its data files. ``Path.home()``, ``Path.cwd()`` and a relative ``Path(…)``
+#: read the host's environment.
+PACKAGE_FILE_PATH = "pathlib.Path"
 
 #: Builtins whose result depends only on their arguments, every exception
 #: class, and the two module globals naming the module itself. ``open``,
@@ -468,7 +473,8 @@ def call_time_inputs(
       only its own module calls, directly, in which case each call's argument
       for it is walked instead;
     - an import outside ``ENV_FREE_IMPORTS`` — ``os.environ``, a registry,
-      or a package module bound by ``import`` rather than ``from … import``;
+      a package module bound by ``import`` rather than ``from … import``, or
+      ``pathlib.Path`` read any way but ``Path(__file__)``;
     - a builtin outside ``PURE_BUILTINS``;
     - an exception.
 
@@ -498,16 +504,18 @@ def call_time_inputs(
             if name.id not in PURE_BUILTINS:
                 inputs.add(f"builtin {name.id} at {where(mod, name)}")
         elif scope.node is mod.tree or not _contains(inside, scope.node):
-            values(mod, scope, name.id, where(mod, name))
+            values(mod, scope, name.id, where(mod, name), mod.calls.get(id(name)))
 
-    def values(mod: Module, scope: Scope, name: str, at: str) -> None:
+    def values(
+        mod: Module, scope: Scope, name: str, at: str, call: ast.Call | None = None
+    ) -> None:
         for binding in scope.bindings[name]:
             if binding.kind in {"assign", "def"}:
                 walk(mod, binding.source)
             elif binding.kind == "param":
                 builder_arguments(mod, binding, at)
             elif binding.kind == "import":
-                imported(mod, binding, at)
+                imported(mod, binding, at, call)
             else:
                 inputs.add(f"{binding.kind} {name} at {at}")
         for value in scope.written.get(name, ()):
@@ -536,7 +544,7 @@ def call_time_inputs(
             else:
                 walk(mod, argument)
 
-    def imported(mod: Module, binding: Binding, at: str) -> None:
+    def imported(mod: Module, binding: Binding, at: str, call: ast.Call | None) -> None:
         node, alias = binding.source, binding.alias
         if isinstance(node, ast.ImportFrom):
             target = package.import_target(mod, node)
@@ -549,6 +557,8 @@ def call_time_inputs(
             dotted = f"{node.module}.{alias.name}"
         else:
             dotted = alias.name
+        if dotted == PACKAGE_FILE_PATH and _is_own_file_path(call):
+            return
         prefixes = {
             ".".join(dotted.split(".")[:n]) for n in range(1, dotted.count(".") + 2)
         }
@@ -575,12 +585,30 @@ def call_time_inputs(
     return tuple(sorted(inputs))
 
 
+def _is_own_file_path(call: ast.Call | None) -> bool:
+    return (
+        call is not None
+        and not call.keywords
+        and len(call.args) == 1
+        and isinstance(call.args[0], ast.Name)
+        and call.args[0].id == "__file__"
+    )
+
+
 def _imported_elsewhere(package: Package, module: Module, name: str) -> bool:
+    """Whether another module can call ``module``'s function ``name``: it
+    imports the name, or reads an attribute so named — ``engine._builder``
+    after ``from . import engine`` or ``import pkg.engine as engine`` — which
+    this check does not try to tie back to ``module``."""
     return any(
-        isinstance(node, ast.ImportFrom)
-        and package.import_target(other, node) == module.path
-        and any(alias.name == name for alias in node.names)
+        (
+            isinstance(node, ast.ImportFrom)
+            and package.import_target(other, node) == module.path
+            and any(alias.name in {name, "*"} for alias in node.names)
+        )
+        or (isinstance(node, ast.Attribute) and node.attr == name)
         for other in package.modules.values()
+        if other is not module
         for node in ast.walk(other.tree)
     )
 
@@ -787,12 +815,51 @@ PATTERNS = list(map(re.compile, ["a+", "b+"]))
 """
 
 
-def _fixture_sites(tmp_path: Path, source: str) -> list[Site]:
+# A load-time builder another module also calls, with its own argument, through
+# the module object rather than an imported name.
+_LOAD_TIME_BUILDER = """\
+import re
+
+def _builder(value):
+    return re.compile(value)
+
+BUILT = _builder("a+")
+"""
+_BUILDER_CALLERS = {
+    "relative-module-import": "from . import mod\n",
+    "dotted-import-as": "import fixture_pkg.mod as mod\n",
+}
+
+# Host paths: the user's home and the working directory are host state.
+_HOST_PATHS = {
+    "path-home": "import re\nfrom pathlib import Path\n\nRE = re.compile(str(Path.home()))\n",
+    "path-cwd": "import re\nfrom pathlib import Path\n\nRE = re.compile(Path.cwd().name)\n",
+    "relative-path": (
+        "import re\nfrom pathlib import Path\n\n"
+        'RE = re.compile(Path("pattern.txt").read_text())\n'
+    ),
+}
+
+# The package's own data file, named from the module's location.
+_OWN_DATA_FILE = """\
+import re
+from pathlib import Path
+
+_DATA = Path(__file__).resolve().parent / "data" / "nouns.txt"
+NOUN_RE = re.compile(_DATA.read_text(encoding="utf-8").strip())
+"""
+
+
+def _fixture_sites(
+    tmp_path: Path, source: str, extra: dict[str, str] | None = None
+) -> list[Site]:
     package = tmp_path / "fixture_pkg"
     package.mkdir()
     (package / "__init__.py").write_text("", encoding="utf-8")
     (package / "settings.py").write_text(_SETTINGS, encoding="utf-8")
     (package / "mod.py").write_text(source, encoding="utf-8")
+    for name, text in (extra or {}).items():
+        (package / name).write_text(text, encoding="utf-8")
     return regex_sites(Package(package))
 
 
@@ -828,3 +895,33 @@ def test_guard_passes_a_module_constant_pattern(tmp_path: Path) -> None:
         ("_keyword_pattern", ()),
         ("<module>", ()),
     ]
+
+
+@pytest.mark.parametrize("caller", sorted(_BUILDER_CALLERS))
+def test_guard_follows_a_builder_called_through_its_module(
+    tmp_path: Path, caller: str
+) -> None:
+    # The builder rule walks only this module's calls, so a call from another
+    # module must disqualify the builder — however that module names it.
+    other = _BUILDER_CALLERS[caller] + (
+        "\n\ndef build(part):\n    return mod._builder(part)\n"
+    )
+    sites = _fixture_sites(tmp_path, _LOAD_TIME_BUILDER, {"other.py": other})
+    assert [(s.function, [i.split(" at ")[0] for i in s.inputs]) for s in sites] == [
+        ("_builder", ["parameter value"])
+    ]
+
+
+@pytest.mark.parametrize("name", sorted(_HOST_PATHS))
+def test_guard_names_a_host_path(tmp_path: Path, name: str) -> None:
+    sites = _fixture_sites(tmp_path, _HOST_PATHS[name])
+    assert [[i.split(" at ")[0] for i in s.inputs] for s in sites] == [
+        ["import pathlib.Path"]
+    ]
+
+
+def test_guard_passes_the_package_own_data_file(tmp_path: Path) -> None:
+    # Positive marker for the narrowed pathlib rule: the one shape the package
+    # uses still reads no call-time data.
+    sites = _fixture_sites(tmp_path, _OWN_DATA_FILE)
+    assert [(s.function, s.inputs) for s in sites] == [("<module>", ())]

@@ -14,9 +14,11 @@
  * `patterns` carries every regex literal plus every `RegExp(…)` construction
  * whose pattern and flags this file resolves to static text.
  * `constructionSites` carries EVERY `RegExp(…)` / `new RegExp(…)` site, resolved
- * or not, so the guard can assert the partition: a site is either analyzed or
- * named in the guard's exemption list with a reason. That is what makes a new
- * dynamic construction site a red build rather than a silent hole. An inventory
+ * or not — recognised by the callee's type, plus any call handed the
+ * constructor (`Reflect.construct(RegExp, …)`) — so the guard can assert the
+ * partition: a site is either analyzed or named in the guard's exemption list
+ * with a reason. That is what makes a new dynamic construction site a red
+ * build rather than a silent hole. An inventory
  * COUNT cannot do it: an unresolved site contributes no inventory entry, so the
  * count does not move when one appears.
  *
@@ -184,11 +186,48 @@ function loadModule(abs) {
 const asText = (v) =>
   v === null || v.kind === "regex" ? null : String(v.value);
 
-/** @param {import("typescript").Node} node */
+/** @param {import("typescript").Type} type */
+const isRegExpConstructorType = (type) =>
+  (type.isUnion() ? type.types : [type]).some((member) => {
+    const decl = member.getSymbol()?.declarations?.[0];
+    return (
+      member.getSymbol()?.getName() === "RegExpConstructor" &&
+      decl !== undefined &&
+      program.isSourceFileDefaultLibrary(decl.getSourceFile())
+    );
+  });
+
+/**
+ * A `RegExp(…)` / `new RegExp(…)` site, recognised by the callee's TYPE rather
+ * than its spelling: `const R = RegExp; new R(x)`, `new (RegExp)(x)` and
+ * `globalThis.RegExp(x)` all construct a regex, and a local binding that
+ * shadows the name `RegExp` does not. A union callee that may be the global
+ * constructor counts as a site.
+ * @param {import("typescript").Node} node
+ */
 const isRegExpConstruction = (node) =>
   (ts.isNewExpression(node) || ts.isCallExpression(node)) &&
-  ts.isIdentifier(node.expression) &&
-  node.expression.text === "RegExp";
+  isRegExpConstructorType(checker.getTypeAtLocation(node.expression));
+
+/**
+ * A call that constructs a regex without calling the constructor directly:
+ * `RegExp.call(…)` / `.apply` / `.bind`, or the constructor handed to another
+ * call (`Reflect.construct(RegExp, args)`, `[RegExp].map(…)`). Its pattern is
+ * out of reach, so it is reported as a site that never resolves.
+ * @param {import("typescript").Node} node
+ */
+const isIndirectRegExpConstruction = (node) => {
+  if (!ts.isCallExpression(node) && !ts.isNewExpression(node)) return false;
+  const callee = node.expression;
+  const isConstructor = (/** @type {import("typescript").Node} */ n) =>
+    isRegExpConstructorType(checker.getTypeAtLocation(n));
+  return (
+    (ts.isPropertyAccessExpression(callee) &&
+      ["apply", "bind", "call"].includes(callee.name.text) &&
+      isConstructor(callee.expression)) ||
+    (node.arguments ?? []).some(isConstructor)
+  );
+};
 
 /** Split a `/pattern/flags` literal's raw text.
  * @param {string} text @returns {{source: string, flags: string}} */
@@ -360,16 +399,25 @@ const PURE_GLOBALS = new Set([
   "Error",
   "JSON",
   "Map",
-  "Math",
   "Number",
   "Object",
   "RangeError",
-  "RegExp",
   "Set",
   "String",
   "TypeError",
-  "undefined",
 ]);
+
+/**
+ * `RegExp` carries run-time state too — `RegExp.$1` / `RegExp.input` hold the
+ * last match — so it is pure only as the constructor being called. `Math` is
+ * impure through `Math.random`, so any read of it is an input.
+ * @param {string} name @param {import("typescript").Identifier} id
+ */
+const isPureGlobalRead = (name, id) =>
+  PURE_GLOBALS.has(name) ||
+  (name === "RegExp" &&
+    (ts.isNewExpression(id.parent) || ts.isCallExpression(id.parent)) &&
+    id.parent.expression === id);
 
 /** @param {import("typescript").Node} outer @param {import("typescript").Node} inner */
 const contains = (outer, inner) =>
@@ -422,21 +470,23 @@ const isMemberDeclaration = (decl) =>
  * while the code runs, as `"<kind> <name> at <file>:<line>"`.
  *
  * The walk starts at the construction's arguments and follows each binding
- * they read to the code that produces its value: a module-scope `const`'s
- * initializer, a function's whole body, and a module-scope `let`/`var`'s
- * initializer plus every assignment to it. Resolution is TypeScript's own
- * checker, so scopes, shadowing and imports are the language's, not a guess.
- * A binding counts as a call-time input when it is:
+ * they read to the code that produces its value: a variable's initializer plus
+ * every write into it (`writesInto`), and a function's whole body. Resolution
+ * is TypeScript's own checker, so scopes, shadowing and imports are the
+ * language's, not a guess. A binding counts as a call-time input when it is:
  *
- * - a parameter or local of a function enclosing the code being walked — the
- *   caller's argument, the tool output being scanned, a prompt;
+ * - a parameter of a function enclosing the code being walked — the caller's
+ *   argument, the tool output being scanned, a prompt — or a loop or catch
+ *   variable there;
  * - an ambient global outside {@link PURE_GLOBALS} or a package import —
  *   `process.env`, host state, code this walk cannot see into;
+ * - written once per call, or aliased somewhere its writes cannot be followed;
  * - `this`, `arguments`, a dynamic `import()`, or any declaration shape the
  *   walk has no rule for, so an unknown fails closed.
  *
- * Mutation through a property (`CONFIG.x = v`) is not traced: the walk follows
- * bindings, not object contents.
+ * Not traced: a write into a JSON module's object, and data that steers a
+ * write only through control flow (`for (…) parts.push("a")`, where the loop
+ * count is the input).
  *
  * @param {import("typescript").NewExpression | import("typescript").CallExpression} site
  * @returns {string[]}
@@ -446,6 +496,8 @@ function callTimeInputs(site) {
   const inputs = new Set();
   /** @type {Set<import("typescript").Node>} */
   const walked = new Set();
+  /** @type {Set<import("typescript").Symbol>} */
+  const followedWrites = new Set();
 
   /** @param {import("typescript").Node} root */
   const walk = (root) => {
@@ -513,16 +565,21 @@ function callTimeInputs(site) {
       return;
     }
     const decl = symbol.valueDeclaration ?? symbol.declarations?.[0];
+    // The checker's own `undefined`, which has no declaration to judge.
+    if (!decl && name === "undefined") return;
     if (!decl) {
       inputs.add(`undeclared ${name} at ${where(id)}`);
       return;
     }
     if (decl.getSourceFile().isDeclarationFile) {
-      if (!PURE_GLOBALS.has(name)) inputs.add(`global ${name} at ${where(id)}`);
+      if (!isPureGlobalRead(name, id))
+        inputs.add(`global ${name} at ${where(id)}`);
       return;
     }
     // A JSON module or a namespace import (each member is followed as it is
     // read), or an object member (reached through the object that owns it).
+    // Writes into a JSON module's object are not traced: its validators read
+    // it through `unknown`, where no type separates a read from a write.
     if (ts.isSourceFile(decl) || isMemberDeclaration(decl)) return;
     if (contains(root, decl)) return;
     if (ts.isFunctionLike(decl) || ts.isClassLike(decl)) {
@@ -542,44 +599,607 @@ function callTimeInputs(site) {
       );
       return;
     }
-    if (!isModuleScope(variable)) {
+    // A local is followed like a module binding when a plain declaration
+    // statement gives it its value; a loop variable or catch binding takes its
+    // value from code with no initializer to walk.
+    const followable =
+      isModuleScope(variable) ||
+      (ts.isVariableStatement(variable.parent.parent) &&
+        variable.initializer !== undefined);
+    if (!followable) {
       inputs.add(`local ${name} at ${where(id)}`);
       return;
     }
     walk(variable);
-    if (variable.parent.flags & ts.NodeFlags.Const) return;
-    for (const assignment of assignmentsTo(symbol, variable.getSourceFile()))
-      walk(assignment.right);
+    writesInto(
+      symbol,
+      name,
+      ts.findAncestor(variable, ts.isFunctionLike),
+      false,
+    );
+  };
+
+  /**
+   * Follow every write into the value `symbol` holds, anywhere in the program:
+   * a reassignment of the binding itself (plain, compound or destructuring, a
+   * `for…of` target, `++`/`--`), and — unless the value is immutable — a write
+   * into its contents (`X.k = v`, `delete X.k`, a mutating method such as
+   * `X.push(v)` or `X.get(k).add(v)`, `Object.assign(X, v)`). Each write's
+   * data is walked like the value's own initializer. A binding the value flows
+   * into — `const a = X`, a loop variable, a parameter of a function X is
+   * handed to, a callback's parameter — is followed the same way. A write that
+   * runs inside a function the original binding's scope does not run — once per
+   * call rather than once per load — makes the value depend on the call
+   * history, so it is an input itself; a logical assignment (`??=`, `||=`,
+   * `&&=`) is exempt, since it lands at most once. A flow the walk cannot
+   * follow (the value stored in an object, returned, passed to code it cannot
+   * see) is an input, since writes through it are invisible.
+   *
+   * @param {import("typescript").Symbol} symbol @param {string} name
+   * @param {import("typescript").Node | undefined} home the function the
+   *   original binding is declared in; undefined at module scope
+   * @param {boolean} isAlias rebinding an alias leaves the value untouched
+   * @param {import("typescript").Type} type what flows in: an alias's declared
+   *   type can be wider (`any`, `unknown`) than the value handed to it
+   */
+  const writesInto = (
+    symbol,
+    name,
+    home,
+    isAlias,
+    type = checker.getTypeOfSymbol(symbol),
+  ) => {
+    const mutableContents = !(
+      isImmutableValue(type) || isFrozenConstant(symbol)
+    );
+    if ((isAlias && !mutableContents) || followedWrites.has(symbol)) return;
+    followedWrites.add(symbol);
+    /** @param {import("typescript").Node} at */
+    const escape = (at) => inputs.add(`alias ${name} at ${where(at)}`);
+    /** @param {import("typescript").Node} writer */
+    const write = (writer) => {
+      const isLogical =
+        ts.isBinaryExpression(writer) &&
+        LOGICAL_ASSIGNMENTS.has(writer.operatorToken.kind);
+      if (!isLogical && ts.findAncestor(writer, ts.isFunctionLike) !== home)
+        inputs.add(`write ${name} at ${where(writer)}`);
+      walk(
+        ts.isForInStatement(writer) || ts.isForOfStatement(writer)
+          ? writer.expression
+          : writer,
+      );
+    };
+    /** A binding that receives the value or part of it, typed as `type`
+     * when the flow says more than the binding's declaration.
+     * @param {import("typescript").BindingName} target
+     * @param {import("typescript").Type} [type] */
+    const flowsInto = (target, type) => {
+      if (!ts.isIdentifier(target)) {
+        for (const element of target.elements)
+          if (!ts.isOmittedExpression(element)) flowsInto(element.name);
+        return;
+      }
+      const aliased = checker.getSymbolAtLocation(target);
+      if (!aliased) throw new Error(`no symbol for ${where(target)}`);
+      writesInto(aliased, name, home, true, type);
+    };
+    /** The function `callee` resolves to, when the walk can read its body.
+     * @param {import("typescript").Signature | undefined} signature */
+    const bodyOf = (signature) => {
+      const decl = signature?.declaration;
+      return decl &&
+        ts.isFunctionLike(decl) &&
+        "body" in decl &&
+        decl.body !== undefined
+        ? decl
+        : null;
+    };
+    /** A callback handed to a read-only library call on the value receives
+     * its elements (and, for `forEach` and kin, the value itself).
+     * @param {import("typescript").CallLikeExpression} call */
+    const callbacksReceive = (call) => {
+      for (const arg of callableArguments(call)) {
+        const signature = checker.getTypeAtLocation(arg).getCallSignatures()[0];
+        if (signature.declaration?.getSourceFile().isDeclarationFile) continue;
+        const callback = bodyOf(signature);
+        if (!callback) {
+          escape(arg);
+          continue;
+        }
+        // What the library passes each parameter (`(value: string, index:
+        // number, array: string[])`), which a separately declared callback's
+        // own untyped parameters do not say.
+        const expected = checker
+          .getContextualType(
+            /** @type {import("typescript").Expression} */ (arg),
+          )
+          ?.getCallSignatures()[0]?.parameters;
+        callback.parameters.forEach((param, index) => {
+          const passed = expected?.[index];
+          flowsInto(
+            param.name,
+            passed ? checker.getTypeOfSymbol(passed) : undefined,
+          );
+        });
+      }
+    };
+    /** The value handed to a call outside the default library flows into the
+     * matching parameter. @param {import("typescript").CallExpression} call
+     * @param {import("typescript").Expression} arg */
+    const passedTo = (call, arg) => {
+      const callee = bodyOf(checker.getResolvedSignature(call));
+      const index = call.arguments.indexOf(arg);
+      const param = callee?.parameters[index];
+      if (!param || param.dotDotDotToken || readsArguments(callee)) write(call);
+      else flowsInto(param.name, checker.getTypeAtLocation(arg));
+    };
+    /** @param {import("typescript").Expression} held an expression whose
+     * value may be the binding's value or part of it */
+    const flow = (held) => {
+      const { top, calls } = accessChain(held);
+      const writer = writerOf(top);
+      if (writer) {
+        const rebinds = top === skipPassThrough(held);
+        const writesValue = rebinds
+          ? !isAlias
+          : mutableContents && !isRegExpStateWrite(top);
+        if (writesValue) write(writer);
+        return;
+      }
+      if (!mutableContents) {
+        // `RE.compile(p)` rewrites a RegExp's source in place.
+        for (const call of calls) if (isRegExpRecompile(call)) write(call);
+        return;
+      }
+      for (const call of calls) {
+        if (mutatesReceiver(call)) {
+          write(call);
+          continue;
+        }
+        callbacksReceive(call);
+        // `X.map(f)`, `X.filter(f).sort()`: the rest of the chain works on a
+        // new value, which holds nothing of X when its elements are immutable.
+        const fresh = checker.getTypeAtLocation(call);
+        if (isFreshResult(call) && elementsAreImmutable(fresh)) return;
+      }
+      const type = checker.getTypeAtLocation(top);
+      if (isImmutableValue(type)) return;
+      const parent = top.parent;
+      if (ts.isDeleteExpression(parent)) write(parent);
+      else if (ts.isSpreadElement(parent) && isCallArgument(parent))
+        escape(top);
+      else if (isCallArgument(top)) {
+        const call = /** @type {import("typescript").CallExpression} */ (
+          parent
+        );
+        if (!isDefaultLibraryCall(call)) passedTo(call, top);
+        else if (!mutatesReceiver(call)) {
+          callbacksReceive(call);
+          // `new Set(X)`, `Array.from(X)`: the result holds X's elements.
+          flow(call);
+        } else if (call.arguments[0] === top && isStaticMutator(call))
+          write(call);
+        else escape(top);
+      } else if (ts.isVariableDeclaration(parent) && parent.initializer === top)
+        flowsInto(parent.name, type);
+      else if (ts.isForOfStatement(parent) && parent.expression === top) {
+        if (elementsAreImmutable(type)) return;
+        const loop = parent.initializer;
+        if (!ts.isVariableDeclarationList(loop)) escape(top);
+        else flowsInto(loop.declarations[0].name);
+      } else if (!isConsumedInPlace(top, parent)) escape(top);
+    };
+    for (const ref of referencesTo(symbol))
+      if (!isDeclarationName(ref)) flow(ref);
   };
 
   for (const arg of site.arguments ?? []) walk(arg);
   return [...inputs].sort();
 }
 
+/** @type {Map<import("typescript").Symbol, import("typescript").Identifier[]> | null} */
+let referenceIndex = null;
+
 /**
- * Every `x = …` / `x ??= …` (any assignment operator) whose target is `symbol`.
+ * Every identifier in the program's own sources that names `symbol`, through
+ * import aliases — so a write in an importing module is found too.
  * @param {import("typescript").Symbol} symbol
- * @param {import("typescript").SourceFile} sf
- * @returns {import("typescript").BinaryExpression[]}
  */
-function assignmentsTo(symbol, sf) {
-  /** @type {import("typescript").BinaryExpression[]} */
-  const found = [];
-  /** @param {import("typescript").Node} node */
-  const visit = (node) => {
-    if (
-      ts.isBinaryExpression(node) &&
-      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
-      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
-      ts.isIdentifier(node.left) &&
-      checker.getSymbolAtLocation(node.left) === symbol
-    )
-      found.push(node);
-    ts.forEachChild(node, visit);
-  };
-  visit(sf);
-  return found;
+function referencesTo(symbol) {
+  if (!referenceIndex) {
+    const index = new Map();
+    /** @param {import("typescript").Node} node */
+    const visit = (node) => {
+      if (ts.isIdentifier(node)) {
+        const parent = node.parent;
+        let named =
+          ts.isShorthandPropertyAssignment(parent) && parent.name === node
+            ? checker.getShorthandAssignmentValueSymbol(parent)
+            : checker.getSymbolAtLocation(node);
+        if (named && named.flags & ts.SymbolFlags.Alias)
+          named = checker.getAliasedSymbol(named);
+        if (named) index.set(named, [...(index.get(named) ?? []), node]);
+      }
+      ts.forEachChild(node, visit);
+    };
+    for (const sf of program.getSourceFiles())
+      if (!sf.isDeclarationFile) visit(sf);
+    referenceIndex = index;
+  }
+  return referenceIndex.get(symbol) ?? [];
 }
+
+/** Whether `fn` reads `arguments`, which reaches every argument by position
+ * rather than through the parameter a flow follows.
+ * @param {import("typescript").Node} fn */
+const readsArguments = (fn) => {
+  /** @param {import("typescript").Node} node @returns {boolean} */
+  const visit = (node) =>
+    (ts.isIdentifier(node) && node.text === "arguments") ||
+    Boolean(ts.forEachChild(node, visit));
+  return visit(fn);
+};
+
+/** @param {import("typescript").Identifier} id */
+const isDeclarationName = (id) =>
+  /** @type {any} */ (id.parent).name === id &&
+  (ts.isVariableDeclaration(id.parent) ||
+    ts.isBindingElement(id.parent) ||
+    ts.isParameter(id.parent) ||
+    ts.isFunctionDeclaration(id.parent) ||
+    ts.isClassDeclaration(id.parent) ||
+    ts.isImportSpecifier(id.parent) ||
+    ts.isExportSpecifier(id.parent) ||
+    ts.isImportClause(id.parent) ||
+    ts.isNamespaceImport(id.parent));
+
+/** The outermost of the parentheses and type assertions wrapping `node`,
+ * which hand on its value unchanged.
+ * @param {import("typescript").Expression} node
+ * @returns {import("typescript").Expression} */
+const skipPassThrough = (node) => {
+  let out = node;
+  while (
+    ts.isParenthesizedExpression(out.parent) ||
+    ts.isNonNullExpression(out.parent) ||
+    ts.isAsExpression(out.parent) ||
+    ts.isSatisfiesExpression(out.parent)
+  )
+    out = out.parent;
+  return out;
+};
+
+/**
+ * The longest member/call chain rooted at `held` (for `X` in
+ * `X.a.get(k).push(v)`, that whole expression), with every call made along it.
+ * @param {import("typescript").Expression} held
+ */
+function accessChain(held) {
+  /** @type {import("typescript").Expression} */
+  let top = held;
+  /** @type {import("typescript").CallExpression[]} */
+  const calls = [];
+  for (;;) {
+    const outer = skipPassThrough(top);
+    const parent = outer.parent;
+    if (
+      (ts.isPropertyAccessExpression(parent) ||
+        ts.isElementAccessExpression(parent)) &&
+      parent.expression === outer
+    )
+      top = parent;
+    else if (ts.isCallExpression(parent) && parent.expression === outer) {
+      calls.push(parent);
+      top = parent;
+    } else return { top: outer, calls };
+  }
+}
+
+/** @param {import("typescript").SyntaxKind} kind */
+const isAssignmentOperator = (kind) =>
+  kind >= ts.SyntaxKind.FirstAssignment && kind <= ts.SyntaxKind.LastAssignment;
+
+const LOGICAL_ASSIGNMENTS = new Set([
+  ts.SyntaxKind.QuestionQuestionEqualsToken,
+  ts.SyntaxKind.BarBarEqualsToken,
+  ts.SyntaxKind.AmpersandAmpersandEqualsToken,
+]);
+
+/**
+ * The assignment, `++`/`--` or `for…in`/`of` whose target `node` is, through
+ * any destructuring pattern around it; undefined when `node` is read. The
+ * climb is TypeScript's own `getAssignmentTarget`, which its public API does
+ * not export.
+ * @param {import("typescript").Node} node
+ * @returns {import("typescript").Node | undefined}
+ */
+function assignmentTarget(node) {
+  let target = node;
+  for (;;) {
+    const parent = target.parent;
+    if (ts.isBinaryExpression(parent))
+      return isAssignmentOperator(parent.operatorToken.kind) &&
+        parent.left === target
+        ? parent
+        : undefined;
+    if (
+      ts.isPrefixUnaryExpression(parent) ||
+      ts.isPostfixUnaryExpression(parent)
+    )
+      return parent.operator === ts.SyntaxKind.PlusPlusToken ||
+        parent.operator === ts.SyntaxKind.MinusMinusToken
+        ? parent
+        : undefined;
+    if (ts.isForInStatement(parent) || ts.isForOfStatement(parent))
+      return parent.initializer === target ? parent : undefined;
+    if (
+      ts.isParenthesizedExpression(parent) ||
+      ts.isArrayLiteralExpression(parent) ||
+      ts.isSpreadElement(parent) ||
+      ts.isNonNullExpression(parent)
+    )
+      target = parent;
+    else if (ts.isSpreadAssignment(parent)) target = parent.parent;
+    else if (ts.isShorthandPropertyAssignment(parent)) {
+      if (parent.name !== target) return undefined;
+      target = parent.parent;
+    } else if (ts.isPropertyAssignment(parent)) {
+      if (parent.name === target) return undefined;
+      target = parent.parent;
+    } else return undefined;
+  }
+}
+
+/**
+ * The write `target` takes part in, or null when `target` is read. A target
+ * nested in a destructuring pattern — including one with a default,
+ * `[X.a = d] = e` — resolves to the outermost assignment, whose right side is
+ * the data written.
+ * @param {import("typescript").Node} target
+ */
+function writerOf(target) {
+  let writer = assignmentTarget(target);
+  if (!writer) return null;
+  for (
+    let outer = assignmentTarget(writer);
+    outer;
+    outer = assignmentTarget(writer)
+  )
+    writer = outer;
+  return writer;
+}
+
+/** Default-library methods and statics that write into their receiver or first
+ * argument. Every other default-library call only reads them. */
+const MUTATING_LIB_CALLS = new Set([
+  "add",
+  "assign",
+  "clear",
+  "compile",
+  "copyWithin",
+  "defineProperties",
+  "defineProperty",
+  "delete",
+  "deleteProperty",
+  "fill",
+  "pop",
+  "push",
+  "reverse",
+  "set",
+  "setPrototypeOf",
+  "shift",
+  "sort",
+  "splice",
+  "unshift",
+]);
+
+/** @param {import("typescript").CallLikeExpression} call */
+const isDefaultLibraryCall = (call) => {
+  const decl = checker.getResolvedSignature(call)?.declaration;
+  return (
+    decl !== undefined &&
+    program.isSourceFileDefaultLibrary(decl.getSourceFile())
+  );
+};
+
+/** A call that may write into what it is handed: anything outside the default
+ * library (whose body this walk does not judge), or a mutating library call.
+ * @param {import("typescript").CallLikeExpression} call */
+const mutatesReceiver = (call) => {
+  if (!isDefaultLibraryCall(call)) return true;
+  const callee =
+    ts.isCallExpression(call) || ts.isNewExpression(call)
+      ? call.expression
+      : null;
+  const calleeName =
+    callee && ts.isPropertyAccessExpression(callee)
+      ? callee.name.text
+      : callee && ts.isIdentifier(callee)
+        ? callee.text
+        : null;
+  return calleeName === null || MUTATING_LIB_CALLS.has(calleeName);
+};
+
+/** The arguments of a read-only library call that are code it runs — a
+ * `map`/`forEach` callback can still write into what it is handed.
+ * @param {import("typescript").CallLikeExpression} call */
+const callableArguments = (call) =>
+  (ts.isCallExpression(call) || ts.isNewExpression(call)
+    ? (call.arguments ?? [])
+    : []
+  ).filter(
+    (arg) => checker.getTypeAtLocation(arg).getCallSignatures().length > 0,
+  );
+
+/** @param {import("typescript").Node} node */
+const isCallArgument = (node) =>
+  (ts.isCallExpression(node.parent) || ts.isNewExpression(node.parent)) &&
+  /** @type {readonly import("typescript").Node[]} */ (
+    node.parent.arguments ?? []
+  ).includes(node);
+
+/** `Object.assign(X, …)`, `Reflect.set(X, …)`: a library static that writes
+ * into its first argument. @param {import("typescript").CallExpression} call */
+const isStaticMutator = (call) =>
+  ts.isPropertyAccessExpression(call.expression) &&
+  ts.isIdentifier(call.expression.expression) &&
+  ["Object", "Reflect"].includes(call.expression.expression.text);
+
+/** Library calls whose result may be one of the receiver's own elements
+ * rather than a fresh value. */
+const ELEMENT_RETURNING_LIB_CALLS = new Set([
+  "at",
+  "find",
+  "findLast",
+  "get",
+  "pop",
+  "reduce",
+  "reduceRight",
+  "shift",
+]);
+
+/** A read-only library call whose result is a new value (`X.map(f)`,
+ * `X.join(s)`), so an immutable element type means it holds nothing of X.
+ * @param {import("typescript").CallExpression} call */
+const isFreshResult = (call) =>
+  isDefaultLibraryCall(call) &&
+  ts.isPropertyAccessExpression(call.expression) &&
+  !ELEMENT_RETURNING_LIB_CALLS.has(call.expression.name.text);
+
+/**
+ * `re.lastIndex = 0`: a RegExp's only writable slot, which no pattern reads —
+ * `source` and `flags` are fixed at construction (`compile` is a mutating call).
+ * @param {import("typescript").Node} target
+ */
+const isRegExpStateWrite = (target) =>
+  ts.isPropertyAccessExpression(target) &&
+  isRegExpType(checker.getTypeAtLocation(target.expression));
+
+/** @param {import("typescript").CallExpression} call */
+const isRegExpRecompile = (call) =>
+  ts.isPropertyAccessExpression(call.expression) &&
+  call.expression.name.text === "compile" &&
+  isRegExpType(checker.getTypeAtLocation(call.expression.expression));
+
+/** @param {import("typescript").Type} type */
+const isRegExpType = (type) => {
+  const decl = type.getSymbol()?.declarations?.[0];
+  return (
+    type.getSymbol()?.getName() === "RegExp" &&
+    decl !== undefined &&
+    program.isSourceFileDefaultLibrary(decl.getSourceFile())
+  );
+};
+
+/**
+ * A value no reference can write into: a primitive, a RegExp (whose pattern
+ * is fixed at construction), or a function (its behaviour is its body, which
+ * the walk follows when the function is read). `any` is not immutable.
+ * @param {import("typescript").Type} type
+ */
+const isImmutableValue = (type) =>
+  (type.isUnion() ? type.types : [type]).every(
+    (member) =>
+      member.flags &
+        (ts.TypeFlags.StringLike |
+          ts.TypeFlags.NumberLike |
+          ts.TypeFlags.BigIntLike |
+          ts.TypeFlags.BooleanLike |
+          ts.TypeFlags.ESSymbolLike |
+          ts.TypeFlags.Undefined |
+          ts.TypeFlags.Null |
+          ts.TypeFlags.Void) ||
+      isRegExpType(member) ||
+      (member.getCallSignatures().length > 0 &&
+        member.getProperties().length === 0),
+  );
+
+/**
+ * `const X = Object.freeze([…])` over immutable elements: a value no write can
+ * reach, so how it is read does not matter.
+ * @param {import("typescript").Symbol} symbol
+ */
+const isFrozenConstant = (symbol) => {
+  const decl = symbol.valueDeclaration;
+  const init =
+    decl &&
+    ts.isVariableDeclaration(decl) &&
+    decl.parent.flags & ts.NodeFlags.Const
+      ? decl.initializer
+      : undefined;
+  return (
+    init !== undefined &&
+    ts.isCallExpression(init) &&
+    ts.isPropertyAccessExpression(init.expression) &&
+    init.expression.name.text === "freeze" &&
+    isDefaultLibraryCall(init) &&
+    elementsAreImmutable(checker.getTypeOfSymbol(symbol))
+  );
+};
+
+/**
+ * A read of a mutable value that holds no reference to it afterwards — a
+ * comparison, a coercion to text, a condition, a discarded expression, an
+ * export (whose importers' references are followed directly), a `for…in`
+ * (its keys are strings), or a spread into an array whose elements are
+ * immutable.
+ * @param {import("typescript").Node} node @param {import("typescript").Node} parent
+ */
+function isConsumedInPlace(node, parent) {
+  if (
+    ts.isExpressionStatement(parent) ||
+    ts.isTypeOfExpression(parent) ||
+    ts.isVoidExpression(parent) ||
+    ts.isPrefixUnaryExpression(parent) ||
+    ts.isImportSpecifier(parent) ||
+    ts.isExportSpecifier(parent) ||
+    ts.isExportAssignment(parent)
+  )
+    return true;
+  // A tagged template hands its holes to the tag uncoerced.
+  if (ts.isTemplateSpan(parent))
+    return !ts.isTaggedTemplateExpression(parent.parent.parent);
+  if (ts.isBinaryExpression(parent)) {
+    const op = parent.operatorToken.kind;
+    return !(
+      isAssignmentOperator(op) ||
+      [
+        ts.SyntaxKind.QuestionQuestionToken,
+        ts.SyntaxKind.BarBarToken,
+        ts.SyntaxKind.AmpersandAmpersandToken,
+        ts.SyntaxKind.CommaToken,
+      ].includes(op)
+    );
+  }
+  if (
+    (ts.isIfStatement(parent) ||
+      ts.isWhileStatement(parent) ||
+      ts.isDoStatement(parent)) &&
+    parent.expression === node
+  )
+    return true;
+  if (ts.isConditionalExpression(parent) && parent.condition === node)
+    return true;
+  if (ts.isForInStatement(parent)) return parent.expression === node;
+  return (
+    ts.isSpreadElement(parent) &&
+    ts.isArrayLiteralExpression(parent.parent) &&
+    elementsAreImmutable(checker.getTypeAtLocation(node))
+  );
+}
+
+/** @param {import("typescript").Type} type */
+const elementsAreImmutable = (type) => {
+  const args =
+    type.flags & ts.TypeFlags.Object &&
+    /** @type {import("typescript").ObjectType} */ (type).objectFlags &
+      ts.ObjectFlags.Reference
+      ? checker.getTypeArguments(
+          /** @type {import("typescript").TypeReference} */ (type),
+        )
+      : null;
+  return args !== null && args.length > 0 && args.every(isImmutableValue);
+};
 
 /** The string methods that compile a non-RegExp argument with `new RegExp`. */
 const COERCING_METHODS = new Set(["match", "matchAll", "search"]);
@@ -661,7 +1281,7 @@ const found = [];
 const constructionSites = [];
 /** @type {NonNullable<ReturnType<typeof coercionSite>>[]} */
 const coercionSites = [];
-/** @type {{node: import("typescript").NewExpression, mod: ModuleInfo}[]} */
+/** @type {{node: import("typescript").NewExpression, mod: ModuleInfo, direct: boolean}[]} */
 const pending = [];
 
 for (const abs of analyzed) {
@@ -674,10 +1294,14 @@ for (const abs of analyzed) {
     if (ts.isRegularExpressionLiteral(node)) {
       const { source, flags } = splitRegexLiteral(node.text);
       found.push({ file: mod.rel, line: lineOf(node), pattern: source, flags });
-    } else if (isRegExpConstruction(node)) {
+    } else if (
+      isRegExpConstruction(node) ||
+      isIndirectRegExpConstruction(node)
+    ) {
       pending.push({
         node: /** @type {import("typescript").NewExpression} */ (node),
         mod,
+        direct: isRegExpConstruction(node),
       });
     }
     ts.forEachChild(node, visit);
@@ -685,8 +1309,9 @@ for (const abs of analyzed) {
   visit(mod.sf);
 }
 
-for (const { node, mod } of pending) {
-  const value = await evaluateConstruction(node, mod);
+for (const { node, mod, direct } of pending) {
+  // An indirect site's arguments are not (pattern, flags), so it never resolves.
+  const value = direct ? await evaluateConstruction(node, mod) : null;
   const line = lineOf(node);
   constructionSites.push({
     file: mod.rel,
