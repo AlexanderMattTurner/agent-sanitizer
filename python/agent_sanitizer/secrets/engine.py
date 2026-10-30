@@ -341,18 +341,30 @@ def _resolve_marks(text: str, entries: list[tuple[str, str]]) -> tuple[str, list
     return "".join(out), pairs
 
 
+def _invisible_free_views(
+    text: str, charset: frozenset[int]
+) -> list[tuple[str, Sequence[int]]]:
+    """``text`` with ``charset`` invisibles deleted and, when it holds a terminal
+    escape, with escapes deleted too — each with its offset map back to ``text``.
+    Built once per text, not once per secret: each view is a full copy."""
+    views = [strip_invisible_with_map(text, charset)]
+    unescaped = strip_escapes_with_map(text, charset)
+    if unescaped is not None:
+        views.append(unescaped)
+    return views
+
+
 def _env_value_spans(
     value: str,
     text: str,
-    unescaped: tuple[str, Sequence[int]] | None,
+    views: list[tuple[str, Sequence[int]]],
     charset: frozenset[int],
 ) -> list[tuple[int, int]]:
     """The ascending, disjoint spans of ``text`` holding ``value`` with any run
-    of ``charset`` invisibles spliced between its characters: found in ``text``'s
-    invisible-stripped view or in ``unescaped``, its
-    :func:`strip_escapes_with_map` view, and mapped back.
+    of ``charset`` invisibles spliced between its characters: found in one of
+    ``text``'s :func:`_invisible_free_views` and mapped back.
 
-    Both views are invisible-free, so the match is a plain substring search for
+    Every view is invisible-free, so the match is a plain substring search for
     ``value``'s own visible characters. That is exactly "visible characters
     separated only by invisibles" in the original, and it is linear in the text
     and independent of the value's length — a regex with an invisible run at
@@ -362,11 +374,7 @@ def _env_value_spans(
     A view match covers the deleted bytes inside it and none at its edges. Of two
     overlapping spans the earlier, then the longer, wins."""
     needle = strip_invisible(value, charset)
-    if needle:
-        views = [strip_invisible_with_map(text, charset)]
-        if unescaped is not None:
-            views.append(unescaped)
-    else:
+    if not needle:
         needle, views = value, [identity_map(text)]
     spans: list[tuple[int, int]] = []
     for view, offsets in views:
@@ -427,7 +435,7 @@ def _redact_env_bound(
     shorter secret inside a longer one must not claim part of its bytes, which
     would leave the rest of the longer secret unmatched and verbatim."""
     charset = config.resolved_charset()
-    unescaped = strip_escapes_with_map(text, charset)
+    views = _invisible_free_views(text, charset)
     taken: list[SpliceSpan] = []
     for name, value in _env_secrets_longest_first(config, charset):
         deadline.check("env-bound redaction")
@@ -435,7 +443,7 @@ def _redact_env_bound(
             continue
         spans = [
             SpliceSpan(start, end, placeholder(name))
-            for start, end in _env_value_spans(value, text, unescaped, charset)
+            for start, end in _env_value_spans(value, text, views, charset)
         ]
         merged = _merge_free_spans(taken, spans)
         if len(merged) > len(taken):
@@ -1955,10 +1963,7 @@ def _cross_line_candidate_spans(
     """
     charset = config.resolved_charset()
     spans: list[CrossLineSpan] = []
-    views = [strip_invisible_with_map(collapsed, charset)]
-    unescaped = strip_escapes_with_map(collapsed, charset)
-    if unescaped is not None:
-        views.append(unescaped)
+    views = _invisible_free_views(collapsed, charset)
     for stripped, offsets in views:
         spans.extend(
             _structural_cross_line_spans(stripped, offsets, deadline, newline_seams)
@@ -1969,7 +1974,7 @@ def _cross_line_candidate_spans(
             continue
         spans.extend(
             CrossLineSpan(start, end, placeholder(name), name)
-            for start, end in _env_value_spans(value, collapsed, unescaped, charset)
+            for start, end in _env_value_spans(value, collapsed, views, charset)
         )
     return spans
 

@@ -385,9 +385,9 @@ def test_env_value_spans_tolerate_non_enumerated_invisible_splice(cp):
     value = "sk-abcdefghijklmnopqrstuvwxyz0123456789"
     spliced = value[:6] + chr(cp) + value[6:]
     text = f"x {spliced} y"
-    assert E._env_value_spans(value, text, None, default_charset()) == [
-        (2, 2 + len(spliced))
-    ]
+    charset = default_charset()
+    views = E._invisible_free_views(text, charset)
+    assert E._env_value_spans(value, text, views, charset) == [(2, 2 + len(spliced))]
 
 
 # ─── _eligible_prefilter soundness guard ─────────────────────────────────────

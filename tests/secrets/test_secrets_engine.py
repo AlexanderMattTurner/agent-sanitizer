@@ -2381,16 +2381,23 @@ def test_configure_plugins_then_redact_configured():
     assert found == ["AWS Access Key"]
 
 
+def _env_spans(value, text):
+    """`_env_value_spans` over the views its callers build for ``text``."""
+    from agent_sanitizer.secrets.invisible import default_charset
+
+    charset = default_charset()
+    views = E._invisible_free_views(text, charset)
+    return E._env_value_spans(value, text, views, charset)
+
+
 def test_env_value_spans_retain_no_plaintext():
     """`_env_value_spans` must NOT be wrapped in functools.cache / lru_cache: such
     a cache is keyed on the PLAINTEXT secret ``value`` and, being unbounded, would
     retain every requester's secret forever. ``cache_info``/``cache_clear`` are
     the tell-tale of that wrapper. Positive marker: the function still matches."""
-    from agent_sanitizer.secrets.invisible import default_charset
-
     assert not hasattr(E._env_value_spans, "cache_info")
     assert not hasattr(E._env_value_spans, "cache_clear")
-    assert E._env_value_spans("abcdef", "abcdef", None, default_charset()) == [(0, 6)]
+    assert _env_spans("abcdef", "abcdef") == [(0, 6)]
 
 
 @pytest.mark.parametrize(
@@ -2403,34 +2410,24 @@ def test_env_value_spans_retain_no_plaintext():
         ("abcxdef", []),
         # Invisibles at the edges stay outside the span; two hits are both found.
         ("\u200babcdef\u200b-abcdef", [(1, 7), (9, 15)]),
+        # A value split by a terminal escape is found in the escape-stripped view.
+        ("abc\x1b[31mdef", [(0, 11)]),
     ],
 )
 def test_env_value_spans_for_a_value_holding_an_invisible(text, spans):
-    from agent_sanitizer.secrets.invisible import default_charset
-
-    assert E._env_value_spans("abc\u200bdef", text, None, default_charset()) == spans
+    assert _env_spans("abc\u200bdef", text) == spans
 
 
 def test_env_value_spans_value_of_only_invisibles_is_not_match_everything():
-    from agent_sanitizer.secrets.invisible import default_charset
-
-    charset = default_charset()
-    assert E._env_value_spans("\u200b\u200b", "ordinary text", None, charset) == []
-    assert E._env_value_spans("\u200b\u200b", "x\u200b\u200by", None, charset) == [
-        (1, 3)
-    ]
+    assert _env_spans("\u200b\u200b", "ordinary text") == []
+    assert _env_spans("\u200b\u200b", "x\u200b\u200by") == [(1, 3)]
 
 
-def test_env_value_spans_long_value_is_linear():
-    """A PEM-sized value: a regex with an invisible class at every gap took over
-    a second to compile here and overflowed V8 outright in the JS pre-gate."""
-    from agent_sanitizer.secrets.invisible import default_charset
-
+def test_env_value_spans_long_value_matches():
+    """A PEM-sized value with an invisible spliced mid-way is still one span."""
     value = "".join(chr(33 + (i * 7) % 90) for i in range(20000))
     text = f"head {value[:9000]}\u200b{value[9000:]} tail"
-    assert E._env_value_spans(value, text, None, default_charset()) == [
-        (5, 5 + len(value) + 1)
-    ]
+    assert _env_spans(value, text) == [(5, 5 + len(value) + 1)]
 
 
 def test_configure_plugins_exit_propagates_cache_clear_error(eng, monkeypatch):
