@@ -2386,6 +2386,22 @@ def test_configure_plugins_then_redact_configured():
     assert found == ["AWS Access Key"]
 
 
+def test_nested_configure_plugins_exit_keeps_the_outer_scan_working():
+    """The daemon's configuration stays active while a second ``serve()`` in the
+    same process enters and exits its own. That exit clears detect-secrets'
+    process-wide plugin map; the outer scan must still find every detector it
+    names, custom ones included, rather than raise on a missing plugin."""
+    from agent_sanitizer.secrets import configure_plugins, redact_configured
+
+    text = "key: AKIAIOSFODNN7EXAMPLE"
+    with configure_plugins():
+        with configure_plugins():
+            pass
+        out, found = redact_configured(text, None, RedactorConfig())
+    assert out == "key: [REDACTED: AWS Access Key]"
+    assert found == ["AWS Access Key"]
+
+
 def _env_spans(value, text):
     """`_env_value_spans` over the views its callers build for ``text``."""
     from agent_sanitizer.secrets.invisible import default_charset

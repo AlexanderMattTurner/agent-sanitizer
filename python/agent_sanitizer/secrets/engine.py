@@ -173,12 +173,22 @@ def _register_custom_plugins() -> None:
     it (core/plugins/util.py), so an install path holding a space or `+` loads
     nothing, and a path that does load execs detectors.py a second time as a
     separate module. This is the same map write its own `initialize.from_file`
-    performs, minus the file import. Call it after every clear of that map.
+    performs, minus the file import.
     """
     mapping = get_mapping_from_secret_type_to_class()
     for plugin in CUSTOM_PLUGINS:
         cls = getattr(detectors, plugin["name"])
         mapping[cls.secret_type] = cls
+
+
+def _reset_plugin_mapping() -> None:
+    """Rebuild detect-secrets' secret_type->class map with the custom detectors
+    in it. Every clear of the map goes through here: the map is process-wide, so
+    a nested configure_plugins() that clears it on exit would otherwise leave
+    the still-active outer configuration naming plugins its rebuilt map lacks,
+    and every scan under it raises."""
+    get_mapping_from_secret_type_to_class.cache_clear()
+    _register_custom_plugins()
 
 
 # The one place a detector's cross-line eligibility is decided, unioned from the
@@ -2721,8 +2731,7 @@ def configure_plugins(high_confidence: bool = False):
             get_settings().disable_filters(
                 "detect_secrets.filters.allowlist.is_line_allowlisted"
             )
-            get_mapping_from_secret_type_to_class.cache_clear()
-            _register_custom_plugins()
+            _reset_plugin_mapping()
             # _eligible_prefilter() reads get_plugins(), which answers for
             # WHICHEVER config is active — high_confidence and the default both
             # run in this same process (the daemon serves both), and without
@@ -2751,7 +2760,7 @@ def configure_plugins(high_confidence: bool = False):
             # `return` that verdict AFTER the finally so a cache_clear exception
             # propagates instead of being masked.
             try:
-                get_mapping_from_secret_type_to_class.cache_clear()
+                _reset_plugin_mapping()
                 _eligible_prefilter.cache_clear()
                 _full_prefilter.cache_clear()
                 _line_probe.cache_clear()
