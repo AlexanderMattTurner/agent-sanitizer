@@ -189,11 +189,11 @@ export function instructionsLoadedSeen(sessionId) {
     if (keyed) touchLiveState(marker);
     return true;
   }
-  return (
-    keyed &&
-    TMPDIR_ALERT_BASE !== ALERT_BASE &&
-    markerIsTrusted(instructionsLoadedFile(sessionId, TMPDIR_ALERT_BASE))
-  );
+  if (!keyed || TMPDIR_ALERT_BASE === ALERT_BASE) return false;
+  const degraded = instructionsLoadedFile(sessionId, TMPDIR_ALERT_BASE);
+  if (!markerIsTrusted(degraded)) return false;
+  touchLiveState(degraded);
+  return true;
 }
 
 /** How long a past session's artifacts are kept before a later session sweeps. */
@@ -647,7 +647,6 @@ export function recordInstructionsLoadedNotice(sessionId) {
  * @returns {string | null}
  */
 export function invisibleCharAlert(sessionId) {
-  const own = alertDir(sessionId);
   const bases =
     TMPDIR_ALERT_BASE === ALERT_BASE
       ? [ALERT_BASE]
@@ -667,7 +666,7 @@ export function invisibleCharAlert(sessionId) {
     if (!privateDirAt(dir)) continue;
     // A live session's findings must outlast any sweep that ages the store by
     // its directory's timestamp: losing them lifts the gate mid-session.
-    if (dir === own) touchLiveState(dir);
+    if (sessionDirs.has(dir)) touchLiveState(dir);
     // Sorted so a multi-finding report reads the same on every call; the names
     // are random, so the order carries no meaning beyond being stable.
     for (const name of readdirSync(dir).sort()) {

@@ -16,6 +16,7 @@ import { spawnSync } from "node:child_process";
 import {
   chownSync,
   existsSync,
+  lstatSync,
   lutimesSync,
   mkdirSync,
   mkdtempSync,
@@ -538,10 +539,11 @@ describe("a finding written where a degraded STATE_ROOT put it", () => {
   const arg = (/** @type {string | undefined} */ session) =>
     `${JSON.stringify(session ?? null)} ?? undefined`;
   /** Run `write` in a degraded process, then return `read` from a healthy one. */
-  const acrossTheSplit = (t, write, read) => {
+  const acrossTheSplit = (t, write, read, between = () => {}) => {
     const data = mkdtempSync(join(tmpdir(), "sanitizer-alert-data-"));
     t.after(() => rmSync(data, { recursive: true, force: true }));
     run(write, { CLAUDE_PLUGIN_DATA: "" });
+    between();
     const seen = JSON.parse(
       run(`console.log(JSON.stringify(${read}));`, {
         CLAUDE_PLUGIN_DATA: data,
@@ -552,6 +554,14 @@ describe("a finding written where a degraded STATE_ROOT put it", () => {
     assert.ok(existsSync(join(data, "session-state")));
     return seen;
   };
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  /** Age `path` by a day, following no symlink. */
+  const backdate = (path) => {
+    const past = (Date.now() - DAY_MS) / 1000;
+    lutimesSync(path, past, past);
+  };
+  /** Whether `path` was stamped within the last hour. */
+  const fresh = (path) => Date.now() - lstatSync(path).mtimeMs < DAY_MS / 24;
   const cleanup = (t, session) =>
     t.after(() => {
       rmSync(alertDir(session), { recursive: true, force: true });
@@ -565,8 +575,12 @@ describe("a finding written where a degraded STATE_ROOT put it", () => {
         t,
         `a.appendAlert("written under TMPDIR", ${arg(session)});`,
         `a.invisibleCharAlert(${arg(session)})`,
+        () => backdate(alertDir(session)),
       );
       assert.equal(seen, "written under TMPDIR");
+      // Read is use: a live session's findings must not age out of $TMPDIR
+      // under a sweep or a temp cleaner while the gate still relies on them.
+      assert.ok(fresh(alertDir(session)), "the read left the store stale");
     });
 
   it("another session's finding does not", (t) => {
@@ -582,9 +596,8 @@ describe("a finding written where a degraded STATE_ROOT put it", () => {
   it("an expired no-session finding does not", (t) => {
     cleanup(t, undefined);
     run(`a.appendAlert("stale", undefined);`, { CLAUDE_PLUGIN_DATA: "" });
-    const past = (Date.now() - 24 * 60 * 60 * 1000) / 1000;
     for (const name of readdirSync(alertDir()))
-      lutimesSync(join(alertDir(), name), past, past);
+      backdate(join(alertDir(), name));
     const seen = acrossTheSplit(t, "", `a.invisibleCharAlert("sess-split")`);
     assert.equal(seen, null);
   });
@@ -595,8 +608,10 @@ describe("a finding written where a degraded STATE_ROOT put it", () => {
       t,
       `a.recordInstructionsLoaded("sess-split");`,
       `a.instructionsLoadedSeen("sess-split")`,
+      () => backdate(instructionsLoadedFile("sess-split")),
     );
     assert.equal(seen, true);
+    assert.ok(fresh(instructionsLoadedFile("sess-split")), "marker left stale");
   });
 
   it("the shared no-session marker is not read there", (t) => {
