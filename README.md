@@ -65,6 +65,8 @@ the callback you inject for the agent-specific concern; `—` is a pure transfor
 | —     | `/view-map`                 | Pure offset/text machinery mapping a file's on-disk bytes ↔ the sanitized view (Layer-1 deletions, Layer-4 redactions). No I/O — consumed by `/rehydrate`.                                                                                                                                                                                                                                                                                                                                                                             | —                           |
 | —     | `/credential-names-matcher` | Build an env-var NAME matcher from the credential-noun vocabulary: `credentialNameMatcher({ scope })` for a redactor (`"trailing"`) or an env scrub (`"any-segment"`), linear in the name's length.                                                                                                                                                                                                                                                                                                                                    | —                           |
 | —     | `/credential-names`         | The credential-noun vocabulary itself, as JSON — the same file the Python package reads.                                                                                                                                                                                                                                                                                                                                                                                                                                               | —                           |
+| —     | `/credential-files-matcher` | Build a file PATH matcher from the credential-file vocabulary: `credentialPathMatcher()` flags `~/.pgpass`, `.docker/config.json`, anything under `.ssh/`. Case-insensitive, with no regex to backtrack.                                                                                                                                                                                                                                                                                                                               | —                           |
+| —     | `/credential-files`         | The credential-file vocabulary itself (`nameGlobs`, `pathGlobs`, `directories`), as JSON — the same file the Python package reads.                                                                                                                                                                                                                                                                                                                                                                                                     | —                           |
 
 See [`THREAT-MODEL.md`](./THREAT-MODEL.md) for per-vector detail.
 
@@ -545,6 +547,30 @@ import { createRequire } from "node:module";
 createRequire(import.meta.url)("agent-sanitizer/credential-names").nouns;
 // [{ parts: ["api", "key"], uses: ["env-name", "field-value"] }, …]
 ```
+
+Ask whether a file PATH holds a credential the same way. Two consumers once kept
+their own file lists and the lists disagreed, so `cat ~/.pgpass` was flagged by
+neither. `nameGlobs` match the leaf name, `pathGlobs` match a tool directory plus
+leaf (`*/.docker/config.json`), and `directories` cover everything inside
+(`.ssh`). A match says a path is credential-shaped, not that it holds a secret:
+`*secret*` also names `secrets.py` and `*.key` also names a Keynote file.
+
+```js
+import { credentialPathMatcher } from "agent-sanitizer/credential-files-matcher";
+const holds = credentialPathMatcher(); // build once
+holds("~/.pgpass"); // true
+holds("/home/u/.config/gh/hosts.yml"); // true
+holds("/home/u/project/config.json"); // false
+```
+
+```python
+from agent_sanitizer.secrets import credential_path_matcher
+holds = credential_path_matcher()
+```
+
+The lists are published as data too: `agent-sanitizer/credential-files` in
+JavaScript, and `credential_name_globs()`, `credential_path_globs()` and
+`credential_directories()` in Python.
 
 ## Limits
 
