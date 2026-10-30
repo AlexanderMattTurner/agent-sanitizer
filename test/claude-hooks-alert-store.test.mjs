@@ -12,6 +12,7 @@
  */
 import { describe, it, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import {
   chownSync,
   existsSync,
@@ -508,4 +509,46 @@ describe("an acknowledgement that cannot be recorded", () => {
     assert.equal(second.permissionDecision, undefined);
     assert.match(second.additionalContext, /still unvetted/);
   });
+});
+
+describe("a finding written where a degraded STATE_ROOT put it", () => {
+  // Each hook process resolves STATE_ROOT for itself. A writer whose check of
+  // the plugin data dir faulted resolves $TMPDIR while the gate keeps the data
+  // dir, so the gate must read both or the finding never reaches a tool call.
+  const ALERT = new URL(
+    "../claude-hooks/lib/invisible-alert.mjs",
+    import.meta.url,
+  ).href;
+  /** Run `body` in a fresh process with `env`, returning its stdout. */
+  const run = (body, env) => {
+    const res = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `const a = await import(${JSON.stringify(ALERT)}); ${body}`,
+      ],
+      { encoding: "utf8", env: { ...process.env, ...env } },
+    );
+    assert.equal(res.status, 0, res.stderr);
+    return res.stdout;
+  };
+
+  for (const session of ["sess-split", undefined])
+    it(`reaches the gate (session ${session ?? "none"})`, () => {
+      const data = mkdtempSync(join(tmpdir(), "sanitizer-alert-data-"));
+      after(() => rmSync(data, { recursive: true, force: true }));
+      const id = JSON.stringify(session ?? null);
+      run(`a.appendAlert("written under TMPDIR", ${id} ?? undefined);`, {
+        CLAUDE_PLUGIN_DATA: "",
+      });
+      const seen = run(
+        `console.log(JSON.stringify(a.invisibleCharAlert(${id} ?? undefined)));`,
+        { CLAUDE_PLUGIN_DATA: data },
+      );
+      assert.equal(JSON.parse(seen), "written under TMPDIR");
+      // The reader really did resolve the data dir, so the read above crossed
+      // the split rather than sharing a root with the writer.
+      assert.ok(existsSync(join(data, "session-state")));
+    });
 });
