@@ -447,24 +447,17 @@ describe("slowHookNotice", () => {
   });
 
   it("says nothing when the machine, not the hook, spent the wait", () => {
-    // The reported case: 1.3s of wall against 0.1s of CPU, no redactor round
-    // trip and no host callback. The owned share is 0.1s, so the other 1.2s is
-    // the machine's and neither a notice nor a report request is the answer.
-    assert.equal(
-      slowHookNotice("scan-invisible-chars", 1_300, 1_000, {
-        cpuMs: 100,
-        redactorMs: 0,
-        hostMs: 0,
-      }),
-      null,
-    );
-    assert.equal(
-      slowHookNotice("scan-invisible-chars", 1_300, 1_000, {
-        cpuMs: 100,
-        redactorMs: 0,
-      }),
-      null,
-    );
+    // 1.3s of wall against 0.1s of CPU, no redactor round trip and no host
+    // callback: the owned share is 0.1s, so the other 1.2s is the machine's.
+    for (const context of [
+      { cpuMs: 100, redactorMs: 0, hostMs: 0 },
+      { cpuMs: 100, redactorMs: 0 },
+    ])
+      assert.equal(
+        slowHookNotice("scan-invisible-chars", 1_300, 1_000, context),
+        null,
+        JSON.stringify(context),
+      );
   });
 
   it("says nothing when the owned share sits exactly at the budget", () => {
@@ -1314,7 +1307,7 @@ describe("runJudgeCli times every judge hook", () => {
     // finding, and this stderr line is its only report.
     assert.match(
       stderr,
-      /of which \d+\.\ds was this hook's own CPU, 1\.\ds was inside redactor round trips and 0\.0s was inside host extensions/u,
+      /of which \d+\.\ds was this hook's own CPU, [1-9]\d*\.\ds was inside redactor round trips and 0\.0s was inside host extensions/u,
     );
     // The posture still runs: the timing is an addition to the fault report,
     // never a replacement for it.

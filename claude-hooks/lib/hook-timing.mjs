@@ -22,8 +22,11 @@
  * redactor round trips plus host extensions — itself exceeds the budget; wall
  * time past that is the machine's, and neither a notice nor a report request is
  * the answer to it. Redactor wait counts toward that share, so a hook wedged on a
- * dead redactor socket (no CPU, all wait) is still reported. A caller that
- * supplies no attribution is gated on wall-clock alone.
+ * dead redactor socket (no CPU, all wait) is still reported. A wait on a
+ * subprocess this package spawns itself (a `git` probe, a lock) is charged to
+ * no window, so it reads as the machine's and goes unreported — the accepted
+ * cost of never blaming the sanitizer for a loaded host. A caller that supplies
+ * no attribution is gated on wall-clock alone.
  *
  * The host-extension window is what turned "blocked on something outside the
  * sanitizer" — a verdict nobody can act on — into a named callee: a composer's

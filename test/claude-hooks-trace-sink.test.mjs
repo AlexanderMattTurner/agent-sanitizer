@@ -347,9 +347,9 @@ describe("a host sink's wait is charged to the host window", () => {
 });
 
 // The other half of the same claim, and the one a wrapper that RESOLVES the
-// default sink before the binding breaks: this package's own trace write is the
-// sanitizer's own work, so charging it would blame a composer for a cost no
-// composer paid.
+// default sink before the binding breaks: this package's own trace write is no
+// composer's code, so charging it would blame a composer for a cost no composer
+// paid.
 describe("the package's own sink is never charged as a host extension", () => {
   it("hands the default back unwrapped, so nothing can charge it", () => {
     assert.equal(hookTrace(undefined), trace);
@@ -369,8 +369,8 @@ describe("the package's own sink is never charged as a host extension", () => {
       // sink and not somewhere a faulting hook stopped short of.
       assert.match(stderr, new RegExp(`"event":"${hook.event}"`));
       // Charged to the host window, that blocked write would be an owned wait
-      // past the budget and the run would report it; uncharged, it is the
-      // machine's and the run says nothing.
+      // past the budget and the run would report it; a blocked stderr pipe is
+      // the host's, uncharged, so the run says nothing.
       assert.doesNotMatch(stderr, /PERFORMANCE/);
       assert.doesNotMatch(stderr, /inside host extensions/);
     });

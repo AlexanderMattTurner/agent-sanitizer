@@ -32,15 +32,6 @@ const ENV_INVIS_RE = new RegExp(
 
 /**
  * `s` with every charset invisible removed.
- *
- * The pre-gate strips both sides and compares substrings instead of compiling
- * one regex per value with an invisible run at every gap: that pattern grows by
- * ~4 KB per character of the value, so a long configured secret (a PEM key, a
- * service-account JSON) overflows V8's regex size limit and throws on every
- * output, and even a short one costs a compile. Stripping is linear and is
- * exactly equivalent — the visible characters of the value appear contiguously
- * in the stripped text iff they appear in the original separated only by
- * invisible runs.
  * @param {string} s
  * @returns {string}
  */
@@ -52,6 +43,13 @@ const stripInvisibles = (s) => s.replace(ENV_INVIS_RE, "");
  * credential, so the pre-gate must also fire on the value itself — otherwise
  * the engine's env-bound redaction never runs. Invisible-tolerant so a
  * value with spliced Cf chars (which the daemon still redacts) trips it too.
+ *
+ * Both sides are stripped and compared as substrings, which is exactly
+ * equivalent: the value's visible characters appear contiguously in the
+ * stripped text iff they appear in the original separated only by invisibles.
+ * It is linear and independent of the value's length — a regex with an
+ * invisible class at every gap grows ~4 KB per character, and a long secret (a
+ * PEM key) overflows V8's regex size limit and throws on every output.
  * @param {string} text
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {boolean}

@@ -100,7 +100,9 @@ provisioning). A run that overruns its
 budget — one second for a hook, a minute for a one-time install — says so in the
 model's context and on stderr, naming the step and the timing and asking you to
 report it, because a slow hook is otherwise indistinguishable from a slow agent.
-A healthy run says nothing.
+A node hook counts only the time it can attribute to itself — its own CPU,
+redactor round trips and host extensions — so a run slowed by a loaded machine
+says nothing. A healthy run says nothing.
 
 Time spent waiting out an install is not charged, whichever process is running
 it. A hook's own cold-start wait was always excluded; a wait the two instruction

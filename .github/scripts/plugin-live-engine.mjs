@@ -224,9 +224,8 @@ const live = {
 //    green corpus above cannot be produced by an engine that redacts
 //    everything unconditionally. The default arm is asserted beside it because
 //    an install whose knob quietly stopped being read would otherwise look
-//    identical to one honouring it: with Layer 4 on, the default withholds
-//    what the dead daemon could not vet (and only that); with it off, the open
-//    default is intact.
+//    identical to one honouring it: with Layer 4 on, a dead daemon leaves the
+//    output in view with an UNSANITIZED warning rather than blocking the call.
 {
   const deadDaemon = {
     _AGENT_SANITIZER_REDACTOR_DAEMON:
@@ -254,26 +253,22 @@ const live = {
     closed.body.slice(0, 400),
   );
 
-  // The default posture is open, but Layer 4 is the one fail-closed layer: with
-  // the secret layer on (pinned ON by hook() above), a dead daemon means the
-  // output was never vetted for secrets, so it is withheld whatever
-  // AGENT_SANITIZER_FAIL_OPEN says, and the note names the reason.
-  const pinned = hook("PostToolUse", "sanitize-output", payload, deadDaemon);
-  const pinnedOut = JSON.parse(pinned.stdout).hookSpecificOutput;
+  // The default posture is open for Layer 4 too: a dead daemon is an
+  // availability failure, so the output stays in the model's view with the
+  // UNSANITIZED warning and the redactor failure reaches the operator's stderr.
+  const dflt = hook("PostToolUse", "sanitize-output", payload, deadDaemon);
+  const dfltOut = JSON.parse(dflt.stdout).hookSpecificOutput;
   check(
-    "a dead daemon withholds secret-shaped output under the OPEN default (Layer 4 is pinned closed)",
-    /SANITIZATION FAILED/.test(pinnedOut.updatedToolOutput?.stdout ?? "") &&
-      /AGENT_SANITIZER_SECRETS_ENABLED=1/.test(
-        pinnedOut.updatedToolOutput.stdout,
-      ) &&
-      !pinned.stdout.includes("AKIAIOSFODNN7EXAMPLE"),
-    pinned.body.slice(0, 400),
+    "a dead daemon fails OPEN under the default, with the warning attached",
+    dfltOut.updatedToolOutput === undefined &&
+      /UNSANITIZED/.test(dfltOut.additionalContext ?? "") &&
+      /secret redaction failed/.test(dflt.stderr),
+    dflt.body.slice(0, 400),
   );
 
   // Output with nothing secret-shaped never reaches the daemon (the cheap
   // pre-gate in redactSecrets answers first), so a dead daemon is no fault for
-  // it: the clean path emits nothing at all, no warning and no replacement. The
-  // pin withholds what could not be vetted, not everything.
+  // it: the clean path emits nothing at all, no warning and no replacement.
   const benign = hook(
     "PostToolUse",
     "sanitize-output",
@@ -288,10 +283,9 @@ const live = {
     benign.body.slice(0, 400),
   );
 
-  // The other branch: with the secret layer off the pin does not apply and the
-  // open default is intact (a payload that never parsed, so no daemon is
-  // involved) — the warning is attached and the output is not replaced. This is
-  // what keeps the pin from being mistaken for the knob having stopped working.
+  // With the secret layer off the open default is the same (a payload that
+  // never parsed, so no daemon is involved): the warning is attached and the
+  // output is not replaced.
   const open = hook("PostToolUse", "sanitize-output", "{not json at all", {
     ...deadDaemon,
     AGENT_SANITIZER_SECRETS_ENABLED: "",

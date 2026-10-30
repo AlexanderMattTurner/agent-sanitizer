@@ -133,11 +133,11 @@ const WAIT_DEADLINE_MS = readKnob("_AGENT_SANITIZER_REDACTOR_WAIT_MS");
 // pathological detect-secrets input, or a half-written length prefix that never
 // completes — emits none of the errno codes isRespawnable reacts to and never
 // closes, so without a deadline connectAndRequest's Promise never settles.
-// redactViaDaemon (the required, fail-closed Layer 4) would then hang until
-// Claude Code kills the PostToolUse hook at its own timeout, and a killed hook is
-// non-blocking — so the RAW, unredacted tool output is shown (the exact fail-open
-// this layer exists to prevent). The total per-connect deadline below makes a
-// stall reject, so the caller fails closed. It stays comfortably under the hook
+// redactViaDaemon would then hang until Claude Code kills the PostToolUse hook at
+// its own timeout, and a killed hook is non-blocking — so the RAW tool output is
+// shown with no warning at all. The total per-connect deadline below makes a
+// stall reject, so the caller's fault posture answers it, warning included. It
+// stays comfortably under the hook
 // timeout (two connects + the spawn wait must fit); tests shorten it via the env
 // override (read per call) or the deadlineMs parameter to exercise the path fast.
 function requestDeadlineMs() {

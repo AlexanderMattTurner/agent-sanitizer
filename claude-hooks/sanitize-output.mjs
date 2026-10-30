@@ -119,8 +119,8 @@ export const REVEAL_WITHHELD_WARNING = withheldWarning("reveal sidecar");
 // Total wall-clock budget for one hook invocation's blocking daemon calls — the
 // Layer-4 redactor — SHARED across every string leaf of the tool output. Each
 // call is handed the budget remaining at that moment; once it is spent, a further
-// secret-shaped leaf fails CLOSED (the redactor throws → the output is
-// suppressed). The per-call timeouts already bound each call, but not their SUM:
+// secret-shaped leaf throws, answered under the operator's fault posture. The
+// per-call timeouts already bound each call, but not their SUM:
 // a structured output with many secret-shaped leaves could otherwise pile up past
 // the PostToolUse hook kill — a killed hook is non-blocking, so the RAW output
 // would be shown (fail OPEN). The default sits comfortably above one legitimately
@@ -170,8 +170,8 @@ function isUntrustedIngress(toolName) {
  * Redact secrets via the long-lived redactor daemon (lib/redactor-client.mjs).
  * Returns `{text, found}` or null when nothing was redacted; throws when
  * secret-shaped text cannot be vetted, which the CLI answers under the
- * operator's fault posture. The cheap pre-gate runs first so plain output never touches the
- * daemon. A transient daemon failure fails only THIS call — no session-wide
+ * operator's fault posture. The cheap pre-gate runs first so plain output never
+ * touches the daemon. A transient daemon failure fails only THIS call — no session-wide
  * sentinel — and the client respawns a dead daemon on the next call.
  * @param {string} text
  * @param {boolean} webIngress

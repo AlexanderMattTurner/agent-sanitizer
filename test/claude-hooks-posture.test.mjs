@@ -119,10 +119,9 @@ describe("every hook's failure posture comes from one table", () => {
   });
 });
 
-describe("no hook fault blocks unless the operator opted out", () => {
-  // The knob is the ONLY thing that can close a hook. A per-hook pin let one
-  // redactor bug (a configured secret too long to compile into a regex)
-  // suppress every tool output in every session that opted into Layer 4.
+describe("no hook fault withholds output unless the operator opted out", () => {
+  // The knob is the only thing that can close a hook, Layer 4 included: a
+  // redactor fault must never turn into every tool output being suppressed.
   const SECRETS_ON = { [SECRETS_ENABLED_ENV]: "1" };
   const input = { tool_response: "hello" };
   /** @param {Record<string, string>} env */

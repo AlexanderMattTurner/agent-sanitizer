@@ -73,9 +73,8 @@ describe("hasEnvBoundSecret tolerates the full generated invisible charset", () 
 });
 
 describe("hasEnvBoundSecret with a long configured value", () => {
-  // A PEM key or service-account JSON bound to a credential-named var. Compiling
-  // the value into a regex with an invisible run at every gap overflowed V8's
-  // size limit here, and the throw failed every tool output.
+  // A PEM key or service-account JSON bound to a credential-named var: the gate
+  // runs on every output, so a value this long must neither throw nor slow it.
   const LONG = Array.from({ length: 20000 }, (_, i) =>
     String.fromCharCode(33 + ((i * 7) % 90)),
   ).join("");
@@ -113,8 +112,7 @@ describe("hasEnvBoundSecret with a value that itself holds an invisible", () => 
   });
 
   it("is linear over a long invisible run followed by a non-match", () => {
-    // The structural hazard of a run-at-every-gap regex: a literal shared with
-    // its neighbouring runs backtracks quadratically. Stripping has no runs.
+    // A long invisible run that ends in a non-match must cost linear time.
     const hostile = `abcdefgh${ZWSP.repeat(200000)}x`;
     assert.equal(gate(hostile, VALUE_WITH_INVISIBLE), false);
   });

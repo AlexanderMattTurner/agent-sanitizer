@@ -174,13 +174,13 @@ function mutate(state, text, report) {
  * Run Layer 4 (`options.redact`, when set) over the state's current text and
  * fold any finding back in. The single Layer-4 invocation site FOR THE PIPELINE
  * STATE: the first pass and the re-run after a span deletion are the same call,
- * so they share one fail-closed handling, warning prose and invariants.
+ * so they share one throw-on-fault handling, warning prose and invariants.
  *
  * One other site runs Layer 4 deliberately: {@link vetStageValue}, which vets a
  * stage value on its way out and has no `PipelineState` to fold a finding into.
  * It shares the post-redaction invariant (normalize what the redactor's own
- * output may have stranded) but NOT the fail-closed policy — it withholds the
- * one field rather than suppressing the whole output. Adding a third site means
+ * output may have stranded) but NOT the fault handling — it withholds the one
+ * field instead of throwing. Adding a third site means
  * re-deciding both halves, so route through one of these two instead.
  *
  * Throws rather than returning unvetted text: a redactor we could not run might
@@ -600,8 +600,8 @@ async function vetStageValue(text, redact, findings, label) {
     return secrets ? normalizeLoneSurrogates(secrets.text) : text;
   } catch {
     // A WARNING: the caller asked for this field and is not getting it, and the
-    // reason is an unrunnable redactor — the same fault that fails `cleaned`
-    // closed, just with a survivable remedy here.
+    // reason is an unrunnable redactor — the same fault that makes `cleaned`
+    // throw, just with a survivable remedy here.
     findings.push(warning(withheldWarning(label)));
     return undefined;
   }

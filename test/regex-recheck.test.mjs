@@ -132,6 +132,12 @@ describe("regex safety (runtime recheck)", () => {
       [...compiled.values()].some((p) => p.source.startsWith("<\\/style")),
       "the sample never reached the raw-text close-tag construction",
     );
+    assert.ok(
+      [...compiled.values()].some(
+        (p) => p.file === "claude-hooks/lib/secret-annotate.mjs",
+      ),
+      "nothing collected from claude-hooks/lib/secret-annotate.mjs",
+    );
   });
 
   it("every excluded file builds no RegExp at runtime", () => {

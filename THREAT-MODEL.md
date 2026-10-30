@@ -979,7 +979,7 @@ to hold precision. All other faults keep the open default, and
 **The open default is not enforceable against content.** Several of those
 failures are composable by whoever authored the payload — in the output hook
 alone, a nesting depth that overflows the sanitize walk and a redaction budget
-exhausted by many secret-shaped leaves, or a redactor made unavailable. (A
+exhausted by many secret-shaped leaves. (A
 **key collision** — two field names that collapse to one after Layer 1 — used
 to be on that list. It no longer
 fails the hook at all: only the colliding fields are withheld, and every sibling

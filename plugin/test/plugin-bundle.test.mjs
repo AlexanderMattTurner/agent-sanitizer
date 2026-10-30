@@ -1812,6 +1812,7 @@ test("a long env-bound secret does not fail plain output", (t) => {
     JSON.parse(leaked.stdout).hookSpecificOutput.updatedToolOutput.stdout,
     /SANITIZATION FAILED/,
   );
+  assert.match(leaked.stderr, /secret redaction failed/);
 });
 
 test("a key collision withholds only the colliding fields, in either posture", (t) => {
