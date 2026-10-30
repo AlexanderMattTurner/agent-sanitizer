@@ -8,6 +8,30 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.69.0] - 2026-10-30
+
+### Added
+- Syscall fault-injection testing under strace, running on every PR to validate behavior under syscall faults.
+- Model-based fault property testing that exercises real hooks against simulated failures.
+- Hook launcher timeout enforcement: the launcher now kills hooks that exceed their time budget and provides a verdict in their stead.
+- Comprehensive AST-based test allowlist for all sites that can block, refuse, or withhold operations.
+
+### Changed
+- Hook fault handling: scan hooks now write one stdout envelope per operation, ensuring fault notices survive slow execution.
+- Plugin configuration now loads custom secret detectors in-process, fixing redaction for install paths with spaces.
+- Script and marker path resolution now uses `node:path` and `node:url` instead of string operations for correctness.
+
+### Fixed
+- Nested plugin configuration exit no longer drops custom detectors.
+- Hooks that answer immediately no longer lose their verdict to the watchdog timeout.
+- Key-order-blind re-issue matching: fault recovery now works regardless of object key order.
+- Released drop faults preserve rehydration state; defective map writes correctly name their loss.
+- No refusal now offers an unreleasable re-issue verdict.
+- Unrestorable placeholder writes refuse once; sanitizer faults no longer block by default.
+
+### Security
+- Blocking-site categorization now derives from AST analysis instead of hand-maintained allowlists, reducing classification drift.
+
 ## [2.68.0] - 2026-10-30
 
 ### Changed
