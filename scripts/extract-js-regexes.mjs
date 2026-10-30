@@ -7,7 +7,9 @@
  *   { "patterns": [{ "file": "src/html.mjs", "line": 12, "pattern": "...",
  *                    "flags": "..." }],
  *     "constructionSites": [{ "file": "...", "line": 1, "expr": "new RegExp(…)",
- *                             "resolved": true }] }
+ *                             "resolved": true, "callTimeInputs": [] }],
+ *     "coercionSites": [{ "file": "...", "line": 1, "expr": "s.match(RE)",
+ *                         "argType": "RegExp", "isRegExp": true }] }
  *
  * `patterns` carries every regex literal plus every `RegExp(…)` construction
  * whose pattern and flags this file resolves to static text.
@@ -17,6 +19,11 @@
  * dynamic construction site a red build rather than a silent hole. An inventory
  * COUNT cannot do it: an unresolved site contributes no inventory entry, so the
  * count does not move when one appears.
+ *
+ * `callTimeInputs` lists every binding through which a site's pattern can read
+ * run-time data ({@link callTimeInputs}); the guard requires none, because such
+ * a pattern is as long as that data. `coercionSites` is every string
+ * `.match`/`.matchAll`/`.search`, which compiles a non-RegExp argument.
  *
  * Resolution handles the shapes these sources actually use, and nothing more:
  * string/number/regex literals, template literals, `+` and `<<`, a same-module
@@ -38,7 +45,6 @@
  * The file arguments exist for the guard's own fixtures, which prove the
  * resolved/unresolved split is real rather than vacuous.
  */
-import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -116,12 +122,8 @@ function loadModule(abs) {
   const cached = moduleCache.get(abs);
   if (cached) return cached;
 
-  const sf = ts.createSourceFile(
-    abs,
-    readFileSync(abs, "utf8"),
-    ts.ScriptTarget.ESNext,
-    true,
-  );
+  const sf = program.getSourceFile(abs);
+  if (!sf) throw new Error(`${abs} is not in the TypeScript program`);
   /** @type {ModuleInfo} */
   const mod = {
     abs,
@@ -346,6 +348,272 @@ async function evaluateConstruction(node, mod) {
   return name ? await runtimeValue(mod, name) : null;
 }
 
+/**
+ * Globals a pattern may read: constructors and pure functions whose result
+ * depends only on their arguments. Every other ambient binding — `process`,
+ * `globalThis`, `Date`, `Intl`, a package import — can carry state from the
+ * running host, so it counts as a call-time input.
+ */
+const PURE_GLOBALS = new Set([
+  "Array",
+  "Boolean",
+  "Error",
+  "JSON",
+  "Map",
+  "Math",
+  "Number",
+  "Object",
+  "RangeError",
+  "RegExp",
+  "Set",
+  "String",
+  "TypeError",
+  "undefined",
+]);
+
+/** @param {import("typescript").Node} outer @param {import("typescript").Node} inner */
+const contains = (outer, inner) =>
+  outer.getSourceFile() === inner.getSourceFile() &&
+  outer.pos <= inner.pos &&
+  inner.end <= outer.end;
+
+/** @param {import("typescript").Node} node @returns {number} 1-based */
+const lineOf = (node) => {
+  const sf = node.getSourceFile();
+  return sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
+};
+
+/** @param {import("typescript").Node} node @returns {string} */
+const where = (node) =>
+  `${relPath(node.getSourceFile().fileName)}:${lineOf(node)}`;
+
+/** @param {import("typescript").Node} decl */
+const isModuleScope = (decl) =>
+  ts.isVariableDeclaration(decl) &&
+  ts.isVariableDeclarationList(decl.parent) &&
+  ts.isVariableStatement(decl.parent.parent) &&
+  ts.isSourceFile(decl.parent.parent.parent);
+
+/** A module-scope variable, function or class in a source (not .d.ts) file.
+ * @param {import("typescript").Declaration} decl */
+const isModuleBinding = (decl) =>
+  !decl.getSourceFile().isDeclarationFile &&
+  (isModuleScope(decl) ||
+    ((ts.isFunctionDeclaration(decl) || ts.isClassDeclaration(decl)) &&
+      ts.isSourceFile(decl.parent)));
+
+/** A declaration the walk reaches through its owner instead: an object
+ * literal's property, a class member, a JSDoc type.
+ * @param {import("typescript").Declaration} decl */
+const isMemberDeclaration = (decl) =>
+  ts.isPropertyAssignment(decl) ||
+  ts.isShorthandPropertyAssignment(decl) ||
+  ts.isPropertySignature(decl) ||
+  ts.isPropertyDeclaration(decl) ||
+  ts.isMethodDeclaration(decl) ||
+  ts.isGetAccessorDeclaration(decl) ||
+  ts.isSetAccessorDeclaration(decl) ||
+  ts.isJSDocPropertyLikeTag(decl) ||
+  ts.isTypeAliasDeclaration(decl) ||
+  ts.isJSDocTypedefTag(decl);
+
+/**
+ * Every binding through which `site`'s pattern can read data that exists only
+ * while the code runs, as `"<kind> <name> at <file>:<line>"`.
+ *
+ * The walk starts at the construction's arguments and follows each binding
+ * they read to the code that produces its value: a module-scope `const`'s
+ * initializer, a function's whole body, and a module-scope `let`/`var`'s
+ * initializer plus every assignment to it. Resolution is TypeScript's own
+ * checker, so scopes, shadowing and imports are the language's, not a guess.
+ * A binding counts as a call-time input when it is:
+ *
+ * - a parameter or local of a function enclosing the code being walked — the
+ *   caller's argument, the tool output being scanned, a prompt;
+ * - an ambient global outside {@link PURE_GLOBALS} or a package import —
+ *   `process.env`, host state, code this walk cannot see into;
+ * - `this`, `arguments`, a dynamic `import()`, or any declaration shape the
+ *   walk has no rule for, so an unknown fails closed.
+ *
+ * Mutation through a property (`CONFIG.x = v`) is not traced: the walk follows
+ * bindings, not object contents.
+ *
+ * @param {import("typescript").NewExpression | import("typescript").CallExpression} site
+ * @returns {string[]}
+ */
+function callTimeInputs(site) {
+  /** @type {Set<string>} */
+  const inputs = new Set();
+  /** @type {Set<import("typescript").Node>} */
+  const walked = new Set();
+
+  /** @param {import("typescript").Node} root */
+  const walk = (root) => {
+    if (walked.has(root)) return;
+    walked.add(root);
+    /** @param {import("typescript").Node} node */
+    const visit = (node) => {
+      if (node.kind === ts.SyntaxKind.ThisKeyword)
+        inputs.add(`this at ${where(node)}`);
+      else if (
+        ts.isCallExpression(node) &&
+        node.expression.kind === ts.SyntaxKind.ImportKeyword
+      )
+        inputs.add(`dynamic-import at ${where(node)}`);
+      else if (ts.isIdentifier(node)) reference(node, root);
+      ts.forEachChild(node, visit);
+    };
+    visit(root);
+  };
+
+  /** @param {import("typescript").Identifier} id @param {import("typescript").Node} root */
+  const reference = (id, root) => {
+    const parent = id.parent;
+    // `import.meta` / `new.target`, and a statement label: not bindings.
+    if (
+      ts.isMetaProperty(parent) ||
+      ts.isLabeledStatement(parent) ||
+      ts.isBreakOrContinueStatement(parent)
+    )
+      return;
+    const isPropertyName =
+      (ts.isPropertyAccessExpression(parent) && parent.name === id) ||
+      (ts.isPropertyAssignment(parent) && parent.name === id) ||
+      (ts.isBindingElement(parent) && parent.propertyName === id) ||
+      ((ts.isMethodDeclaration(parent) || ts.isPropertyDeclaration(parent)) &&
+        parent.name === id);
+    const symbol = ts.isShorthandPropertyAssignment(parent)
+      ? checker.getShorthandAssignmentValueSymbol(parent)
+      : checker.getSymbolAtLocation(id);
+    const decl = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    // A property name is read through its object, which the walk already
+    // follows — except a namespace import's member, which is a binding.
+    if (isPropertyName && !(decl && isModuleBinding(decl))) return;
+    if (!symbol) {
+      inputs.add(`unbound ${id.text} at ${where(id)}`);
+      return;
+    }
+    if (decl && /** @type {any} */ (decl).name === id) return;
+    binding(symbol, id, root);
+  };
+
+  /**
+   * @param {import("typescript").Symbol} symbol
+   * @param {import("typescript").Identifier} id
+   * @param {import("typescript").Node} root
+   */
+  const binding = (symbol, id, root) => {
+    const name = symbol.name;
+    if (symbol.flags & ts.SymbolFlags.Alias) {
+      const target = checker.getAliasedSymbol(symbol);
+      const targetDecl = target.valueDeclaration ?? target.declarations?.[0];
+      if (targetDecl && !targetDecl.getSourceFile().isDeclarationFile)
+        binding(target, id, root);
+      else inputs.add(`import ${name} at ${where(id)}`);
+      return;
+    }
+    const decl = symbol.valueDeclaration ?? symbol.declarations?.[0];
+    if (!decl) {
+      inputs.add(`undeclared ${name} at ${where(id)}`);
+      return;
+    }
+    if (decl.getSourceFile().isDeclarationFile) {
+      if (!PURE_GLOBALS.has(name)) inputs.add(`global ${name} at ${where(id)}`);
+      return;
+    }
+    // A JSON module or a namespace import (each member is followed as it is
+    // read), or an object member (reached through the object that owns it).
+    if (ts.isSourceFile(decl) || isMemberDeclaration(decl)) return;
+    if (contains(root, decl)) return;
+    if (ts.isFunctionLike(decl) || ts.isClassLike(decl)) {
+      walk(decl);
+      return;
+    }
+    const variable = ts.isBindingElement(decl)
+      ? ts.walkUpBindingElementsAndPatterns(decl)
+      : decl;
+    if (ts.isParameter(variable)) {
+      inputs.add(`parameter ${name} at ${where(id)}`);
+      return;
+    }
+    if (!ts.isVariableDeclaration(variable)) {
+      inputs.add(
+        `${ts.SyntaxKind[decl.kind]} ${name} at ${where(id)} (no rule)`,
+      );
+      return;
+    }
+    if (!isModuleScope(variable)) {
+      inputs.add(`local ${name} at ${where(id)}`);
+      return;
+    }
+    walk(variable);
+    if (variable.parent.flags & ts.NodeFlags.Const) return;
+    for (const assignment of assignmentsTo(symbol, variable.getSourceFile()))
+      walk(assignment.right);
+  };
+
+  for (const arg of site.arguments ?? []) walk(arg);
+  return [...inputs].sort();
+}
+
+/**
+ * Every `x = …` / `x ??= …` (any assignment operator) whose target is `symbol`.
+ * @param {import("typescript").Symbol} symbol
+ * @param {import("typescript").SourceFile} sf
+ * @returns {import("typescript").BinaryExpression[]}
+ */
+function assignmentsTo(symbol, sf) {
+  /** @type {import("typescript").BinaryExpression[]} */
+  const found = [];
+  /** @param {import("typescript").Node} node */
+  const visit = (node) => {
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
+      ts.isIdentifier(node.left) &&
+      checker.getSymbolAtLocation(node.left) === symbol
+    )
+      found.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return found;
+}
+
+/** The string methods that compile a non-RegExp argument with `new RegExp`. */
+const COERCING_METHODS = new Set(["match", "matchAll", "search"]);
+
+/**
+ * A `.match`/`.matchAll`/`.search` call on a string (or an untyped receiver),
+ * with whether its argument is typed as a RegExp; null for any other node.
+ * @param {import("typescript").Node} node
+ */
+function coercionSite(node) {
+  if (
+    !ts.isCallExpression(node) ||
+    !ts.isPropertyAccessExpression(node.expression) ||
+    !COERCING_METHODS.has(node.expression.name.text) ||
+    node.arguments.length === 0
+  )
+    return null;
+  const receiver = checker.getNonNullableType(
+    checker.getTypeAtLocation(node.expression.expression),
+  );
+  const stringy = (/** @type {import("typescript").Type} */ t) =>
+    Boolean(t.flags & (ts.TypeFlags.StringLike | ts.TypeFlags.Any));
+  if (!(receiver.isUnion() ? receiver.types.every(stringy) : stringy(receiver)))
+    return null;
+  const argType = checker.getTypeAtLocation(node.arguments[0]);
+  return {
+    file: relPath(node.getSourceFile().fileName),
+    line: lineOf(node),
+    expr: node.getText().replace(/\s+/g, " "),
+    argType: checker.typeToString(argType),
+    isRegExp: argType.getSymbol()?.getName() === "RegExp",
+  };
+}
+
 // Every .mjs this package SHIPS, from the one place that answers that question
 // (scripts/shipped-sources.mjs, which resolves package.json's `files`). Shipped
 // is exactly the scope that matters here: those modules are inlined into the
@@ -363,10 +631,36 @@ const analyzed = args.length
   ? args.map((arg) => (isAbsolute(arg) ? arg : resolve(arg)))
   : shippedSources(repoRoot).map((rel) => join(repoRoot, rel));
 
+// One program over the analyzed files and everything they import, under the
+// repo's own tsconfig.json, so the checker resolves a binding across modules
+// exactly as `pnpm check` does. JSON resolution is added because a JSON import
+// is shipped data the call-time walk must see as such.
+const tsconfig = ts.readConfigFile(
+  join(repoRoot, "tsconfig.json"),
+  ts.sys.readFile,
+);
+if (tsconfig.error)
+  throw new Error(
+    ts.flattenDiagnosticMessageText(tsconfig.error.messageText, "\n"),
+  );
+const { options, errors } = ts.convertCompilerOptionsFromJson(
+  tsconfig.config.compilerOptions,
+  repoRoot,
+);
+if (errors.length)
+  throw new Error(ts.flattenDiagnosticMessageText(errors[0].messageText, "\n"));
+const program = ts.createProgram(analyzed, {
+  ...options,
+  resolveJsonModule: true,
+});
+const checker = program.getTypeChecker();
+
 /** @type {{file: string, line: number, pattern: string, flags: string}[]} */
 const found = [];
-/** @type {{file: string, line: number, expr: string, resolved: boolean}[]} */
+/** @type {{file: string, line: number, expr: string, resolved: boolean, callTimeInputs: string[]}[]} */
 const constructionSites = [];
+/** @type {NonNullable<ReturnType<typeof coercionSite>>[]} */
+const coercionSites = [];
 /** @type {{node: import("typescript").NewExpression, mod: ModuleInfo}[]} */
 const pending = [];
 
@@ -375,15 +669,11 @@ for (const abs of analyzed) {
 
   /** @param {import("typescript").Node} node */
   const visit = (node) => {
+    const coercion = coercionSite(node);
+    if (coercion) coercionSites.push(coercion);
     if (ts.isRegularExpressionLiteral(node)) {
       const { source, flags } = splitRegexLiteral(node.text);
-      found.push({
-        file: mod.rel,
-        line:
-          mod.sf.getLineAndCharacterOfPosition(node.getStart(mod.sf)).line + 1,
-        pattern: source,
-        flags,
-      });
+      found.push({ file: mod.rel, line: lineOf(node), pattern: source, flags });
     } else if (isRegExpConstruction(node)) {
       pending.push({
         node: /** @type {import("typescript").NewExpression} */ (node),
@@ -397,13 +687,13 @@ for (const abs of analyzed) {
 
 for (const { node, mod } of pending) {
   const value = await evaluateConstruction(node, mod);
-  const line =
-    mod.sf.getLineAndCharacterOfPosition(node.getStart(mod.sf)).line + 1;
+  const line = lineOf(node);
   constructionSites.push({
     file: mod.rel,
     line,
     expr: node.getText(mod.sf).replace(/\s+/g, " "),
     resolved: value !== null,
+    callTimeInputs: callTimeInputs(node),
   });
   if (value?.kind === "regex")
     found.push({
@@ -415,5 +705,9 @@ for (const { node, mod } of pending) {
 }
 
 process.stdout.write(
-  JSON.stringify({ patterns: found, constructionSites }, null, 2) + "\n",
+  JSON.stringify(
+    { patterns: found, constructionSites, coercionSites },
+    null,
+    2,
+  ) + "\n",
 );
