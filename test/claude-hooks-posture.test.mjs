@@ -119,9 +119,11 @@ describe("every hook's failure posture comes from one table", () => {
   });
 });
 
-describe("Layer 4 withholds what it could not vet, under either posture", () => {
+describe("no hook fault withholds output unless the operator opted out", () => {
+  // The knob is the only thing that can close a hook, Layer 4 included: a
+  // redactor fault must never turn into every tool output being suppressed.
   const SECRETS_ON = { [SECRETS_ENABLED_ENV]: "1" };
-  const input = { tool_response: "aws_key=AKIAIOSFODNN7EXAMPLE" };
+  const input = { tool_response: "hello" };
   /** @param {Record<string, string>} env */
   const emittedUnder = (env) => {
     const emitted = [];
@@ -135,53 +137,49 @@ describe("Layer 4 withholds what it could not vet, under either posture", () => 
     return emitted;
   };
 
-  it("pins the output hook closed, and no other hook", () => {
-    const postures = Object.fromEntries(
-      FAULT_POLICY_HOOKS.map((hook) => [
-        hook,
-        hookFaultOutcome(hook, FAULT, { env: SECRETS_ON }).posture,
-      ]),
-    );
-    assert.deepEqual(postures, {
-      "plugin-hooks": "open",
-      "pretooluse-sanitize": "open",
-      "sanitize-output": "closed",
-      "sanitize-user-prompt": "open",
-      "scan-invisible-chars": "open",
-      "scan-loaded-instructions": "open",
-    });
-  });
-
-  it("refuses a policy that leaves either posture decision implicit", () => {
-    const complete = faultPolicy("sanitize-output");
-    for (const arm of ["alwaysClosed", "closed"])
-      assert.throws(
-        () =>
-          registerFaultPolicy("sanitize-output", {
-            ...complete,
-            [arm]: undefined,
-          }),
-        new RegExp(`declares no \`${arm}\``, "u"),
+  it("leaves every hook open by default, with or without Layer 4", () => {
+    for (const env of [{}, SECRETS_ON]) {
+      const postures = Object.fromEntries(
+        FAULT_POLICY_HOOKS.map((hook) => [
+          hook,
+          hookFaultOutcome(hook, FAULT, { env }).posture,
+        ]),
       );
-    // The refused registrations left the real one in place.
-    assert.equal(faultPolicy("sanitize-output"), complete);
+      assert.deepEqual(
+        postures,
+        Object.fromEntries(FAULT_POLICY_HOOKS.map((hook) => [hook, "open"])),
+        JSON.stringify(env),
+      );
+    }
   });
 
-  it("suppresses the output under the open default and says why", () => {
+  it("leaves the output in the model's view when Layer 4 is on", () => {
     const [fields] = emittedUnder(SECRETS_ON);
-    assert.match(fields.updatedToolOutput, /SANITIZATION FAILED/u);
-    assert.match(
-      fields.updatedToolOutput,
-      /AGENT_SANITIZER_SECRETS_ENABLED=1\), so output it could not vet is withheld/u,
-    );
-    assert.ok(!JSON.stringify(fields).includes("AKIAIOSFODNN7EXAMPLE"));
+    assert.equal(fields.updatedToolOutput, undefined);
+    assert.match(String(fields.additionalContext), /UNSANITIZED/u);
   });
 
-  it("adds nothing to the explicit opt-out, which was already closed", () => {
+  it("suppresses only under the explicit opt-out, Layer 4 or not", () => {
+    const closed = emittedUnder({ [FAIL_OPEN_ENV]: "0" });
+    assert.match(closed[0].updatedToolOutput, /SANITIZATION FAILED/u);
     assert.deepEqual(
       emittedUnder({ ...SECRETS_ON, [FAIL_OPEN_ENV]: "0" }),
-      emittedUnder({ [FAIL_OPEN_ENV]: "0" }),
+      closed,
     );
+  });
+
+  it("refuses a policy with no closed arm", () => {
+    const complete = faultPolicy("sanitize-output");
+    assert.throws(
+      () =>
+        registerFaultPolicy("sanitize-output", {
+          ...complete,
+          closed: undefined,
+        }),
+      /declares no `closed` arm/u,
+    );
+    // The refused registration left the real one in place.
+    assert.equal(faultPolicy("sanitize-output"), complete);
   });
 });
 

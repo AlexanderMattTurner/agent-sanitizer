@@ -17,8 +17,16 @@
  * EXTENSION it called ({@link chargeHostExtension}) — the redactor daemon and a
  * host callback's subprocess or socket peer are separate processes whose CPU this
  * one cannot see (see {@link processCpuMs}), so the call that waits for each is
- * the only measurable stand-in. The notice GATES on none of them: a hook wedged
- * on a dead redactor socket burns no CPU and is exactly the sanitizer's fault.
+ * the only measurable stand-in. A caller that supplies the CPU and redactor
+ * figures is reported only when the share its owner answers for — CPU plus
+ * redactor round trips plus host extensions — itself exceeds the budget; wall
+ * time past that is the machine's, and neither a notice nor a report request is
+ * the answer to it. Redactor wait counts toward that share, so a hook wedged on a
+ * dead redactor socket (no CPU, all wait) is still reported. A wait on a
+ * subprocess this package spawns itself (a `git` probe, a lock) is charged to
+ * no window, so it reads as the machine's and goes unreported — the accepted
+ * cost of never blaming the sanitizer for a loaded host. A caller that supplies
+ * no attribution is gated on wall-clock alone.
  *
  * The host-extension window is what turned "blocked on something outside the
  * sanitizer" — a verdict nobody can act on — into a named callee: a composer's
@@ -598,6 +606,11 @@ export function startHookTimer(now = Date.now, cpuNow = processCpuMs) {
  * The CPU, redactor and host shares overlap by the framing this side does
  * mid-round-trip and mid-callback, so they do not sum to the elapsed time; a
  * share that dominates despite the overlap is still the one to act on.
+ *
+ * Reached only for a run whose owned share already exceeds the budget
+ * ({@link slowHookNotice}), so the "none of them" verdict means the unmeasured
+ * remainder is larger than a share that is itself over budget — not that the
+ * hook's own cost was small.
  * @param {number} elapsedMs
  * @param {number} cpuMs
  * @param {number} redactorMs
@@ -646,10 +659,15 @@ function attributeWait(elapsedMs, cpuMs, redactorMs, hostMs, owner) {
  * sanitizer computing, and with `context.redactorMs` too it names the window the
  * time went into ({@link attributeWait}), including `context.hostMs`'s host
  * extensions — a caller that measured the first two but has no extensions to
- * charge reports that window as zero, which is a measurement and not a shrug. Without them the line says that it cannot
- * tell, rather than asserting an attribution nothing measured: a wall-clock
- * overrun on a loaded host is the common case, and blaming it on the sanitizer
- * sends the operator hunting a per-call cost that does not exist.
+ * charge reports that window as zero, which is a measurement and not a shrug.
+ * Such a caller is reported only when `cpuMs + redactorMs + hostMs` (an absent
+ * `hostMs` counting as 0) exceeds `thresholdMs`: a wall-clock overrun whose
+ * owned share is within the budget is the machine's and returns null, so the
+ * operator is never asked to report a cost the owner did not spend. Without the
+ * measurements the line says that it cannot tell, rather than asserting an
+ * attribution nothing measured: a wall-clock overrun on a loaded host is the
+ * common case, and blaming it on the sanitizer sends the operator hunting a
+ * per-call cost that does not exist.
  *
  * A CPU figure alone cannot pick a cause, so with only that the clause names
  * candidates and commits to none. A hook that blocks on a dead socket inside a
@@ -684,6 +702,8 @@ export function slowHookNotice(
   // number, including when it is 0.
   const hostMs =
     typeof context?.hostMs === "number" ? context.hostMs : undefined;
+  if (attributed && cpuMs + redactorMs + (hostMs ?? 0) <= thresholdMs)
+    return null;
   const owner = noticeOwner(context?.reportTo, version);
   const attribution = attributed
     ? attributeWait(elapsedMs, cpuMs, redactorMs, hostMs, owner)

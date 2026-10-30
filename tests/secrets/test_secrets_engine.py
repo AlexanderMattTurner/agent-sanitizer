@@ -2381,50 +2381,53 @@ def test_configure_plugins_then_redact_configured():
     assert found == ["AWS Access Key"]
 
 
-def test_env_value_re_not_memoized_so_no_plaintext_retention():
-    """`_env_value_re` must NOT be wrapped in functools.cache / lru_cache: such a
-    cache is keyed on the PLAINTEXT secret ``value`` and, being unbounded, would
-    retain every requester's secret forever (memory leak + secret hoarding). The
-    presence of ``cache_info``/``cache_clear`` is the tell-tale of that wrapper;
-    their ABSENCE proves distinct plaintext values are not retained across calls.
-    re.compile self-caches the compiled Pattern, so no function-level memo is
-    needed for perf and the pattern is still built correctly."""
+def _env_spans(value, text):
+    """`_env_value_spans` over the views its callers build for ``text``."""
     from agent_sanitizer.secrets.invisible import default_charset
 
-    assert not hasattr(E._env_value_re, "cache_info")
-    assert not hasattr(E._env_value_re, "cache_clear")
     charset = default_charset()
-    assert E._env_value_re("abcdef", charset).fullmatch("abcdef")
+    views = E._invisible_free_views(text, charset)
+    return E._env_value_spans(value, text, views, charset)
 
 
-def test_env_value_re_value_holding_an_invisible_is_linear():
-    """A value that itself contains an invisible must not put that literal between
-    two starred invisible classes: ``a<ZWSP>a`` built ``a[…]*<ZWSP>[…]*a``, which
-    backtracks quadratically over a long ZWSP run that ends in a non-match. The
-    cause is structural, so assert it directly instead of timing a hostile input."""
-    from agent_sanitizer.secrets.invisible import default_charset, invisible_run_pattern
-
-    charset = default_charset()
-    zwsp = "\u200b"
-    pattern = E._env_value_re(f"abc{zwsp}def", charset)
-
-    run = invisible_run_pattern(charset)
-    # Positive marker: the gaps are there to strip, so the literals check below
-    # reads the pattern's real shape.
-    assert run in pattern.pattern
-    assert pattern.pattern.replace(run, "") == "abcdef"
-
-    for text in (f"abc{zwsp}def", "abcdef", f"abc{zwsp * 3}def", "ab\u2060cdef"):
-        assert pattern.search(text), repr(text)
-    assert pattern.search("abcxdef") is None
+def test_env_value_spans_retain_no_plaintext():
+    """`_env_value_spans` must NOT be wrapped in functools.cache / lru_cache: such
+    a cache is keyed on the PLAINTEXT secret ``value`` and, being unbounded, would
+    retain every requester's secret forever. ``cache_info``/``cache_clear`` are
+    the tell-tale of that wrapper. Positive marker: the function still matches."""
+    assert not hasattr(E._env_value_spans, "cache_info")
+    assert not hasattr(E._env_value_spans, "cache_clear")
+    assert _env_spans("abcdef", "abcdef") == [(0, 6)]
 
 
-def test_env_value_re_value_of_only_invisibles_is_not_match_everything():
-    from agent_sanitizer.secrets.invisible import default_charset
+@pytest.mark.parametrize(
+    "text, spans",
+    [
+        ("abc\u200bdef", [(0, 7)]),
+        ("abcdef", [(0, 6)]),
+        ("abc\u200b\u200b\u200bdef", [(0, 9)]),
+        ("ab\u2060cdef", [(0, 7)]),
+        ("abcxdef", []),
+        # Invisibles at the edges stay outside the span; two hits are both found.
+        ("\u200babcdef\u200b-abcdef", [(1, 7), (9, 15)]),
+        # A value split by a terminal escape is found in the escape-stripped view.
+        ("abc\x1b[31mdef", [(0, 11)]),
+    ],
+)
+def test_env_value_spans_for_a_value_holding_an_invisible(text, spans):
+    assert _env_spans("abc\u200bdef", text) == spans
 
-    pattern = E._env_value_re("\u200b\u200b", default_charset())
-    assert pattern.search("ordinary text") is None
-    assert pattern.search("x\u200b\u200by")
+
+def test_env_value_spans_value_of_only_invisibles_is_not_match_everything():
+    assert _env_spans("\u200b\u200b", "ordinary text") == []
+    assert _env_spans("\u200b\u200b", "x\u200b\u200by") == [(1, 3)]
+
+
+def test_env_value_spans_long_value_matches():
+    """A PEM-sized value with an invisible spliced mid-way is still one span."""
+    value = "".join(chr(33 + (i * 7) % 90) for i in range(20000))
+    text = f"head {value[:9000]}\u200b{value[9000:]} tail"
+    assert _env_spans(value, text) == [(5, 5 + len(value) + 1)]
 
 
 def test_configure_plugins_exit_propagates_cache_clear_error(eng, monkeypatch):

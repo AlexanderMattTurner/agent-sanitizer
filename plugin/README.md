@@ -100,7 +100,9 @@ provisioning). A run that overruns its
 budget — one second for a hook, a minute for a one-time install — says so in the
 model's context and on stderr, naming the step and the timing and asking you to
 report it, because a slow hook is otherwise indistinguishable from a slow agent.
-A healthy run says nothing.
+A node hook counts only the time it can attribute to itself — its own CPU,
+redactor round trips and host extensions — so a run slowed by a loaded machine
+says nothing. A healthy run says nothing.
 
 Time spent waiting out an install is not charged, whichever process is running
 it. A hook's own cold-start wait was always excluded; a wait the two instruction
@@ -114,8 +116,9 @@ setup script writes such a marker points the hooks at it with
 
 When a hook cannot run, it fails **open** by default: the guarded action
 proceeds and the model is told, in `additionalContext`, that what it is reading
-was never sanitized. Two exceptions, with secrets enabled, when the hook process
-starts but its machinery fails. The output hook withholds any tool output it failed on, because that output was never checked for secrets. And a write-shaped call (Write/Edit/MultiEdit/NotebookEdit) whose
+was never sanitized — tool output a dead redactor could not check for secrets
+included. One exception, with secrets enabled, when the hook process starts but
+its machinery fails: a write-shaped call (Write/Edit/MultiEdit/NotebookEdit) whose
 input carries `[REDACTED` placeholder text **asks** even under the open
 default — with the sanitizer down, rehydration cannot run, and passing it
 through would persist the placeholder over the real secret on disk. (A missing
@@ -206,10 +209,9 @@ And one posture knob, for what happens when a hook itself fails:
 
 Unset, a missing `node`, a corrupt bundle, an uninstalled package, an
 unreachable redaction daemon or a layer that threw all let the guarded action
-proceed with the warning attached. Two exceptions, with secrets enabled, when the
+proceed with the warning attached. One exception, with secrets enabled, when the
 hook process does run at all: a placeholder-bearing write asks instead — see
-above — and the output hook withholds any tool output it failed on, since that
-output was never vetted for secrets. (A missing
+above. (A missing
 `node` or a corrupt bundle is handled by the launcher, which cannot inspect
 the payload and always warns.) Set to `0` (or `false`; every other value,
 including `1`, is the open default) they halt instead.
@@ -218,9 +220,10 @@ Worth knowing before you leave it open: some of those failures are reachable by
 whoever authored the content the hook is inspecting — colliding field names, a
 tool response nested deeply enough to overflow the sanitize walk, enough
 secret-shaped leaves to exhaust the redaction budget. Under the open posture a
-tool response that provokes one is shown to the model verbatim (with the secret
-layer on, the output hook withholds it instead). `=0` is the setting for a
-deployment where that matters more than the session staying unblocked.
+tool response that provokes one is shown to the model verbatim, with the secret
+layer on as well: a redactor that cannot run leaves the output unvetted and says
+so rather than blocking every tool call. `=0` is the setting for a deployment
+where that matters more than the session staying unblocked.
 
 What neither posture touches is a sanitizer that RAN: a prompt or tool output
 that the layers actually flagged is blocked or rewritten the same way either

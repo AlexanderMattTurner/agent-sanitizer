@@ -50,11 +50,7 @@ import { registerFaultPolicy, hookFaultOutcome } from "./lib/hook-fault.mjs";
 import { controlPlane, runJudgeCli } from "./lib/control-plane.mjs";
 import { hookTrace, TraceEvent } from "./lib/trace.mjs";
 import { hasEnvBoundSecret } from "./lib/secret-annotate.mjs";
-import {
-  digestFlaggingEnabled,
-  secretsEnabled,
-  SECRETS_ENABLED_ENV,
-} from "./lib/env-config.mjs";
+import { digestFlaggingEnabled, secretsEnabled } from "./lib/env-config.mjs";
 import {
   persistReveal,
   persistSpan,
@@ -120,16 +116,17 @@ const HOOK_NAME = "sanitize-output";
 // reaches the model-facing context. Exported so tests assert it by reference.
 export const REVEAL_WITHHELD_WARNING = withheldWarning("reveal sidecar");
 
-// Total wall-clock budget for one hook invocation's blocking daemon calls — the
-// Layer-4 redactor — SHARED across every string leaf of the tool output. Each
-// call is handed the budget remaining at that moment; once it is spent, a further
-// secret-shaped leaf fails CLOSED (the redactor throws → the output is
-// suppressed). The per-call timeouts already bound each call, but not their SUM:
-// a structured output with many secret-shaped leaves could otherwise pile up past
-// the PostToolUse hook kill — a killed hook is non-blocking, so the RAW output
-// would be shown (fail OPEN). The default sits comfortably above one legitimately
-// slow leaf (a cold redactor respawn + a full scan) yet far under the hook
-// timeout; env-tunable so tests can drive the exhausted-budget path fast.
+/**
+ * Total wall-clock budget for one hook invocation's blocking Layer-4 redactor
+ * calls, SHARED across every string leaf of the tool output. Each call gets the
+ * budget remaining at that moment; once it is spent, a further secret-shaped
+ * leaf throws, answered under the operator's fault posture. The per-call
+ * timeouts bound each call but not their SUM, and a structured output with many
+ * secret-shaped leaves could otherwise run past the PostToolUse hook kill,
+ * which shows the RAW output with no warning. The default sits above one slow
+ * leaf (a cold redactor respawn plus a full scan) and far under the hook
+ * timeout; env-tunable so tests can drive the exhausted-budget path fast.
+ */
 const SANITIZE_BUDGET_MS = readKnob("_AGENT_SANITIZER_SANITIZE_BUDGET_MS");
 
 // Web-ingress tools always get the Layer 2 HTML rewrite; local tools — Read,
@@ -172,11 +169,13 @@ function isUntrustedIngress(toolName) {
 
 /**
  * Redact secrets via the long-lived redactor daemon (lib/redactor-client.mjs).
- * Returns `{text, found}` or null when nothing was redacted; throws (fail closed)
- * when secret-shaped text cannot be vetted, which the caller turns into
- * suppression. The cheap pre-gate runs first so plain output never touches the
- * daemon. A transient daemon failure fails only THIS call — no session-wide
- * sentinel — and the client respawns a dead daemon on the next call.
+ * Returns `{text, found}` or null when nothing was redacted; throws when
+ * secret-shaped text cannot be vetted, which the CLI answers under the
+ * operator's fault posture. The cheap pre-gate runs first so plain output never
+ * touches the daemon. `text` is post-Layer-1, so it carries no terminal escape
+ * and the pre-gate needs no escape-stripped view. A transient daemon failure
+ * fails only THIS call — no session-wide sentinel — and the client respawns a
+ * dead daemon on the next call.
  * @param {string} text
  * @param {boolean} webIngress
  * @param {{remainingMs: () => number}} [deadline] shared wall-clock budget
@@ -288,9 +287,9 @@ export async function sanitizeText(
     // Layer 4 — OPT-IN (`secretsOn`): with the knob unset the seam gets no
     // redact callback at all, so plain output never spawns the daemon and no
     // placeholder ever enters the model's view. When it runs, the seam rethrows
-    // a redactor throw wrapped, and this hook's fault policy suppresses the
-    // output under either posture (alwaysClosed). Surface the failure to the
-    // operator's terminal here first: the suppression note rides in what only
+    // a redactor throw wrapped, and this hook's fault policy answers it under
+    // the operator's AGENT_SANITIZER_FAIL_OPEN posture. Surface the failure to
+    // the operator's terminal here first: the fault note rides in what only
     // the model sees, so a degraded redactor would otherwise be invisible to
     // the human.
     redact: !secretsOn
@@ -579,7 +578,7 @@ function failClosedParts(
  * fail-OPEN by default — a warning context and NO `updatedToolOutput`, leaving
  * the original tool output in the model's view — or the fail-closed
  * suppression of {@link emitFailClosed} when the caller set
- * AGENT_SANITIZER_FAIL_OPEN=0, or opted into Layer 4 (see the policy below).
+ * AGENT_SANITIZER_FAIL_OPEN=0.
  *
  * This is the hook where the two postures diverge the most, so state the open
  * one plainly: several of these layers throw on inputs an attacker composes (a
@@ -625,29 +624,17 @@ function suppressionMessage(cause) {
   return `[SANITIZATION FAILED — original output suppressed for safety. Hook error: ${cause}]`;
 }
 
-/** Why an open knob still suppressed: the secret layer's own guarantee. */
-const SECRETS_PIN_NOTE =
-  ` Secret redaction is on (${SECRETS_ENABLED_ENV}=1), so output it could ` +
-  "not vet is withheld under either AGENT_SANITIZER_FAIL_OPEN posture.";
-
 // This hook's entry in the one posture table (lib/hook-fault.mjs). OPEN is the
 // shared default (a warning context, the original output left in the model's
 // view); CLOSED replaces every string leaf of the output with the placeholder.
-// With Layer 4 opted in, a fault here means the output was never vetted for
-// secrets — a dead daemon, a spent budget, a walk that overflowed before the
-// redactor ran — so this pin is what keeps the open default from handing an
-// unredacted credential to the model.
+// Layer 4 follows the same knob: a redactor that cannot run (a dead daemon, a
+// spent budget) leaves the output unvetted and says so, rather than blocking
+// every tool call on an availability failure.
 registerFaultPolicy(HOOK_NAME, {
   event: HookEvent.POST_TOOL_USE,
   guarded: "tool output",
-  alwaysClosed: secretsEnabled,
   closed: (ctx) =>
-    failClosedParts(
-      ctx.input,
-      suppressionMessage(ctx.message) +
-        (ctx.pinnedClosed ? SECRETS_PIN_NOTE : ""),
-      ctx.remedy,
-    ),
+    failClosedParts(ctx.input, suppressionMessage(ctx.message), ctx.remedy),
 });
 
 /**

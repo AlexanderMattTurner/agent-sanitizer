@@ -125,8 +125,8 @@ describe("sanitizeText Layer 4 exact warning/error text", () => {
     ]);
   });
 
-  it("fail-closed error carries 'Failing closed' text AND the original cause", async () => {
-    // kills StringLiteral src/output.mjs:375 ("Failing closed … suppressed." -> "")
+  it("redactor-fault error carries the not-vetted text AND the original cause", async () => {
+    // kills StringLiteral src/output.mjs:375 ("This text was not vetted …" -> "")
     // and ObjectLiteral src/output.mjs:376 ({ cause: l4err } -> {}).
     const redact = () => {
       throw new Error("engine down");
@@ -134,7 +134,7 @@ describe("sanitizeText Layer 4 exact warning/error text", () => {
     await assert.rejects(
       () => sanitizeText("dirty", { redact }),
       (err) => {
-        assert.match(err.message, /Failing closed — tool output suppressed\./);
+        assert.match(err.message, /This text was not vetted for secrets\./);
         assert.ok(err.cause instanceof Error);
         assert.equal(err.cause.message, "engine down");
         return true;
@@ -161,8 +161,8 @@ describe("sanitizeText Layer 5 re-vet exact warning/error text", () => {
     ]);
   });
 
-  it("re-vet fail-closed error carries 'Failing closed' text AND the re-scan cause", async () => {
-    // kills StringLiteral src/output.mjs:142 ("Failing closed … suppressed." -> "")
+  it("re-vet redactor-fault error carries the not-vetted text AND the re-scan cause", async () => {
+    // kills StringLiteral src/output.mjs:142 ("This text was not vetted …" -> "")
     // and ObjectLiteral src/output.mjs:143 ({ cause: l4err } -> {}).
     let call = 0;
     const flakyRedact = () => {
@@ -177,7 +177,7 @@ describe("sanitizeText Layer 5 re-vet exact warning/error text", () => {
           filterInjection: () => ({ removeSpans: ["BAD"] }),
         }),
       (err) => {
-        assert.match(err.message, /Failing closed — tool output suppressed\./);
+        assert.match(err.message, /This text was not vetted for secrets\./);
         assert.ok(err.cause instanceof Error);
         assert.equal(err.cause.message, "engine down on re-scan");
         return true;

@@ -15,7 +15,7 @@
  * esbuild inlines them into the plugin bundle (which ships with no config
  * directory beside it) and Node resolves them natively from the package when the
  * hooks run from source. Their VALIDATION stays lazy — a malformed credential
- * vocabulary throws on first use, inside the consuming hook's fail-closed catch,
+ * vocabulary throws on first use, inside the consuming hook's fault catch,
  * rather than at module load where a throw would abort before that catch installs
  * and let the harness pass the tool output through UNSANITIZED (fail OPEN).
  */
@@ -72,7 +72,7 @@ export function configureEnvConfigSource(source) {
 /**
  * The stored host source with its shape validated, or null when unconfigured.
  * Shape errors — a non-object source, a key this seam does not read — throw
- * HERE, on first use inside the consuming hook's fail-closed catch, never at
+ * HERE, on first use inside the consuming hook's fault catch, never at
  * configure time: a top-level throw in a bundle entry would kill the hook
  * before that catch installs (fail OPEN), and silently ignoring the problem
  * is worse — a typo'd `minSecretLength: 32` must not leave the helpers

@@ -321,7 +321,7 @@ const PUBLISHED_EXPORTS = {
     "spanPath",
     "sweepStaleReveals",
   ],
-  "lib/secret-annotate": ["envValueRegex", "hasEnvBoundSecret"],
+  "lib/secret-annotate": ["hasEnvBoundSecret"],
   "lib/hook-timing": [
     "CONCURRENT_PROVISION_CEILING_MS",
     "SLOW_HOOK_THRESHOLD_MS",
