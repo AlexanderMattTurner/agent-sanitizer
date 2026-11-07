@@ -31,7 +31,7 @@ minimumReleaseAge: 4320
 # exempts every future version forever. tests/test_minimum_release_age.py fails
 # on either, and on any package outside the first-party set it names.
 minimumReleaseAgeExclude:
-  - agent-control-plane-core@0.11.2
+  - agent-control-plane-core@0.12.0
 
 # Transitive dev dependencies whose direct parent still resolves a version an
 # advisory covers. Each entry raises the floor to the advisory's own patched
@@ -48,3 +48,5 @@ overrides:
   # GHSA-q8mj-m7cp-5q26 — remotely triggerable denial of service in qs.stringify.
   # Via @stryker-mutator/core.
   qs@>=6.11.1 <=6.15.1: "^6.15.2"
+
+trustPolicy: no-downgrade
