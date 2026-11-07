@@ -1317,7 +1317,7 @@ function renderEscalated(adapter, verdict, event, options = {}) {
 }
 var CONTROL_PLANE_SCHEMA, SCHEMA_VERSION, EventKind, EVENT_KIND_VALUES, Decision, MODELED_TOOL_INPUT_KEYS, MODELED_TOOLS, MODELED_TOOL_SET, TOOL_ALIASES, IntegrationMode, CallClass, CALL_CLASSES, CoverageStatus, COVERAGE_STATUS_VALUES, GATEABLE_KINDS, VERDICT_CONTENT_FIELDS, UNRENDERED_ON_UNKNOWN, VETO_IMPOSSIBLE, STANDARD_META_FIELDS, DEFAULT_DENY_REASON, BLOCK_TRANSPORT;
 var init_control_plane = __esm({
-  "node_modules/.pnpm/agent-control-plane-core@0.11.2/node_modules/agent-control-plane-core/src/control-plane.mjs"() {
+  "node_modules/.pnpm/agent-control-plane-core@0.12.0/node_modules/agent-control-plane-core/src/control-plane.mjs"() {
     CONTROL_PLANE_SCHEMA = "control-plane/v1";
     SCHEMA_VERSION = 1;
     EventKind = Object.freeze({
@@ -1526,7 +1526,7 @@ function nonGatingBody(hookEventName, kind2, vd) {
 }
 var AGENT, INTEGRATION_MODE, COVERAGE, GATED_EVENTS, CONTEXT_ONLY, UNRENDERED_FIELDS, NATIVE_ASK_TIER, HookEvent2, NATIVE_TO_KIND, KIND_TO_NATIVE, NATIVE_EVENT_FOR, CONSUMED, claudeAdapter;
 var init_claude = __esm({
-  "node_modules/.pnpm/agent-control-plane-core@0.11.2/node_modules/agent-control-plane-core/src/adapters/claude.mjs"() {
+  "node_modules/.pnpm/agent-control-plane-core@0.12.0/node_modules/agent-control-plane-core/src/adapters/claude.mjs"() {
     init_control_plane();
     AGENT = "claude";
     INTEGRATION_MODE = IntegrationMode.EXTERNAL_HOOK;

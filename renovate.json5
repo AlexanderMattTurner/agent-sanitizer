@@ -38,6 +38,15 @@
       automerge: true,
     },
     {
+      // The core peer RANGE is the compatibility contract consumers resolve
+      // against; `rangeStrategy: "pin"` would collapse it to one version and
+      // re-couple every core release to a sanitizer release. The exact
+      // devDependencies pin is still bumped by the group rule above.
+      matchPackageNames: ["agent-control-plane-core"],
+      matchDepTypes: ["peerDependencies"],
+      enabled: false,
+    },
+    {
       // The bundler itself: its output is the shipped bundle, so a version bump
       // goes through the same required checks as an engine bump.
       matchPackageNames: ["esbuild"],

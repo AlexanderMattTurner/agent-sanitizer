@@ -68,9 +68,9 @@ const BUILDS = ["tsconfig.build.json", "tsconfig.build-hooks.json"];
 const FIXTURES = ["consumer.mts", "hooks-consumer.mts"];
 
 // What a real install of this package resolves alongside it, and nothing more:
-// agent-control-plane-core is a declared dependency (the hooks' judge signatures
-// are typed by its ToolCallEvent/Verdict), and @types/node backs the `node:*`
-// references the declarations carry. Linking exactly these is what makes the
+// agent-control-plane-core is a declared peer dependency (the hooks' judge
+// signatures are typed by its ToolCallEvent/Verdict), and @types/node backs the
+// `node:*` references the declarations carry. Linking exactly these is what makes the
 // no-skipLibCheck run meaningful — anything else a declaration reaches for is a
 // missing dependency, and reds.
 const LINKED_DEPS = ["agent-control-plane-core", "@types/node"];
