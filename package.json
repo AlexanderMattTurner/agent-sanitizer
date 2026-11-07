@@ -3,6 +3,7 @@
   "version": "1.0.1",
   "description": "Defend an agent against hidden-content injection: strip payload-capable invisible Unicode and ANSI, splice out human-invisible HTML, and flag data-exfil URLs in untrusted text before any model sees it.",
   "type": "module",
+  "types": "./dist/index.d.ts",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/AlexanderMattTurner/agent-sanitizer.git"
