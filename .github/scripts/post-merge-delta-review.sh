@@ -15,8 +15,8 @@
 # Advisory only: this posts/patches a comment, never a REQUEST_CHANGES review, so
 # a finding never hard-blocks the merge (a human decides).
 #
-# Runs on every push where the prepare step SUCCEEDED (not only when there were
-# deltas), so the review block stays truthful across transitions:
+# Runs once the reviewer job finished on the PR's current head (not only when
+# there were deltas), so the review block stays truthful across transitions:
 #   - merge-review.md present → the model's findings (or its clean verdict);
 #   - merge-review.md absent  → the current head has no hand-authored merge
 #     deltas; the block says so, so a concern about a since-removed merge stops
