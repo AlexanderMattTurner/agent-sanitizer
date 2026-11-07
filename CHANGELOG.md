@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.70.0] - 2026-11-07
+
+### Changed
+
+- **BREAKING:** `agent-control-plane-core` is now a peer dependency (>=0.11.2 <1.0.0) instead of a direct dependency. Projects must explicitly install this package to use this package.
+
 ## [2.69.1] - 2026-10-30
 
 ### Fixed
