@@ -33,6 +33,12 @@ minimumReleaseAge: 4320
 minimumReleaseAgeExclude:
   - agent-control-plane-core@0.12.0
 
+# Refuse a version whose trust evidence (npm trusted publisher, provenance) is
+# weaker than an earlier release of the same package: a takeover usually
+# publishes from a stolen token, without the release workflow's provenance. A
+# lockfile entry it flags is refreshed to a version that passes, never excluded.
+trustPolicy: no-downgrade
+
 # Transitive dev dependencies whose direct parent still resolves a version an
 # advisory covers. Each entry raises the floor to the advisory's own patched
 # version and no further, so the parent keeps choosing the version it wants as
@@ -48,5 +54,3 @@ overrides:
   # GHSA-q8mj-m7cp-5q26 — remotely triggerable denial of service in qs.stringify.
   # Via @stryker-mutator/core.
   qs@>=6.11.1 <=6.15.1: "^6.15.2"
-
-trustPolicy: no-downgrade
