@@ -141,6 +141,9 @@ importers:
       remark-gfm:
         specifier: 4.0.1
         version: 4.0.1
+      semver:
+        specifier: 7.8.6
+        version: 7.8.6
       smol-toml:
         specifier: ^1.7.1
         version: 1.9.0
