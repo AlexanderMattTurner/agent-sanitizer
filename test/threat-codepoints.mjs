@@ -148,6 +148,8 @@ export const OUT_OF_SCOPE = Object.freeze({
   // ── post-Layer-1 consumers: Layer 1 strips every invisible and ANSI byte
   // before these layers run, so seeding the alphabet here tests a state the
   // layer never sees. Surrogate/astral totality rides in on fc.string().
+  "credential-files.test.mjs":
+    "a path predicate over shipped glob data: it strips and decodes nothing, so no alphabet member changes its answer",
   "confusable-host-property.test.mjs":
     "Layer 3 reads link destinations in documents Layer 1 has already cleaned",
   "exfil-property.test.mjs":
