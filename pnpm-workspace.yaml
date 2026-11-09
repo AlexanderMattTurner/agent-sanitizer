@@ -3,6 +3,8 @@ allowBuilds:
   # without it node_modules/.bin/bun is a stub that exits 1.
   bun: true
   esbuild: true
+  # Only the shipped tree-sitter-bash.wasm is loaded; the native binding is unused.
+  tree-sitter-bash: false
 
 # Supply-chain cooling-off window: refuse to RESOLVE a dependency version
 # published less than 3 days ago (4320 minutes). npm account takeovers are
