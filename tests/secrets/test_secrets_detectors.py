@@ -103,8 +103,8 @@ _UNBOUNDED_WITHOUT_LOOKBEHIND = {
     "lookbehind; URL arms open on `http(s)://`, which their host run excludes",
     "GitHubClassicTokenDetector": "pattern 0: nothing follows its open-ended run, "
     "so an attempt that reaches 36 chars succeeds and consumes the whole run. "
-    "Pattern 1 (stateless ghs_ JWT): every run is capped and ends at `.`, which "
-    "no run admits, so only the header run (<=256) is re-read by a later attempt",
+    "Pattern 1 (stateless ghs_ JWT): every run is capped, so one attempt reads "
+    "at most ~18.7k chars — bounded, but over the 1024 threshold",
     "IbmCloudIamKeyDetector": "opens on a not-a-word-char lookbehind before a keyword",
     "IbmCosHmacKeyDetector": "opens on a not-a-word-char lookbehind before a keyword",
     "PypiTokenDetector": "nothing follows its open-ended run, so an attempt that "
@@ -605,11 +605,11 @@ def _b64url(data: bytes) -> str:
 # time so no contiguous token literal lands in the repo. GitHub has published
 # neither the header nor whether the app id is always present, so the cases span
 # a short header (`<APPID>_<header>` under 36 chars), the common one, and one
-# whose `kid` puts base64url `-`/`_` in the header itself.
+# whose `kid` encodes to base64url's `-` and `_` inside the header itself.
 _STATELESS_HEADERS = {
     "alg-only": b'{"alg":"RS256"}',
     "alg-typ": b'{"alg":"RS256","typ":"JWT"}',
-    "alg-kid": b'{"alg":"RS256","kid":"\xfb\xff\xbf-k"}',
+    "alg-kid": b'{"alg":"RS256","kid":"k>>>?"}',
 }
 _STATELESS_PAYLOAD = _b64url(
     json.dumps(
@@ -638,7 +638,9 @@ def test_stateless_token_fixtures_cover_the_shapes_pattern_zero_misses():
     `{36,}` body — the shape the classic pattern alone leaks whole."""
     heads = [tok.split(".")[0] for tok in _STATELESS_TOKENS.values()]
     assert all(tok.count(".") == 2 for tok in _STATELESS_TOKENS.values())
-    assert any(set("-_") & set(head.removeprefix("ghs_1234567_")) for head in heads)
+    assert any(set(_b64url(h)) >= {"-", "_"} for h in _STATELESS_HEADERS.values()), (
+        _STATELESS_HEADERS
+    )
     assert any(len(head) < len("ghs_") + 36 for head in heads)
 
 
@@ -672,7 +674,7 @@ def test_line_wrapped_stateless_installation_token_redacts_whole(token):
     assert result["found"] == ["GitHub Token"]
 
 
-_CLASSIC = "ghp_0123456789abcdefghijklmnopqrstuvwxyz"
+_CLASSIC = _sample_token("GitHub Token")
 
 
 @pytest.mark.parametrize(
@@ -699,12 +701,14 @@ def test_classic_token_does_not_absorb_a_following_suffix(text, expected):
     "text",
     [
         "ghs_this-is-a-very-long-kebab-case-identifier-name-here",
-        "foo-ghs_this-is-a-very-long-kebab-case-identifier-name",
-        "ghs_" + "-" * 40,
         "ghs_eyJ-short.x.y",
+        "ghs_eyJabcdef.abcdefgh.abc",
+        "ghs_eyJabcdef.abcdefghij",
+        "ghs_eyJ_config.load_settings.x",
     ],
 )
 def test_ghs_lookalike_without_a_jwt_body_is_not_a_secret(text):
+    """Near-misses that reach `ghs_eyJ` and then fail one segment minimum."""
     assert run_plain(text) is None, text
 
 
@@ -736,6 +740,7 @@ def _encoded_member_count(patterns: list[str]) -> int:
     ids=[t for t, _, _ in _PREFIX_FAMILIES],
 )
 def test_prefix_family_covers_every_pattern_member(secret_type, members):
+    assert set(_SHAPE_VARIANT_PATTERNS) <= {t for t, _, _ in _PREFIX_FAMILIES}
     shape_variants = _SHAPE_VARIANT_PATTERNS.get(secret_type, 0)
     assert (
         _encoded_member_count(_DETECTOR_PATTERNS[secret_type])
