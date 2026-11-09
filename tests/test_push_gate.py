@@ -173,6 +173,10 @@ def test_leaves_no_worktree_behind(tmp_path: Path) -> None:
         ("git push origin :", "cannot tell which commits"),
         ("git push origin +:", "cannot tell which commits"),
         ("git push --all origin", "cannot tell which commits"),
+        ("pushd {other} && git push", "cannot tell which repository"),
+        ("GIT_DIR={other}/.git git push", "cannot tell which repository"),
+        ("env GIT_WORK_TREE={other} git push", "cannot tell which repository"),
+        ("export GIT_DIR={other}/.git; git push", "cannot tell which repository"),
     ],
 )
 def test_denies_a_push_it_cannot_place(

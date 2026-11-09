@@ -18,6 +18,7 @@
  */
 import { createRequire } from "node:module";
 
+import { GIT_LOCATION_VARS } from "../../.hooks/lib/git-location-env.mjs";
 import { lazyImport } from "./lib-hook-io.mjs";
 
 /** git's global options that take their value as the next word. */
@@ -251,6 +252,12 @@ function shellScope(cmd) {
   return null;
 }
 
+/** Directory-stack builtins: their target depends on a stack the parse cannot see. */
+const DIRSTACK_COMMANDS = new Set(["pushd", "popd"]);
+
+/** A `NAME=value` word, as an `env` wrapper's argument. */
+const ASSIGNMENT_WORD_RE = /^([A-Za-z_]\w*)=/;
+
 /** `cd`'s own options, none of which takes a value. */
 const CD_OPTION_RE = /^-[LPe@]+$/;
 
@@ -307,8 +314,9 @@ function cdRunsBeforePush(cd, push) {
 /**
  * Every `git push` this Bash call runs, in order: `chdirs`, the directory
  * changes in force for it (each `cd` in its shell before it, then its `-C`
- * options; `~` for a bare `cd`, null where the shell computes the target or
- * the `cd` may not run), and `args`, what follows `push`. Null when the call
+ * options; `~` for a bare `cd`, null where the shell computes the target, the
+ * `cd` may not run, a `pushd`/`popd` moves it, or a git location variable is
+ * set), and `args`, what follows `push`. Null when the call
  * runs no push it can parse.
  * @param {any} payload
  * @returns {Promise<{chdirs: (string|null)[], args: (string|null)[]}[]|null>}
@@ -334,11 +342,15 @@ export async function gitPushInvocations(payload) {
             (/** @type {any} */ c) =>
               c.startIndex < cmd.startIndex &&
               enclosing.has(shellScope(c)?.id) &&
-              argvOf(c)[0] === "cd",
+              (argvOf(c)[0] === "cd" ||
+                DIRSTACK_COMMANDS.has(argvOf(c)[0] ?? "")),
           )
           .map((/** @type {any} */ c) =>
-            cdRunsBeforePush(c, cmd) ? cdTarget(argvOf(c)) : null,
+            argvOf(c)[0] === "cd" && cdRunsBeforePush(c, cmd)
+              ? cdTarget(argvOf(c))
+              : null,
           );
+        if (relocatesGit(root, cmd)) chdirs.push(null);
         for (let i = 0; i < match.options.length; i++) {
           const option = match.options[i] ?? "";
           if (option === "-C") chdirs.push(match.options[++i] ?? null);
@@ -353,6 +365,26 @@ export async function gitPushInvocations(payload) {
     },
     null,
     null,
+  );
+}
+
+/**
+ * Does the call set one of git's repository-location variables before this
+ * push ends — `GIT_DIR=x git push`, `export GIT_DIR=x; …`, `env GIT_DIR=x git
+ * push`? Such a variable beats `cwd` and `-C`, so the push's repository is not
+ * the one its directory names.
+ * @param {any} root @param {any} push @returns {boolean}
+ */
+function relocatesGit(root, push) {
+  const assigned = root
+    .descendantsOfType("variable_assignment")
+    .filter((/** @type {any} */ a) => a.startIndex < push.endIndex)
+    .map((/** @type {any} */ a) => a.childForFieldName("name")?.text);
+  const wrapped = argvOf(push).map(
+    (word) => ASSIGNMENT_WORD_RE.exec(word ?? "")?.[1],
+  );
+  return [...assigned, ...wrapped].some((name) =>
+    GIT_LOCATION_VARS.includes(name),
   );
 }
 

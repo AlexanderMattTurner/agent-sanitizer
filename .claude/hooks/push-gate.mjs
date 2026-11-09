@@ -120,7 +120,7 @@ export async function pushTargets(payload, pushes) {
   const targets = new Map();
   for (const { chdirs, args } of invocations) {
     if (chdirs.includes(null))
-      return "push-gate: cannot tell which repository this push runs in (a computed `cd`/`-C` target, `cd -`, a `cd` that may not run, or `--git-dir`/`--work-tree`); push with a literal `git -C <dir> push`.";
+      return "push-gate: cannot tell which repository this push runs in (a computed `cd`/`-C` target, `cd -`, a `cd` that may not run, `pushd`/`popd`, `--git-dir`/`--work-tree`, or a `GIT_DIR`-style variable); push with a literal `git -C <dir> push`.";
     const dir = resolve(
       cwd,
       ...chdirs.map((d) =>
