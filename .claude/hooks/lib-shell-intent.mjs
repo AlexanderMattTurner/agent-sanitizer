@@ -254,15 +254,66 @@ function shellScope(cmd) {
 /** `cd`'s own options, none of which takes a value. */
 const CD_OPTION_RE = /^-[LPe@]+$/;
 
+/** Nodes that run their children one after another, every one of them. */
+const SEQUENTIAL_TYPES = new Set([...SCOPE_TYPES, "compound_statement"]);
+
+/** Wrappers that run the one statement they hold whenever they run. */
+const PASS_THROUGH_TYPES = new Set(["redirected_statement", "negated_command"]);
+
 /**
- * The first `git push` this Bash call runs: `chdirs`, the directory changes in
- * force for it in order (each `cd` whose list encloses it, then its `-C`
- * options; `~` for a bare `cd`, null where the shell computes the target), and
- * `args`, what follows `push`. Null when the call runs no push it can parse.
- * @param {any} payload
- * @returns {Promise<{chdirs: (string|null)[], args: (string|null)[]}|null>}
+ * The operator joining a `list` node's two operands: `&&` or `||`.
+ * @param {any} list @returns {string|undefined}
  */
-export async function gitPushInvocation(payload) {
+function listOperator(list) {
+  return list.children.find((/** @type {any} */ c) => !c.isNamed)?.type;
+}
+
+/**
+ * Has `cd` certainly run by the time `push` runs? True when every `list` from
+ * `cd` up to their common ancestor joins with `&&` (reaching the push then
+ * means the `cd` ran), or when `cd` opens each list below that ancestor and the
+ * ancestor runs its parts in sequence or joins them with `&&`. Anything else —
+ * `false && cd x; git push`, `cd x || git push`, a `cd` in an `if` body (its
+ * condition counts) — is a
+ * directory change the push may or may not see.
+ * @param {any} cd @param {any} push @returns {boolean}
+ */
+function cdRunsBeforePush(cd, push) {
+  const pushAncestors = new Set();
+  for (let node = push.parent; node; node = node.parent)
+    pushAncestors.add(node.id);
+  let child = cd;
+  let parent = cd.parent;
+  let allAnd = true;
+  let opensEach = true;
+  for (
+    ;
+    parent && !pushAncestors.has(parent.id);
+    child = parent, parent = parent.parent
+  ) {
+    if (parent.type === "list") {
+      allAnd &&= listOperator(parent) === "&&";
+      opensEach &&= parent.namedChildren[0]?.id === child.id;
+    } else if (!PASS_THROUGH_TYPES.has(parent.type)) return false;
+  }
+  if (!parent) return false;
+  if (parent.type === "list")
+    return listOperator(parent) === "&&" && (allAnd || opensEach);
+  if (parent.type === "if_statement")
+    return opensEach && parent.childForFieldName("condition")?.id === child.id;
+  return opensEach && SEQUENTIAL_TYPES.has(parent.type);
+}
+
+/**
+ * Every `git push` this Bash call runs, in order: `chdirs`, the directory
+ * changes in force for it (each `cd` in its shell before it, then its `-C`
+ * options; `~` for a bare `cd`, null where the shell computes the target or
+ * the `cd` may not run), and `args`, what follows `push`. Null when the call
+ * runs no push it can parse.
+ * @param {any} payload
+ * @returns {Promise<{chdirs: (string|null)[], args: (string|null)[]}[]|null>}
+ */
+export async function gitPushInvocations(payload) {
   const command = bashCommand(payload);
   if (command === null) return null;
   return inspectParse(
@@ -271,6 +322,7 @@ export async function gitPushInvocation(payload) {
     ["push"],
     (root) => {
       const commands = root.descendantsOfType("command");
+      const invocations = [];
       for (const cmd of commands) {
         const match = argvMatch(argvOf(cmd), "git", GIT_VALUE_FLAGS, ["push"]);
         if (match === null) continue;
@@ -280,11 +332,13 @@ export async function gitPushInvocation(payload) {
         const chdirs = commands
           .filter(
             (/** @type {any} */ c) =>
-              c.startIndex < cmd.startIndex && enclosing.has(shellScope(c)?.id),
+              c.startIndex < cmd.startIndex &&
+              enclosing.has(shellScope(c)?.id) &&
+              argvOf(c)[0] === "cd",
           )
-          .map(argvOf)
-          .filter((argv) => argv[0] === "cd")
-          .map(cdTarget);
+          .map((/** @type {any} */ c) =>
+            cdRunsBeforePush(c, cmd) ? cdTarget(argvOf(c)) : null,
+          );
         for (let i = 0; i < match.options.length; i++) {
           const option = match.options[i] ?? "";
           if (option === "-C") chdirs.push(match.options[++i] ?? null);
@@ -293,9 +347,9 @@ export async function gitPushInvocation(payload) {
             if (!option.includes("=")) i++;
           } else if (GIT_VALUE_FLAGS.includes(option)) i++;
         }
-        return { chdirs, args: match.rest };
+        invocations.push({ chdirs, args: match.rest });
       }
-      return null;
+      return invocations.length > 0 ? invocations : null;
     },
     null,
     null,

@@ -32,7 +32,7 @@ import { envWithoutGitLocation } from "../../.hooks/lib/git-location-env.mjs";
 import { recordPush, statePath } from "./completion-check.mjs";
 import { denyToolCall, isMain, readStdinJson } from "./lib-hook-io.mjs";
 import {
-  gitPushInvocation,
+  gitPushInvocations,
   opensPullRequest,
   pushesCommits,
 } from "./lib-shell-intent.mjs";
@@ -56,10 +56,17 @@ const PUSH_VALUE_OPTIONS = new Set([
 /** `git push` options that make every refspec a deletion. */
 const PUSH_DELETE_OPTIONS = new Set(["-d", "--delete"]);
 
+/** `git push` options that publish refs no argument names. */
+const PUSH_MANY_REFS_OPTIONS = new Set(["--all", "--branches", "--mirror"]);
+
+/** Refspecs that push every branch matching one on the remote. */
+const MATCHING_REFSPECS = new Set([":", "+:"]);
+
 /**
  * The local revisions `git push <args>` publishes: each refspec's source, or
  * `HEAD` when it names none. Empty for a deletion-only push; null when the
- * shell computes an argument. `--all`/`--mirror` count as `HEAD`.
+ * shell computes an argument or the push names no refs (`--all`, `--mirror`,
+ * the matching refspec `:`).
  * @param {(string|null)[]} args @returns {string[]|null}
  */
 export function pushedRevisions(args) {
@@ -72,12 +79,14 @@ export function pushedRevisions(args) {
       break;
     }
     if (arg === null || !arg.startsWith("-")) positional.push(arg);
+    else if (PUSH_MANY_REFS_OPTIONS.has(arg)) return null;
     else if (PUSH_DELETE_OPTIONS.has(arg)) return [];
     else if (PUSH_VALUE_OPTIONS.has(arg)) i++;
   }
   if (positional.includes(null)) return null;
   const refspecs = /** @type {string[]} */ (positional.slice(1));
   if (refspecs.length === 0) return ["HEAD"];
+  if (refspecs.some((spec) => MATCHING_REFSPECS.has(spec))) return null;
   return refspecs
     .map((spec) => spec.replace(/^\+/, "").split(":")[0])
     .filter((source) => source !== "");
@@ -96,40 +105,46 @@ function git(dir, args) {
 }
 
 /**
- * The repository and commits this call publishes, or the reason they cannot be
- * named. A command the parser cannot read checks `HEAD` of the call's cwd.
+ * The repositories and commits this call publishes, or the reason they cannot
+ * be named. A PR create, or a command the parser cannot read, checks `HEAD` of
+ * the call's cwd.
  * @param {any} payload @param {boolean} pushes
- * @returns {Promise<{dir: string, commits: string[]}|string>}
+ * @returns {Promise<{dir: string, commit: string}[]|string>}
  */
 export async function pushTargets(payload, pushes) {
   const cwd = typeof payload?.cwd === "string" ? payload.cwd : process.cwd();
-  const invocation = pushes ? await gitPushInvocation(payload) : null;
-  const chdirs = invocation?.chdirs ?? [];
-  if (chdirs.includes(null))
-    return "push-gate: cannot tell which repository this push runs in (a computed `cd`/`-C` target, `cd -`, or `--git-dir`/`--work-tree`); push with a literal `git -C <dir> push`.";
-  const dir = resolve(
-    cwd,
-    ...chdirs.map((d) =>
-      /** @type {string} */ (d).replace(/^~(?=\/|$)/, homedir()),
-    ),
-  );
-  const revisions = pushedRevisions(invocation?.args ?? []);
-  if (revisions === null)
-    return "push-gate: cannot tell which commits this push publishes (a computed refspec); name the refspec literally.";
-  const commits = new Set();
-  for (const revision of revisions) {
-    const parsed = git(dir, [
-      "rev-parse",
-      "--verify",
-      "--quiet",
-      "--end-of-options",
-      `${revision}^{commit}`,
-    ]);
-    if (parsed.status !== 0)
-      return `push-gate: cannot resolve the pushed revision \`${revision}\` in ${dir}: ${parsed.stderr.trim() || "not a commit"}`;
-    commits.add(parsed.stdout.trim());
+  const invocations = (pushes ? await gitPushInvocations(payload) : null) ?? [
+    { chdirs: [], args: [] },
+  ];
+  /** @type {Map<string, {dir: string, commit: string}>} */
+  const targets = new Map();
+  for (const { chdirs, args } of invocations) {
+    if (chdirs.includes(null))
+      return "push-gate: cannot tell which repository this push runs in (a computed `cd`/`-C` target, `cd -`, a `cd` that may not run, or `--git-dir`/`--work-tree`); push with a literal `git -C <dir> push`.";
+    const dir = resolve(
+      cwd,
+      ...chdirs.map((d) =>
+        /** @type {string} */ (d).replace(/^~(?=\/|$)/, homedir()),
+      ),
+    );
+    const revisions = pushedRevisions(args);
+    if (revisions === null)
+      return "push-gate: cannot tell which commits this push publishes (a computed refspec, `--all`/`--mirror`, or the matching refspec `:`); name each refspec literally.";
+    for (const revision of revisions) {
+      const parsed = git(dir, [
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        "--end-of-options",
+        `${revision}^{commit}`,
+      ]);
+      if (parsed.status !== 0)
+        return `push-gate: cannot resolve the pushed revision \`${revision}\` in ${dir}: ${parsed.stderr.trim() || "not a commit"}`;
+      const commit = parsed.stdout.trim();
+      targets.set(`${dir}\0${commit}`, { dir, commit });
+    }
   }
-  return { dir, commits: [...commits] };
+  return [...targets.values()];
 }
 
 /**
@@ -158,8 +173,11 @@ export function failedChecks(repoDir, commit, script = CHECK_SCRIPT) {
       ...envWithoutGitLocation(process.env),
       CLAUDE_PROJECT_DIR: tree,
     };
-    const steps = existsSync(join(tree, "pnpm-lock.yaml"))
-      ? [["pnpm", ["install", "--frozen-lockfile", "--prefer-offline"]]]
+    const install = existsSync(join(tree, "pnpm-lock.yaml"))
+      ? ["install", "--frozen-lockfile", "--prefer-offline"]
+      : ["install", "--prefer-offline"];
+    const steps = existsSync(join(tree, "package.json"))
+      ? [["pnpm", install]]
       : [];
     steps.push(["bash", [script]]);
     for (const [file, args] of steps) {
@@ -197,8 +215,8 @@ export async function judgePush(payload, deps = {}) {
   const targets = await pushTargets(payload, pushes);
   if (typeof targets === "string") return denyToolCall(targets);
   const runChecks = deps.runChecks ?? failedChecks;
-  for (const commit of targets.commits) {
-    const failure = runChecks(targets.dir, commit);
+  for (const { dir, commit } of targets) {
+    const failure = runChecks(dir, commit);
     if (failure !== null)
       return denyToolCall(
         `${failure}\n\nFix the failing check, commit, then retry this call.`,

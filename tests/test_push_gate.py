@@ -62,6 +62,9 @@ def _judge(command: str, cwd: Path) -> dict | None:
         "git -C {pushed} push origin HEAD",
         "cd {pushed} && git push",
         "cd {pushed} && echo pushing && git push -u origin HEAD",
+        "echo pushing && cd {pushed} && git push",
+        "cd {pushed} 2>/dev/null && git push",
+        "if cd {pushed}; then git push; fi",
     ],
 )
 def test_checks_the_repository_the_push_runs_in(
@@ -109,6 +112,42 @@ def test_a_cd_in_a_subshell_does_not_move_the_push(tmp_path: Path) -> None:
     assert _judge(f"cd {broken}; git push", session) is not None
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git -C {passing} push origin HEAD && git push origin HEAD",
+        "git push origin HEAD; git -C {passing} push origin HEAD",
+    ],
+)
+def test_checks_every_push_in_the_call(tmp_path: Path, command: str) -> None:
+    session = _repo(tmp_path / "session", committed_ok=False, worktree_ok=False)
+    passing = _repo(tmp_path / "passing", committed_ok=True, worktree_ok=True)
+    verdict = _judge(command.format(passing=passing), session)
+    assert verdict is not None
+    assert str(session) in json.dumps(verdict)
+
+
+def test_installs_dependencies_without_a_lockfile(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    init_test_repo(repo)
+    (repo / "dep").mkdir()
+    (repo / "dep" / "package.json").write_text(
+        '{"name":"dep","version":"1.0.0","main":"index.js"}\n', encoding="utf-8"
+    )
+    (repo / "dep" / "index.js").write_text("", encoding="utf-8")
+    (repo / "package.json").write_text(
+        json.dumps(
+            {
+                "dependencies": {"dep": "file:./dep"},
+                "scripts": {"build": "node -e \"require('dep')\""},
+            }
+        ),
+        encoding="utf-8",
+    )
+    commit_all(repo)
+    assert _judge("git push origin HEAD", repo) is None
+
+
 def test_leaves_no_worktree_behind(tmp_path: Path) -> None:
     repo = _repo(tmp_path / "repo", committed_ok=False, worktree_ok=False)
     assert _judge("git push", repo) is not None
@@ -129,13 +168,19 @@ def test_leaves_no_worktree_behind(tmp_path: Path) -> None:
         ('cd "$TARGET" && git push', "cannot tell which repository"),
         ("git push origin $(git branch --show-current)", "cannot tell which commits"),
         ("git push origin no-such-branch", "cannot resolve the pushed revision"),
+        ("false && cd {other}; git push", "cannot tell which repository"),
+        ("cd {other} || git push", "cannot tell which repository"),
+        ("git push origin :", "cannot tell which commits"),
+        ("git push origin +:", "cannot tell which commits"),
+        ("git push --all origin", "cannot tell which commits"),
     ],
 )
 def test_denies_a_push_it_cannot_place(
     tmp_path: Path, command: str, reason: str
 ) -> None:
     repo = _repo(tmp_path / "repo", committed_ok=True, worktree_ok=True)
-    verdict = _judge(command, repo)
+    other = _repo(tmp_path / "other", committed_ok=True, worktree_ok=True)
+    verdict = _judge(command.format(other=other), repo)
     assert verdict is not None
     assert reason in json.dumps(verdict)
 
