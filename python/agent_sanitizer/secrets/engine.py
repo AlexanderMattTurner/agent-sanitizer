@@ -45,12 +45,13 @@ from .credential_names import (
     non_secret_name_segments,
 )
 from .invisible import (
+    WRAP_SEAM_RE,
     identity_map,
-    newline_offsets,
     strip_escapes_with_map,
     strip_invisible,
     strip_invisible_by_line,
     strip_invisible_with_map,
+    wrap_seam_offsets,
 )
 from .prefilter import LiteralProbe, degroup, denylist_patterns, fold
 
@@ -2075,6 +2076,74 @@ def _structural_cross_line_spans(
     return spans
 
 
+def _is_word_shaped(continuation: str) -> bool:
+    """True when a wrapped line's contribution reads as a word or identifier
+    (``HOME``, ``echo``, ``next_line_here``) rather than a token tail: a random
+    base62/base64url run of any length worth leaking carries a digit or both
+    letter cases, which a word or a SCREAMING/snake_case name does not."""
+    has_case_mix = any(c.islower() for c in continuation) and any(
+        c.isupper() for c in continuation
+    )
+    return not has_case_mix and not any(c.isdigit() for c in continuation)
+
+
+def _settle_wrapped_span(
+    text: str,
+    start: int,
+    end: int,
+    patterns: Sequence[re.Pattern[str]],
+    charset: frozenset[int],
+) -> int | None:
+    """The end of the part of ``text[start:end]`` — a cross-line candidate of a
+    detector with denylist ``patterns`` — that is a genuinely line-wrapped token,
+    or None when what remains no longer crosses a line break.
+
+    The collapsed view glues a token's last line to the next line's first word,
+    and an open-ended token run swallows it (``GH_TOKEN=ghp_…`` then
+    ``HOME=/root`` loses ``HOME``). A wrap's evidence is its geometry: at least
+    two broken lines of one width. Without it, a seam is cut when the text the
+    candidate takes past it is word-shaped (:func:`_is_word_shaped`) and either
+    the token is already complete before it or the continuation is indented; a
+    blank line is always cut, since no wrapper emits one. The cut is what keeps
+    the next line's text verbatim. A configured env value (no ``patterns``) is
+    exact, so it is never cut.
+    """
+
+    def completes(stop: int) -> bool:
+        head = strip_invisible(WRAP_SEAM_RE.sub("", text[start:stop]), charset)
+        return any(p.fullmatch(head) for p in patterns)
+
+    while True:
+        seams = [m.start() for m in WRAP_SEAM_RE.finditer(text, start, end)]
+        if not seams:
+            return None
+        if not patterns:
+            return end
+        widths = {seam - (text.rfind("\n", 0, seam) + 1) for seam in seams}
+        regular = len(seams) >= 2 and len(widths) == 1
+        ends = [WRAP_SEAM_RE.match(text, seam).end() for seam in seams]
+        taken = [text[e:stop] for e, stop in zip(ends, [*seams[1:], end], strict=True)]
+        blank = [s for s, e in zip(seams, ends, strict=True) if text[e] == "\n"]
+        indented_words = [
+            s
+            for s, e, t in zip(seams, ends, taken, strict=True)
+            if e > s + 1 and _is_word_shaped(t)
+        ]
+        if blank:
+            cut = blank[0]
+        elif regular:
+            return end
+        elif _is_word_shaped(taken[-1]) and completes(seams[-1]):
+            cut = seams[-1]
+        elif indented_words:
+            cut = indented_words[0]
+        else:
+            return end
+        if not completes(cut):
+            return None
+        end = cut
+
+
 def _redact_cross_line(
     text: str,
     found: list[str],
@@ -2092,8 +2161,9 @@ def _redact_cross_line(
     """
     if "\n" not in text:
         return text
-    offsets = newline_offsets(text)
-    collapsed = text.replace("\n", "")
+    collapsed, offsets = wrap_seam_offsets(text)
+    charset = config.resolved_charset()
+    patterns_by_type: dict[str, list[re.Pattern[str]]] = {}
 
     accepted: list[CrossLineSpan] = []
     prev_end = -1
@@ -2101,9 +2171,19 @@ def _redact_cross_line(
         _cross_line_candidate_spans(collapsed, config, deadline, offsets.seams),
         key=lambda s: (s[0], -s[1]),
     ):
-        orig_start, orig_end = offsets[cs], offsets[ce - 1] + 1
-        if "\n" not in text[orig_start:orig_end] or orig_start < prev_end:
+        orig_start = offsets[cs]
+        settled_end = _settle_wrapped_span(
+            text,
+            orig_start,
+            offsets[ce - 1] + 1,
+            patterns_by_type.setdefault(
+                found_type, denylist_patterns(get_plugins(), frozenset({found_type}))
+            ),
+            charset,
+        )
+        if settled_end is None or orig_start < prev_end:
             continue
+        orig_end = settled_end
         accepted.append(
             CrossLineSpan(orig_start, orig_end, placeholder_text, found_type)
         )

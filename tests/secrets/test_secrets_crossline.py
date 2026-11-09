@@ -5,6 +5,7 @@ Env-bound values now come from a :class:`RedactorConfig` (``provider_vars`` /
 originals.
 """
 
+import base64
 import re
 import types
 
@@ -339,7 +340,7 @@ def test_redact_text_leaves_real_split_loose_prefix_intact():
     assert found == []
 
 
-def test_cross_line_offset_map_excludes_only_newlines():
+def test_cross_line_offset_map_keeps_first_line_indentation():
     type_name = "AWS Access Key"
     needle = "\t" + AWS_KEY[:9] + "\n" + AWS_KEY[9:]
     out, found = redact(needle)
@@ -445,7 +446,9 @@ def test_cross_line_prefilter_keeps_case_insensitive_detector_case_insensitive()
     would silently stop matching an upper-cased split token, since
     `xox(?:a|b|p|o|s|r)-...` never matches "XOXB-..." without that flag."""
     value = "XOXB-123-456-ABCDEFGHIJ"
-    head, tail = value[:14], value[14:]
+    # Split before the last segment's first char, so the head alone is no Slack
+    # match and the split is unambiguous (see the word-shaped residual test).
+    head, tail = value[:13], value[13:]
     text = f"prefix {head}\n{tail} suffix"
     with E.configure_plugins():
         found: list[str] = []
@@ -575,3 +578,71 @@ def test_relax_boundary_leaves_a_pattern_with_no_lookaround_untouched():
     pattern = r"\/\/[^\s]{1,256}\/:_authToken=\s{0,256}npm_[^\s]{1,256}"
     assert E._relax_leading_boundary(pattern) == pattern
     assert E._relax_trailing_boundary(pattern) == pattern
+
+
+# ─── Wrap geometry: what a straddling match may take from the next line ──────
+
+_GH = "[REDACTED: GitHub Token]"
+_CLASSIC = "ghp_" + "Zx9qW7rT2pL5mN8bV3cX6zA1sD4fG7hJ2kLm"
+_STATELESS = (
+    "ghs_1234567_"
+    + base64.urlsafe_b64encode(b'{"alg":"RS256"}').rstrip(b"=").decode()
+    + "."
+    + base64.urlsafe_b64encode(b'{"iss":"Iv23liExampleApp","ins":1}' * 4)
+    .rstrip(b"=")
+    .decode()
+    + "."
+    + base64.urlsafe_b64encode(bytes(range(256))).rstrip(b"=").decode()
+)
+
+
+def _wrap(token: str, width: int, indent: str = "") -> str:
+    return "\n".join(indent + token[i : i + width] for i in range(0, len(token), width))
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        (f"GH_TOKEN={_CLASSIC}\nHOME=/root", f"GH_TOKEN={_GH}\nHOME=/root"),
+        (f"token: {_CLASSIC}\nother: 1", f"token: {_GH}\nother: 1"),
+        (f"t {_CLASSIC}\necho done", f"t {_GH}\necho done"),
+        (f"a\n  {_CLASSIC}\n  next_line_here", f"a\n  {_GH}\n  next_line_here"),
+        (f"{_CLASSIC[:22]}\n{_CLASSIC[22:]}\nend", f"{_GH}\nend"),
+        (f"token:\n{_wrap(_STATELESS, 76)}\nend", f"token:\n{_GH}\nend"),
+        (f"token:\n{_wrap(_STATELESS, 76)}\n\nend", f"token:\n{_GH}\n\nend"),
+        (f"{_wrap(_STATELESS, 76)}\nHOME=/root", f"{_GH}\nHOME=/root"),
+        (f"{_wrap(_STATELESS, 76, '  ')}\nnext", f"  {_GH}\nnext"),
+    ],
+)
+def test_wrapped_or_whole_token_leaves_the_next_lines_word_verbatim(text, expected):
+    """The collapsed view glues a token to the next line's first word, which an
+    open-ended token run would swallow. Accepted residual, stated here because
+    the same geometry is a real wrap: an already-complete token whose genuine
+    continuation on ONE further line is word-shaped (no digit, one letter case)
+    leaves that continuation unredacted."""
+    out, found = redact(text)
+    assert out == expected
+    assert found == ["GitHub Token"]
+
+
+@pytest.mark.parametrize("indent", ["  ", "\t", "    "])
+@pytest.mark.parametrize("width", [40, 64, 76])
+def test_indented_wrapped_token_redacts_whole(indent, width):
+    """A continuation line's indentation is part of the seam, not a gap inside
+    the token: without that the first line alone is seen and the rest leaks."""
+    out, found = redact(f"token:\n{_wrap(_STATELESS, width, indent)}\ndone")
+    assert out == f"token:\n{indent}{_GH}\ndone"
+    assert found == ["GitHub Token"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "x = ghs_\n        some_long_identifier_name_that_is_long_enough\n",
+        "prefix = ghp_\n    configuration_value_for_the_service_name\n",
+    ],
+)
+def test_indented_word_after_a_bare_prefix_is_not_a_token(text):
+    """Joining an indented continuation must not fuse a line-final token
+    prefix with the indented identifier below it."""
+    assert redact(text) == (text, [])
