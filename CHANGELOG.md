@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.70.2] - 2026-11-09
+
+### Fixed
+
+- Improved secret detection for stateless GitHub App installation tokens (ghs_) by scoping the JWT pattern matching and redacting the entire JWT body.
+- Removed stale alignment-hive slug from the repository slug allowlist.
+
 ## [2.70.0] - 2026-11-07
 
 ### Changed
