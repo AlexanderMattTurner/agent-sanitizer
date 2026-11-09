@@ -8,6 +8,16 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.70.3] - 2026-11-09
+
+### Fixed
+
+- Secrets detection now correctly handles indented token tails and prevents them from being separated from their wrap markers.
+- Fixed cross-line token matching to exclude the next line's leading word, preventing false matches across line boundaries.
+- Improved wrapped span settlement to complete in a single bounded pass for better performance.
+- Expanded stateless GitHub secret payload and signature detection caps for more comprehensive coverage.
+- Test improvements to prevent round-trip fuzz calls from incorrectly releasing each other's refusals.
+
 ## [2.70.2] - 2026-11-09
 
 ### Fixed
