@@ -2105,6 +2105,12 @@ def _is_word_shaped(continuation: str) -> bool:
     return not has_case_mix and not any(c.isdigit() for c in continuation)
 
 
+# The shortest indented continuation whose word shape counts as evidence of a
+# word: a random base62 run this long is word-shaped about 2·(26/62)^8 ≈ 0.2% of
+# the time, while a 1-2 char token tail is word-shaped most of the time.
+_WORD_EVIDENCE_LEN = 8
+
+
 def _settle_wrapped_span(
     text: str,
     start: int,
@@ -2123,7 +2129,7 @@ def _settle_wrapped_span(
     more broken lines of one width so far. Without it, the first seam is cut
     where the text taken past it is word-shaped (:func:`_is_word_shaped`) and
     either the token is already complete before it or the continuation is
-    indented; a blank line is always cut, since no wrapper emits one. The cut is
+    indented and at least :data:`_WORD_EVIDENCE_LEN` long; a blank line is always cut, since no wrapper emits one. The cut is
     what keeps the next line's text verbatim. A configured env value (no
     ``patterns``) is exact, so it is never cut. One pass over the seams, with a
     deadline check per seam: the span is attacker-shaped text.
@@ -2146,7 +2152,8 @@ def _settle_wrapped_span(
         stop = seams[k + 1] if k + 1 < len(seams) else end
         if not _is_word_shaped(text[continuation:stop]):
             continue
-        if continuation > seam + 1 or completes(seam):
+        indented = continuation > seam + 1
+        if completes(seam) or (indented and stop - continuation >= _WORD_EVIDENCE_LEN):
             break
     else:
         return end
@@ -2220,7 +2227,10 @@ def _redact_cross_line(
                 deadline,
             )
         )
-    patterns_by_type: dict[str, list[re.Pattern[str]]] = {}
+    patterns_by_type = {
+        found_type: denylist_patterns(get_plugins(), frozenset({found_type}))
+        for found_type in {span.found_type for span in candidates}
+    }
 
     accepted: list[CrossLineSpan] = []
     prev_end = -1
@@ -2231,9 +2241,7 @@ def _redact_cross_line(
             text,
             orig_start,
             candidate_end,
-            patterns_by_type.setdefault(
-                found_type, denylist_patterns(get_plugins(), frozenset({found_type}))
-            ),
+            patterns_by_type[found_type],
             charset,
             deadline,
         )

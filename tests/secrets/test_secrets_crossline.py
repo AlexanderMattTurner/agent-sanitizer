@@ -648,6 +648,16 @@ def test_indented_word_after_a_bare_prefix_is_not_a_token(text):
     assert redact(text) == (text, [])
 
 
+@pytest.mark.parametrize("tail", [1, 2, 7])
+def test_indented_wrap_with_a_short_word_shaped_tail_redacts_whole(tail):
+    """A 1-2 char token tail is word-shaped by chance; only a longer indented
+    word is evidence enough to cut the continuation off."""
+    tail_part = "m" * tail
+    token = _CLASSIC[:-tail] + tail_part
+    out, found = redact(f"cfg:\n  {token[:-tail]}\n  {tail_part}\nend")
+    assert (out, found) == (f"cfg:\n  {_GH}\nend", ["GitHub Token"])
+
+
 def test_wrapped_token_with_an_escape_inside_is_completed_on_the_stripped_view():
     """Completion is judged on the view the detector matched, so an ANSI escape
     inside a wrapped token does not make the full token look incomplete."""
