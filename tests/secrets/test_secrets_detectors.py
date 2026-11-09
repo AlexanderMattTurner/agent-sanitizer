@@ -1,5 +1,6 @@
 """Ported custom-detector tests (was the secret_plugins.py half of the suite)."""
 
+import base64
 import importlib
 import inspect
 import json
@@ -592,6 +593,95 @@ def test_prefix_family_member_redacts(secret_type, member, token):
     assert result is not None, (secret_type, member)
     assert result["found"] == [secret_type], (secret_type, member)
     assert token not in result["text"], (secret_type, member)
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+# GitHub's stateless installation token: `ghs_<APPID>_<JWT>`. Built at import
+# time so no contiguous token literal lands in the repo; the signature bytes are
+# chosen to put `-` and `_` (base64url's two non-alnum chars) in the body.
+_STATELESS_PAYLOAD = _b64url(
+    json.dumps(
+        {
+            "iss": "Iv23liExampleApp",
+            "ins": 12345678,
+            "exp": 1762700000,
+            "perm": {"contents": "write", "metadata": "read"},
+        }
+    ).encode()
+)
+_STATELESS_SIGNATURE = _b64url(bytes(range(256)))
+_STATELESS_TOKEN = (
+    "ghs_1234567_"
+    + _b64url(b'{"alg":"RS256","typ":"JWT"}')
+    + "."
+    + _STATELESS_PAYLOAD
+    + "."
+    + _STATELESS_SIGNATURE
+)
+_GH = "[REDACTED: GitHub Token]"
+
+
+def test_stateless_token_fixture_has_the_published_shape():
+    """Two dots, base64url's `-`/`_`, and GitHub's ~520-char length class —
+    else the redaction tests below pass on a token the detector already knew."""
+    assert _STATELESS_TOKEN.count(".") == 2
+    assert "-" in _STATELESS_SIGNATURE and "_" in _STATELESS_SIGNATURE
+    assert len(_STATELESS_TOKEN) > 500
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "tok {} ok",
+        "GH_TOKEN={}",
+        'export GITHUB_TOKEN="{}"',
+        "Authorization: Bearer {}",
+        "Authorization: token {}",
+        '{{"token": "{}", "expires_at": "2026-11-09T00:00:00Z"}}',
+        "https://api.example.com/x?access_token={}&a=1",
+        "https://{}@github.com/o/r",
+        "token is {}. Next sentence",
+    ],
+)
+def test_stateless_installation_token_redacts_whole(template):
+    """The JWT payload and signature are the credential; a pattern stopping at
+    the first `.` redacts only `ghs_<APPID>_<header>` and leaks both."""
+    result = run_plain(template.format(_STATELESS_TOKEN))
+    assert result is not None
+    assert result["text"] == template.format(_GH)
+    assert result["found"] == ["GitHub Token"]
+
+
+def test_line_wrapped_stateless_installation_token_redacts_whole():
+    wrapped = "\n".join(
+        _STATELESS_TOKEN[i : i + 76] for i in range(0, len(_STATELESS_TOKEN), 76)
+    )
+    result = run_plain(f"token:\n{wrapped}\n")
+    assert result is not None
+    assert result["text"] == f"token:\n{_GH}\n"
+
+
+_CLASSIC_BODY = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        (f"see ghp_{_CLASSIC_BODY}. Then", f"see {_GH}. Then"),
+        (f"ghp_{_CLASSIC_BODY}.txt", f"{_GH}.txt"),
+        (f"a ghp_{_CLASSIC_BODY}.ab.cd b", f"a {_GH}.ab.cd b"),
+        (f"tok=ghp_{_CLASSIC_BODY}...", f"tok={_GH}..."),
+    ],
+)
+def test_classic_token_does_not_absorb_short_dotted_suffix(text, expected):
+    """The stateless JWT tail needs >=8-char dot segments, so prose punctuation
+    and a short extension after a classic token stay verbatim."""
+    result = run_plain(text)
+    assert result is not None
+    assert result["text"] == expected
 
 
 def _encoded_member_count(patterns: list[str]) -> int:
