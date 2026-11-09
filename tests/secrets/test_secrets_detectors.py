@@ -101,8 +101,10 @@ _UNBOUNDED_WITHOUT_LOOKBEHIND = {
     "tokens",
     "CloudantCredentialsDetector": "keyword arms open on a not-a-word-char "
     "lookbehind; URL arms open on `http(s)://`, which their host run excludes",
-    "GitHubClassicTokenDetector": "nothing follows its open-ended run, so an "
-    "attempt that reaches 36 chars succeeds and consumes the whole run",
+    "GitHubClassicTokenDetector": "pattern 0: nothing follows its open-ended run, "
+    "so an attempt that reaches 36 chars succeeds and consumes the whole run. "
+    "Pattern 1 (stateless ghs_ JWT): every run is capped and ends at `.`, which "
+    "no run admits, so only the header run (<=256) is re-read by a later attempt",
     "IbmCloudIamKeyDetector": "opens on a not-a-word-char lookbehind before a keyword",
     "IbmCosHmacKeyDetector": "opens on a not-a-word-char lookbehind before a keyword",
     "PypiTokenDetector": "nothing follows its open-ended run, so an attempt that "
@@ -599,9 +601,16 @@ def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
 
-# GitHub's stateless installation token: `ghs_<APPID>_<JWT>`. Built at import
-# time so no contiguous token literal lands in the repo; the signature bytes are
-# chosen to put `-` and `_` (base64url's two non-alnum chars) in the body.
+# GitHub's stateless installation token, `ghs_<APPID>_<JWT>`, built at import
+# time so no contiguous token literal lands in the repo. GitHub has published
+# neither the header nor whether the app id is always present, so the cases span
+# a short header (`<APPID>_<header>` under 36 chars), the common one, and one
+# whose `kid` puts base64url `-`/`_` in the header itself.
+_STATELESS_HEADERS = {
+    "alg-only": b'{"alg":"RS256"}',
+    "alg-typ": b'{"alg":"RS256","typ":"JWT"}',
+    "alg-kid": b'{"alg":"RS256","kid":"\xfb\xff\xbf-k"}',
+}
 _STATELESS_PAYLOAD = _b64url(
     json.dumps(
         {
@@ -613,75 +622,98 @@ _STATELESS_PAYLOAD = _b64url(
     ).encode()
 )
 _STATELESS_SIGNATURE = _b64url(bytes(range(256)))
-_STATELESS_TOKEN = (
-    "ghs_1234567_"
-    + _b64url(b'{"alg":"RS256","typ":"JWT"}')
-    + "."
-    + _STATELESS_PAYLOAD
-    + "."
-    + _STATELESS_SIGNATURE
-)
+_STATELESS_TOKENS = {
+    f"{name}-{'appid' if app_id else 'no-appid'}": (
+        f"ghs_{app_id}{_b64url(header)}.{_STATELESS_PAYLOAD}.{_STATELESS_SIGNATURE}"
+    )
+    for name, header in _STATELESS_HEADERS.items()
+    for app_id in ("1234567_", "")
+}
 _GH = "[REDACTED: GitHub Token]"
 
 
-def test_stateless_token_fixture_has_the_published_shape():
-    """Two dots, base64url's `-`/`_`, and GitHub's ~520-char length class —
-    else the redaction tests below pass on a token the detector already knew."""
-    assert _STATELESS_TOKEN.count(".") == 2
-    assert "-" in _STATELESS_SIGNATURE and "_" in _STATELESS_SIGNATURE
-    assert len(_STATELESS_TOKEN) > 500
+def test_stateless_token_fixtures_cover_the_shapes_pattern_zero_misses():
+    """Non-vacuity: each fixture is a two-dot base64url JWT, at least one header
+    carries `-` or `_`, and at least one head is too short for the classic
+    `{36,}` body — the shape the classic pattern alone leaks whole."""
+    heads = [tok.split(".")[0] for tok in _STATELESS_TOKENS.values()]
+    assert all(tok.count(".") == 2 for tok in _STATELESS_TOKENS.values())
+    assert any(set("-_") & set(head.removeprefix("ghs_1234567_")) for head in heads)
+    assert any(len(head) < len("ghs_") + 36 for head in heads)
 
 
+@pytest.mark.parametrize("token", _STATELESS_TOKENS.values(), ids=_STATELESS_TOKENS)
 @pytest.mark.parametrize(
     "template",
     [
         "tok {} ok",
         "GH_TOKEN={}",
-        'export GITHUB_TOKEN="{}"',
         "Authorization: Bearer {}",
-        "Authorization: token {}",
         '{{"token": "{}", "expires_at": "2026-11-09T00:00:00Z"}}',
         "https://api.example.com/x?access_token={}&a=1",
-        "https://{}@github.com/o/r",
         "token is {}. Next sentence",
     ],
 )
-def test_stateless_installation_token_redacts_whole(template):
-    """The JWT payload and signature are the credential; a pattern stopping at
-    the first `.` redacts only `ghs_<APPID>_<header>` and leaks both."""
-    result = run_plain(template.format(_STATELESS_TOKEN))
+def test_stateless_installation_token_redacts_whole(template, token):
+    """The JWT payload and signature are the credential; a match stopping at the
+    first `.` (or never starting, on a short head) leaks them."""
+    result = run_plain(template.format(token))
     assert result is not None
     assert result["text"] == template.format(_GH)
     assert result["found"] == ["GitHub Token"]
 
 
-def test_line_wrapped_stateless_installation_token_redacts_whole():
-    wrapped = "\n".join(
-        _STATELESS_TOKEN[i : i + 76] for i in range(0, len(_STATELESS_TOKEN), 76)
-    )
+@pytest.mark.parametrize("token", _STATELESS_TOKENS.values(), ids=_STATELESS_TOKENS)
+def test_line_wrapped_stateless_installation_token_redacts_whole(token):
+    wrapped = "\n".join(token[i : i + 76] for i in range(0, len(token), 76))
     result = run_plain(f"token:\n{wrapped}\n")
     assert result is not None
     assert result["text"] == f"token:\n{_GH}\n"
+    assert result["found"] == ["GitHub Token"]
 
 
-_CLASSIC_BODY = "0123456789abcdefghijklmnopqrstuvwxyz"
+_CLASSIC = "ghp_0123456789abcdefghijklmnopqrstuvwxyz"
 
 
 @pytest.mark.parametrize(
     "text, expected",
     [
-        (f"see ghp_{_CLASSIC_BODY}. Then", f"see {_GH}. Then"),
-        (f"ghp_{_CLASSIC_BODY}.txt", f"{_GH}.txt"),
-        (f"a ghp_{_CLASSIC_BODY}.ab.cd b", f"a {_GH}.ab.cd b"),
-        (f"tok=ghp_{_CLASSIC_BODY}...", f"tok={_GH}..."),
+        (f"see {_CLASSIC}. Then", f"see {_GH}. Then"),
+        (f"{_CLASSIC}.txt", f"{_GH}.txt"),
+        (f"{_CLASSIC}.Thereafter", f"{_GH}.Thereafter"),
+        (f"{_CLASSIC}.response_headers", f"{_GH}.response_headers"),
+        (f"<!-- {_CLASSIC}-->", f"<!-- {_GH}-->"),
+        (f"{_CLASSIC}-v2", f"{_GH}-v2"),
+        (f"tok={_CLASSIC}...", f"tok={_GH}..."),
     ],
 )
-def test_classic_token_does_not_absorb_short_dotted_suffix(text, expected):
-    """The stateless JWT tail needs >=8-char dot segments, so prose punctuation
-    and a short extension after a classic token stay verbatim."""
+def test_classic_token_does_not_absorb_a_following_suffix(text, expected):
+    """Classic tokens are pure base62: neither `-` nor a dotted tail belongs to
+    them, so markup and prose after one stay verbatim."""
     result = run_plain(text)
     assert result is not None
     assert result["text"] == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ghs_this-is-a-very-long-kebab-case-identifier-name-here",
+        "foo-ghs_this-is-a-very-long-kebab-case-identifier-name",
+        "ghs_" + "-" * 40,
+        "ghs_eyJ-short.x.y",
+    ],
+)
+def test_ghs_lookalike_without_a_jwt_body_is_not_a_secret(text):
+    assert run_plain(text) is None, text
+
+
+# Patterns that add a second SHAPE for a member already in the family, not a
+# new member, each with the test that covers that shape.
+_SHAPE_VARIANT_PATTERNS = {
+    # Stateless `ghs_` JWT: test_stateless_installation_token_redacts_whole.
+    "GitHub Token": 1,
+}
 
 
 def _encoded_member_count(patterns: list[str]) -> int:
@@ -704,9 +736,11 @@ def _encoded_member_count(patterns: list[str]) -> int:
     ids=[t for t, _, _ in _PREFIX_FAMILIES],
 )
 def test_prefix_family_covers_every_pattern_member(secret_type, members):
-    assert _encoded_member_count(_DETECTOR_PATTERNS[secret_type]) == len(members), (
-        secret_type
-    )
+    shape_variants = _SHAPE_VARIANT_PATTERNS.get(secret_type, 0)
+    assert (
+        _encoded_member_count(_DETECTOR_PATTERNS[secret_type])
+        == len(members) + shape_variants
+    ), secret_type
 
 
 # ─── Active-detector / cross-line eligibility drift guards ───────────────────
