@@ -365,6 +365,15 @@ _ENGINE_SHAPES = {
     "pem markers in prose": lambda n: (
         "-----BEGIN PRIVATE KEY----- a " * (n // 4) + "-----END PRIVATE KEY-----"
     ),
+    "word lines after a wrapped token": lambda n: (
+        "ghp_Zx9qW7rT2pL5mN8bV3cX6zA1sD4fG7hJ2kLm"
+        + "".join("\na" if i % 2 else "\naa" for i in range(n))
+    ),
+    "jwt-ish word lines after a stateless opening": lambda n: (
+        "ghs_eyJabcdefgh."
+        + "".join("\nabcd" if i % 2 else "\nabcdef" for i in range(n))
+        + ".abcdefghij"
+    ),
 }
 
 

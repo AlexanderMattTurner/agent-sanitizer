@@ -45,12 +45,14 @@ from .credential_names import (
     non_secret_name_segments,
 )
 from .invisible import (
+    WRAP_SEAM_RE,
     identity_map,
     newline_offsets,
     strip_escapes_with_map,
     strip_invisible,
     strip_invisible_by_line,
     strip_invisible_with_map,
+    wrap_seam_offsets,
 )
 from .prefilter import LiteralProbe, degroup, denylist_patterns, fold
 
@@ -1990,6 +1992,20 @@ def _cross_line_candidate_spans(
         spans.extend(
             _structural_cross_line_spans(stripped, offsets, deadline, newline_seams)
         )
+    spans.extend(_cross_line_env_spans(collapsed, views, config, deadline))
+    return spans
+
+
+def _cross_line_env_spans(
+    collapsed: str,
+    views: list[tuple[str, Sequence[int]]],
+    config: RedactorConfig,
+    deadline: _Deadline,
+) -> list[CrossLineSpan]:
+    """A :class:`CrossLineSpan` for every configured env value found in the
+    collapsed view ``collapsed`` (with its :func:`_invisible_free_views`)."""
+    charset = config.resolved_charset()
+    spans: list[CrossLineSpan] = []
     for name, value in _env_secrets_longest_first(config, charset):
         deadline.check("cross-line env-value scan")
         if not value or len(value) < config.min_secret_len:
@@ -2075,6 +2091,104 @@ def _structural_cross_line_spans(
     return spans
 
 
+_INDENTED_CONTINUATION_RE = re.compile(r"\n[ \t]")
+
+
+def _is_word_shaped(continuation: str) -> bool:
+    """True when a wrapped line's contribution reads as a word or identifier
+    (``HOME``, ``echo``, ``next_line_here``) rather than a token tail: a random
+    base62/base64url run of any length worth leaking carries a digit or both
+    letter cases, which a word or a SCREAMING/snake_case name does not."""
+    has_case_mix = any(c.islower() for c in continuation) and any(
+        c.isupper() for c in continuation
+    )
+    return not has_case_mix and not any(c.isdigit() for c in continuation)
+
+
+# The shortest indented continuation whose word shape counts as evidence of a
+# word: a random base62 run this long is word-shaped about 2·(26/62)^8 ≈ 0.2% of
+# the time, while a 1-2 char token tail is word-shaped most of the time.
+_WORD_EVIDENCE_LEN = 8
+
+
+def _settle_wrapped_span(
+    text: str,
+    start: int,
+    end: int,
+    patterns: Sequence[re.Pattern[str]],
+    charset: frozenset[int],
+    deadline: _Deadline,
+) -> int | None:
+    """The end of the part of ``text[start:end]`` — a cross-line candidate of a
+    detector with denylist ``patterns`` — that is a genuinely line-wrapped token,
+    or None when what remains no longer crosses a line break.
+
+    The collapsed view glues a token's last line to the next line's first word,
+    and an open-ended token run swallows it (``GH_TOKEN=ghp_…`` then
+    ``HOME=/root`` loses ``HOME``). A wrap's evidence is its geometry: two or
+    more broken lines of one width so far. Without it, the first seam is cut
+    where the text taken past it is word-shaped (:func:`_is_word_shaped`) and
+    either the token is already complete before it or the continuation is
+    indented and at least :data:`_WORD_EVIDENCE_LEN` long; a blank line is always cut, since no wrapper emits one. The cut is
+    what keeps the next line's text verbatim. A configured env value (no
+    ``patterns``) is exact, so it is never cut. One pass over the seams, with a
+    deadline check per seam: the span is attacker-shaped text.
+    """
+    seams = [m.start() for m in WRAP_SEAM_RE.finditer(text, start, end)]
+    if not seams:
+        return None
+    if not patterns:
+        return end
+    completes = _wrap_completion_probe(text, start, end, patterns, charset)
+    widths: set[int] = set()
+    for k, seam in enumerate(seams):
+        deadline.check("cross-line wrap settling")
+        widths.add(seam - (text.rfind("\n", 0, seam) + 1))
+        continuation = WRAP_SEAM_RE.match(text, seam).end()
+        if text[continuation] == "\n":
+            break
+        if k >= 1 and len(widths) == 1:
+            continue
+        stop = seams[k + 1] if k + 1 < len(seams) else end
+        if not _is_word_shaped(text[continuation:stop]):
+            continue
+        indented = continuation > seam + 1
+        if completes(seam) or (indented and stop - continuation >= _WORD_EVIDENCE_LEN):
+            break
+    else:
+        return end
+    return seam if seam != seams[0] and completes(seam) else None
+
+
+def _wrap_completion_probe(
+    text: str,
+    start: int,
+    end: int,
+    patterns: Sequence[re.Pattern[str]],
+    charset: frozenset[int],
+) -> Callable[[int], bool]:
+    """``completes(stop)``: whether ``text[start:stop]``, collapsed, is a whole
+    match of ``patterns`` in one of the detection views discovery used (invisible-
+    and escape-stripped), so a token discovery confirmed through an escape is not
+    rejected here. The views are built once per span; each probe is a bisect plus
+    an ``endpos``-bounded ``fullmatch``."""
+    collapsed, to_span = wrap_seam_offsets(text[start:end])
+    views = _invisible_free_views(collapsed, charset)
+
+    def completes(stop: int) -> bool:
+        for stripped, to_collapsed in views:
+            endpos = bisect.bisect_left(
+                range(len(stripped)),
+                stop - start,
+                key=lambda i, m=to_collapsed: to_span[m[i]],
+            )
+            if any(p.fullmatch(stripped, 0, endpos) for p in patterns):
+                return True
+        return False
+
+    return completes
+
+
 def _redact_cross_line(
     text: str,
     found: list[str],
@@ -2092,18 +2206,48 @@ def _redact_cross_line(
     """
     if "\n" not in text:
         return text
-    offsets = newline_offsets(text)
-    collapsed = text.replace("\n", "")
+    collapsed, offsets = wrap_seam_offsets(text)
+    charset = config.resolved_charset()
+    candidates = [
+        CrossLineSpan(offsets[cs], offsets[ce - 1] + 1, ph, found_type)
+        for cs, ce, ph, found_type in _cross_line_candidate_spans(
+            collapsed, config, deadline, offsets.seams
+        )
+    ]
+    # A configured value may itself hold a space or tab at a wrap point, which
+    # the wrap view deletes; the newline-only view keeps it matchable.
+    if _INDENTED_CONTINUATION_RE.search(text):
+        nl_collapsed, nl_offsets = newline_offsets(text)
+        candidates.extend(
+            CrossLineSpan(nl_offsets[cs], nl_offsets[ce - 1] + 1, ph, name)
+            for cs, ce, ph, name in _cross_line_env_spans(
+                nl_collapsed,
+                _invisible_free_views(nl_collapsed, charset),
+                config,
+                deadline,
+            )
+        )
+    patterns_by_type = {
+        found_type: denylist_patterns(get_plugins(), frozenset({found_type}))
+        for found_type in {span.found_type for span in candidates}
+    }
 
     accepted: list[CrossLineSpan] = []
     prev_end = -1
-    for cs, ce, placeholder_text, found_type in sorted(
-        _cross_line_candidate_spans(collapsed, config, deadline, offsets.seams),
-        key=lambda s: (s[0], -s[1]),
+    for orig_start, candidate_end, placeholder_text, found_type in sorted(
+        candidates, key=lambda s: (s[0], -s[1])
     ):
-        orig_start, orig_end = offsets[cs], offsets[ce - 1] + 1
-        if "\n" not in text[orig_start:orig_end] or orig_start < prev_end:
+        settled_end = _settle_wrapped_span(
+            text,
+            orig_start,
+            candidate_end,
+            patterns_by_type[found_type],
+            charset,
+            deadline,
+        )
+        if settled_end is None or orig_start < prev_end:
             continue
+        orig_end = settled_end
         accepted.append(
             CrossLineSpan(orig_start, orig_end, placeholder_text, found_type)
         )
