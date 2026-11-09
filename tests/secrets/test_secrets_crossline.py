@@ -646,3 +646,20 @@ def test_indented_word_after_a_bare_prefix_is_not_a_token(text):
     """Joining an indented continuation must not fuse a line-final token
     prefix with the indented identifier below it."""
     assert redact(text) == (text, [])
+
+
+def test_wrapped_token_with_an_escape_inside_is_completed_on_the_stripped_view():
+    """Completion is judged on the view the detector matched, so an ANSI escape
+    inside a wrapped token does not make the full token look incomplete."""
+    text = f"{_CLASSIC[:10]}\x1b[31m{_CLASSIC[10:24]}\n{_CLASSIC[24:]}\n\nend"
+    assert redact(text) == (f"{_GH}\n\nend", ["GitHub Token"])
+
+
+def test_configured_value_with_a_space_redacts_across_an_indented_wrap():
+    """The seam view deletes a continuation's indentation; a configured value
+    whose own space sits at that seam is found on the newline-only view."""
+    config = cfg(host_cred_vars={"DOCKER_PASSWORD": "ocean breeze quartz"})
+    assert redact("pw: ocean\n breeze quartz done", config) == (
+        "pw: [REDACTED: DOCKER_PASSWORD] done",
+        ["DOCKER_PASSWORD"],
+    )

@@ -151,6 +151,16 @@ class DeletionOffsets(Sequence[int]):
 WRAP_SEAM_RE = re.compile(r"\n[ \t]*")
 
 
+def newline_offsets(text: str) -> tuple[str, DeletionOffsets]:
+    """``text`` with every newline deleted, and the offset map back to ``text``."""
+    newlines: list[int] = []
+    at = text.find("\n")
+    while at != -1:
+        newlines.append(at)
+        at = text.find("\n", at + 1)
+    return text.replace("\n", ""), DeletionOffsets(newlines, len(text) - len(newlines))
+
+
 def wrap_seam_offsets(text: str) -> tuple[str, DeletionOffsets]:
     """``text`` with every :data:`WRAP_SEAM_RE` seam deleted, and the offset map
     back to ``text``. Deleting the indentation too is what lets an indented
