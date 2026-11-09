@@ -46,11 +46,15 @@ trustPolicy: no-downgrade
 # already above the floor.
 overrides:
   # GHSA-7p8r-x3mc-p8w7 — host confusion via a backslash. Via @commitlint/cli.
-  fast-uri@>=3.0.0 <3.1.5: "^3.1.5"
+  fast-uri@>=3.0.0 <3.1.9: "^3.1.9"
   # GHSA-rgw5-rvv9-x895 — denial of service from unbounded expansion. Via eslint.
-  brace-expansion@>=4.0.0 <5.0.9: "^5.0.9"
+  brace-expansion@>=4.0.0 <5.0.12: "^5.0.12"
   # GHSA-5p4m-2wfm-xmqj — quadratic CPU use parsing !!omap. Via @commitlint/cli.
-  js-yaml@>=4.0.0 <4.3.1: "^4.3.1"
+  js-yaml@>=4.0.0 <4.3.2: "^4.3.2"
   # GHSA-q8mj-m7cp-5q26 — remotely triggerable denial of service in qs.stringify.
   # Via @stryker-mutator/core.
-  qs@>=6.11.1 <=6.15.1: "^6.15.2"
+  qs@>=6.11.1 <6.16.1: "^6.16.1"
+  # GHSA-68fv-2mgg-jv7q — event-loop denial of service. Via css-tree.
+  source-map-js@>=1.0.0 <1.2.2: "^1.2.2"
+  # GHSA-mrhx-c7xc-m3w5 — memory exhaustion on oversized input. Via @stryker-mutator/core.
+  zod@<4.6.6: "^4.6.6"
