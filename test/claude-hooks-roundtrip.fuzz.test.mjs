@@ -37,13 +37,14 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import fc from "fast-check";
 import { fcRunOptions, startStubRedactorDaemon } from "./test-helpers.mjs";
 
@@ -72,6 +73,8 @@ const { LAYER2_PLACEHOLDER_RE } =
 const { PermissionDecision } = await import("../claude-hooks/lib/hook-io.mjs");
 const { instructionsLoadedFile, recordInstructionsLoaded } =
   await import("../claude-hooks/lib/invisible-alert.mjs");
+const { confirmMarkerPath } =
+  await import("../claude-hooks/lib/secret-drop-guard.mjs");
 
 // This suite's oracle predicts the pipeline's context byte-for-byte, and the
 // gate attaches a one-time notice when no InstructionsLoaded event has been seen
@@ -107,6 +110,13 @@ after(async () => {
   for (const dir of [socketDir, projectDir, revealBase])
     rmSync(dir, { recursive: true, force: true });
   rmSync(instructionsLoadedFile(), { force: true });
+  // Every first refusal of a missing span records a re-issue confirmation in
+  // $TMPDIR, keyed to this run's (mkdtemp, hence unique) project hash.
+  const markerPrefix = basename(confirmMarkerPath(""));
+  const markerDir = dirname(confirmMarkerPath(""));
+  for (const name of readdirSync(markerDir))
+    if (name.startsWith(markerPrefix))
+      rmSync(join(markerDir, name), { force: true });
 });
 
 // One fresh span store PER fc ITERATION, shared across the rounds inside it:
@@ -553,17 +563,24 @@ function assertVerdict(actual, expected, edited, bag) {
     if (occursOutsideMatches(edited.text, token)) bag.mangledWrittenThrough++;
 }
 
+// A missing span is a FAULT deny: under the open posture an identical re-issue
+// within CONFIRM_TTL_MS proceeds as the model's confirmation. The oracle models
+// a first call, and content addressing makes identical inputs common, so a
+// shared path would let one call's refusal release the next. One path per call.
+let callSeq = 0;
+
 /** Compose the round's Write/Edit tool_input around the edited field text. */
 function composeInput(round, fieldText) {
+  const file_path = `/tmp/rt-${callSeq++}.md`;
   if (round.tool === "Write")
     return {
       field: "content",
-      input: { file_path: "/tmp/rt.md", content: fieldText },
+      input: { file_path, content: fieldText },
     };
   return {
     field: "new_string",
     input: {
-      file_path: "/tmp/rt.md",
+      file_path,
       // old_string is deliberately never rehydrated, so it is drawn with and
       // without live keys and asserted unchanged either way.
       old_string: round.keysInOldString ? fieldText : "anchor text",
