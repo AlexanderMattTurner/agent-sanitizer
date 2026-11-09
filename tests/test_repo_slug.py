@@ -59,9 +59,6 @@ EXTERNAL_REPOS = {
     "alexander-turner/claude-automation-template": "the upstream template this repo syncs from",
     "AlexanderMattTurner/ci-truth-serum": "an upstream CI tool this repo consumes",
     "astral-sh/ruff-pre-commit": "pinned pre-commit hook source",
-    "crazytieguy/alignment-hive": (
-        "a third-party agent-safety index the README cites as recommending this plugin"
-    ),
     "gitleaks/gitleaks": "pinned pre-commit hook source",
     "pre-commit/pre-commit-hooks": "pinned pre-commit hook source",
     "scop/pre-commit-shfmt": "pinned pre-commit hook source",
