@@ -6,11 +6,14 @@
  * `completion-check.mjs`.
  *
  * The checks run on the PUSHED tree: each commit the push publishes, checked
- * out alone in a throwaway worktree of the repository the push runs in. The
- * session's own checkout is the wrong subject twice over — a push from another
- * worktree (`cd /tmp/wt && git push`, `git -C …`) never touches it, and its
- * uncommitted edits are not pushed — and concurrent runs in one checkout share
- * build and coverage output. A PR create checks `HEAD` of the call's cwd.
+ * out alone in a throwaway `clone --shared` of the repository the push runs
+ * in. The session's own checkout is the wrong subject twice over — a push from
+ * another worktree (`cd /tmp/wt && git push`, `git -C …`) never touches it, and
+ * its uncommitted edits are not pushed — and concurrent runs in one checkout
+ * share build and coverage output. A PR create checks `HEAD` of the call's cwd.
+ * The clone is registered nowhere in the pushed repository, so a gate killed
+ * before its cleanup ran (SIGKILL, a hook timeout) leaves only its temp
+ * directory, and no later run has to find and remove anything.
  *
  * The deny body is what blocks. Claude Code treats a hook's exit 1 as a
  * non-blocking error and runs the tool call anyway, so a check script that only
@@ -148,25 +151,53 @@ export async function pushTargets(payload, pushes) {
 }
 
 /**
+ * Delete a check checkout. A check can leave a directory it made unwritable (a
+ * permissions fixture), so write access is restored first. A removal that still
+ * fails is reported on stderr and never thrown: a throw here would replace the
+ * verdict with exit 1, which Claude Code runs the push through unchecked.
+ * @param {string} tree
+ */
+function removeCheckout(tree) {
+  spawnSync("chmod", ["-R", "u+rwX", tree]);
+  try {
+    rmSync(tree, { recursive: true, force: true });
+  } catch (error) {
+    process.stderr.write(
+      `push-gate: could not remove ${tree}: ${/** @type {Error} */ (error).message}\n`,
+    );
+  }
+}
+
+/**
  * Run the checks on `commit` of the repository at `repoDir`, alone in a
- * throwaway worktree. `null` when they pass, else the text that explains the
+ * throwaway clone. `null` when they pass, else the text that explains the
  * failure.
  * @param {string} repoDir @param {string} commit @param {string} [script]
  * @returns {string|null}
  */
 export function failedChecks(repoDir, commit, script = CHECK_SCRIPT) {
   const tree = mkdtempSync(join(tmpdir(), "push-gate-"));
-  const added = git(repoDir, [
-    "worktree",
-    "add",
-    "--detach",
-    "--quiet",
-    tree,
-    commit,
-  ]);
-  if (added.status !== 0) {
-    rmSync(tree, { recursive: true, force: true });
-    return `push-gate: could not check out ${commit} of ${repoDir}: ${added.stderr.trim()}`;
+  // The common dir holds the objects, also when `repoDir` is a linked worktree
+  // or a subdirectory; rev-parse prints it relative to `repoDir`.
+  const commonDir = git(repoDir, ["rev-parse", "--git-common-dir"]);
+  const cloned =
+    commonDir.status === 0
+      ? git(tree, [
+          "clone",
+          "--quiet",
+          "--shared",
+          "--no-checkout",
+          resolve(repoDir, commonDir.stdout.trim()),
+          ".",
+        ])
+      : commonDir;
+  const checkedOut =
+    cloned.status === 0
+      ? git(tree, ["checkout", "--quiet", "--detach", commit])
+      : cloned;
+  if (checkedOut.status !== 0) {
+    removeCheckout(tree);
+    return `push-gate: could not check out ${commit} of ${repoDir}: ${checkedOut.stderr.trim()}`;
   }
   try {
     const env = {
@@ -198,8 +229,7 @@ export function failedChecks(repoDir, commit, script = CHECK_SCRIPT) {
     }
     return null;
   } finally {
-    git(repoDir, ["worktree", "remove", "--force", tree]);
-    rmSync(tree, { recursive: true, force: true });
+    removeCheckout(tree);
   }
 }
 
