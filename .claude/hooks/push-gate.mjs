@@ -11,9 +11,9 @@
  * worktree (`cd /tmp/wt && git push`, `git -C …`) never touches it, and its
  * uncommitted edits are not pushed — and concurrent runs in one checkout share
  * build and coverage output. A PR create checks `HEAD` of the call's cwd.
- * Each worktree is locked with its owner's host and pid, so a gate killed
- * before its cleanup ran (SIGKILL, a hook timeout) has its worktree removed by
- * the next gate run in that repository.
+ * Each worktree sits beside a file naming its owner, so a gate killed before
+ * its cleanup ran (SIGKILL, a hook timeout) has its worktree removed by the
+ * next gate run on the same host.
  *
  * The deny body is what blocks. Claude Code treats a hook's exit 1 as a
  * non-blocking error and runs the tool call anyway, so a check script that only
@@ -26,7 +26,15 @@
  * Dependency-free on purpose: the template ships no node_modules.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, hostname, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -150,8 +158,23 @@ export async function pushTargets(payload, pushes) {
   return [...targets.values()];
 }
 
-/** A check worktree's lock reason up to its owner's pid: `push-gate <host> `. */
-const GATE_LOCK_PREFIX = `push-gate ${hostname()} `;
+/**
+ * Who owns a check worktree: this host and pid namespace (Linux names it; other
+ * platforms have one per host), so a pid is only ever probed where it means
+ * the same process.
+ */
+const OWNER_SCOPE = `${hostname()} ${pidNamespace()}`;
+
+/** Holds `{scope, pid, repo}` beside each check worktree's `tree/`. */
+const OWNER_FILE = "owner.json";
+
+function pidNamespace() {
+  try {
+    return readlinkSync("/proc/self/ns/pid");
+  } catch {
+    return "";
+  }
+}
 
 /** @param {number} pid */
 function isAlive(pid) {
@@ -165,25 +188,25 @@ function isAlive(pid) {
 }
 
 /**
- * Remove the check worktrees of `repoDir` whose owning gate, on this host, has
- * died: its `finally` never ran, so nothing else would. A live owner's worktree,
- * or one another host locked, is left alone.
- * @param {string} repoDir
+ * Remove every check worktree whose owning gate, in this pid namespace, has
+ * died: its `finally` never ran (SIGKILL, a hook timeout), so nothing else
+ * would. A live gate's worktree, one owned elsewhere, and a directory without a
+ * readable owner file (a gate still starting) are left alone.
  */
-export function reapOrphanedWorktrees(repoDir) {
-  const listed = git(repoDir, ["worktree", "list", "--porcelain", "-z"]);
-  if (listed.status !== 0) return;
-  const lockedByGate = `locked ${GATE_LOCK_PREFIX}`;
-  let path = null;
-  for (const field of listed.stdout.split("\0")) {
-    if (field.startsWith("worktree ")) path = field.slice("worktree ".length);
-    if (path === null || !field.startsWith(lockedByGate)) continue;
-    const pid = Number(field.slice(lockedByGate.length));
-    if (!Number.isInteger(pid) || pid <= 0 || isAlive(pid)) continue;
-    git(repoDir, ["worktree", "remove", "--force", "--force", path]);
-    rmSync(path, { recursive: true, force: true });
+export function reapOrphanedWorktrees() {
+  for (const name of readdirSync(tmpdir())) {
+    if (!name.startsWith("push-gate-")) continue;
+    const base = join(tmpdir(), name);
+    let owner;
+    try {
+      owner = JSON.parse(readFileSync(join(base, OWNER_FILE), "utf8"));
+    } catch {
+      continue;
+    }
+    if (owner?.scope !== OWNER_SCOPE || isAlive(owner.pid)) continue;
+    git(owner.repo, ["worktree", "remove", "--force", join(base, "tree")]);
+    rmSync(base, { recursive: true, force: true });
   }
-  git(repoDir, ["worktree", "prune"]);
 }
 
 /**
@@ -194,21 +217,23 @@ export function reapOrphanedWorktrees(repoDir) {
  * @returns {string|null}
  */
 export function failedChecks(repoDir, commit, script = CHECK_SCRIPT) {
-  reapOrphanedWorktrees(repoDir);
-  const tree = mkdtempSync(join(tmpdir(), "push-gate-"));
+  reapOrphanedWorktrees();
+  const base = mkdtempSync(join(tmpdir(), "push-gate-"));
+  writeFileSync(
+    join(base, OWNER_FILE),
+    JSON.stringify({ scope: OWNER_SCOPE, pid: process.pid, repo: repoDir }),
+  );
+  const tree = join(base, "tree");
   const added = git(repoDir, [
     "worktree",
     "add",
     "--detach",
     "--quiet",
-    "--lock",
-    "--reason",
-    `${GATE_LOCK_PREFIX}${process.pid}`,
     tree,
     commit,
   ]);
   if (added.status !== 0) {
-    rmSync(tree, { recursive: true, force: true });
+    rmSync(base, { recursive: true, force: true });
     return `push-gate: could not check out ${commit} of ${repoDir}: ${added.stderr.trim()}`;
   }
   try {
@@ -241,8 +266,8 @@ export function failedChecks(repoDir, commit, script = CHECK_SCRIPT) {
     }
     return null;
   } finally {
-    git(repoDir, ["worktree", "remove", "--force", "--force", tree]);
-    rmSync(tree, { recursive: true, force: true });
+    git(repoDir, ["worktree", "remove", "--force", tree]);
+    rmSync(base, { recursive: true, force: true });
   }
 }
 

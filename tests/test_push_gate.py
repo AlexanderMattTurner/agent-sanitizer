@@ -7,10 +7,14 @@ pushed repository disagree in every case, and so do a commit and the
 uncommitted edits on top of it, so a gate checking the wrong one is red here.
 """
 
+import contextlib
 import json
 import os
-import socket
+import shutil
+import signal
 import subprocess
+import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -45,16 +49,25 @@ def _repo(path: Path, *, committed_ok: bool, worktree_ok: bool) -> Path:
     return path
 
 
-def _judge(command: str, cwd: Path) -> dict | None:
+def _judge_argv(command: str, cwd: Path) -> list[str]:
+    return ["node", "--input-type=module", "-e", _JUDGE, command, str(cwd)]
+
+
+def _judge(command: str, cwd: Path, tmp: Path | None = None) -> dict | None:
     result = subprocess.run(
-        ["node", "--input-type=module", "-e", _JUDGE, command, str(cwd)],
+        _judge_argv(command, cwd),
         cwd=cwd,
-        env={**git_env(), "CLAUDE_PROJECT_DIR": str(cwd)},
+        env=_judge_env(cwd, tmp),
         capture_output=True,
         text=True,
         check=True,
     )
     return json.loads(result.stdout)
+
+
+def _judge_env(cwd: Path, tmp: Path | None) -> dict[str, str]:
+    env = {**git_env(), "CLAUDE_PROJECT_DIR": str(cwd)}
+    return env if tmp is None else {**env, "TMPDIR": str(tmp)}
 
 
 @pytest.mark.parametrize("pushed_ok", [True, False])
@@ -197,41 +210,79 @@ def test_a_deletion_only_push_runs_no_checks(tmp_path: Path) -> None:
     assert _judge("git push origin :old-branch", repo) is None
 
 
-def test_removes_the_worktree_of_a_gate_that_died_and_spares_a_live_one(
-    tmp_path: Path,
-) -> None:
-    repo = _repo(tmp_path / "repo", committed_ok=True, worktree_ok=True)
-    env = git_env()
-    dead = subprocess.run(["sh", "-c", "echo $$"], capture_output=True, text=True)
-    owners = {
-        "dead": f"push-gate {socket.gethostname()} {dead.stdout.strip()}",
-        "live": f"push-gate {socket.gethostname()} {os.getpid()}",
-        "elsewhere": f"push-gate another-host {dead.stdout.strip()}",
-        "user": "kept by hand",
-    }
-    for name, reason in owners.items():
-        subprocess.run(
-            ["git", "worktree", "add", "-q", "--detach", "--lock"]
-            + ["--reason", reason, str(tmp_path / name)],
-            cwd=repo,
-            env=env,
-            check=True,
-        )
-    assert _judge("git push origin HEAD", repo) is None
+@contextlib.contextmanager
+def _hung_gate(repo: Path, tmp: Path) -> Iterator[tuple[subprocess.Popen, Path]]:
+    """A real gate run on `repo` whose build hangs, and the directory it checked
+    the push out into, once the checkout exists. Killed on exit."""
+    before = set(tmp.glob("push-gate-*"))
+    (repo / "package.json").write_text(
+        '{"scripts":{"build":"sleep 600"}}\n', encoding="utf-8"
+    )
+    commit_all(repo, "hang the build")
+    gate = subprocess.Popen(
+        _judge_argv("git push origin HEAD", repo),
+        cwd=repo,
+        env=_judge_env(repo, tmp),
+        start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 60
+        while not (
+            started := {
+                d
+                for d in set(tmp.glob("push-gate-*")) - before
+                if any(d.rglob("package.json"))
+            }
+        ):
+            assert gate.poll() is None and time.monotonic() < deadline
+            time.sleep(0.1)
+        [base] = started
+        yield gate, base
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(gate.pid, signal.SIGKILL)
+        gate.wait()
+
+
+def _registered_worktrees(repo: Path) -> set[str]:
     listed = subprocess.run(
         ["git", "worktree", "list", "--porcelain"],
         cwd=repo,
-        env=env,
+        env=git_env(),
         capture_output=True,
         text=True,
         check=True,
     ).stdout
-    remaining = {
-        line.split(" ", 1)[1]
+    return {
+        line.removeprefix("worktree ")
         for line in listed.splitlines()
         if line.startswith("worktree ")
     }
-    assert remaining == {str(repo)} | {
-        str(tmp_path / name) for name in ("live", "elsewhere", "user")
-    }
-    assert not (tmp_path / "dead").exists()
+
+
+def test_removes_the_worktree_of_a_killed_gate_and_spares_a_live_one(
+    tmp_path: Path,
+) -> None:
+    tmp = tmp_path / "tmp"
+    tmp.mkdir()
+    killed = _repo(tmp_path / "killed", committed_ok=True, worktree_ok=True)
+    user_tree = tmp_path / "user-tree"
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "--detach", str(user_tree)],
+        cwd=killed,
+        env=git_env(),
+        check=True,
+    )
+    shutil.rmtree(user_tree)
+    with _hung_gate(killed, tmp) as (gate, orphan):
+        os.killpg(gate.pid, signal.SIGKILL)
+        gate.wait()
+    assert orphan.exists()
+
+    live = _repo(tmp_path / "live", committed_ok=True, worktree_ok=True)
+    with _hung_gate(live, tmp) as (_, live_base):
+        other = _repo(tmp_path / "other", committed_ok=True, worktree_ok=True)
+        assert _judge("git push origin HEAD", other, tmp) is None
+        assert not orphan.exists()
+        assert _registered_worktrees(killed) == {str(killed), str(user_tree)}
+        assert any(live_base.rglob("package.json"))
