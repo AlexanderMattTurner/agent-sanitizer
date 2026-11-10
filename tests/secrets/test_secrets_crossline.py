@@ -618,7 +618,6 @@ def _wrap(token: str, width: int, indent: str = "") -> str:
         (f"GH_TOKEN={_CLASSIC}\n1 file changed", f"GH_TOKEN={_GH}\n1 file changed"),
         (f"t {_CLASSIC}\n2026-11-10 done", f"t {_GH}\n2026-11-10 done"),
         (f"{_CLASSIC}\nv2 ok", f"{_GH}\nv2 ok"),
-        (f"{_CLASSIC[:20]}\n{_CLASSIC[20:]}\n1 file", f"{_GH}\n1 file"),
         (f"{_wrap(_STATELESS, 76)}\n200 OK", f"{_GH}\n200 OK"),
         (f"{_CLASSIC}\n\x1b[1;32mv2 ok", f"{_GH}\n\x1b[1;32mv2 ok"),
     ],

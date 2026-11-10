@@ -2126,14 +2126,13 @@ def _settle_wrapped_span(
 
     The collapsed view glues a token's last line to the next line's first word,
     and an open-ended token run swallows it (``GH_TOKEN=ghp_…`` then
-    ``HOME=/root`` loses ``HOME``). A seam is cut, whatever the geometry, where
-    the token is already complete before it and fewer than
-    :data:`_WORD_EVIDENCE_LEN` token chars of the span remain past it (``1 file changed``,
-    ``v2 ok``): what stays verbatim is then at most that short a tail of an
-    over-long token. Otherwise a wrap's evidence is its geometry: two or more
-    broken lines of one width so far. Without it, the first seam is cut where
-    the text taken past it is word-shaped (:func:`_is_word_shaped`) and either
-    the token is already complete before it or the continuation is indented and
+    ``HOME=/root`` loses ``HOME``). A wrap's evidence is its geometry: two or
+    more broken lines of one width so far, and a seam with it is never cut, so a
+    wrapped token's short last line is redacted with it. Without it, a seam is
+    cut where the token is already complete before it and either fewer than
+    :data:`_WORD_EVIDENCE_LEN` token chars of the span remain past it (``1 file
+    changed``, ``v2 ok``) or the text taken past it is word-shaped
+    (:func:`_is_word_shaped`); or where that text is word-shaped, indented and
     at least :data:`_WORD_EVIDENCE_LEN` long. A blank line is always cut, since
     no wrapper emits one. The cut is what keeps the next line's text verbatim. A configured env value (no
     ``patterns``) is exact, so it is never cut. One pass over the seams, with a
@@ -2152,10 +2151,10 @@ def _settle_wrapped_span(
         continuation = WRAP_SEAM_RE.match(text, seam).end()
         if text[continuation] == "\n":
             break
-        if chars_after(continuation) < _WORD_EVIDENCE_LEN and completes(seam):
-            break
         if k >= 1 and len(widths) == 1:
             continue
+        if chars_after(continuation) < _WORD_EVIDENCE_LEN and completes(seam):
+            break
         stop = seams[k + 1] if k + 1 < len(seams) else end
         if not _is_word_shaped(text[continuation:stop]):
             continue

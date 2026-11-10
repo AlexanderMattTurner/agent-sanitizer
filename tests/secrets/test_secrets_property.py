@@ -196,14 +196,15 @@ def _wrapped_token_case(draw):
 
     Shapes excluded, each an ambiguity the wrap geometry cannot resolve (the
     first two are the residuals test_secrets_crossline.py documents):
-    * under 8 chars of the token left past a seam it is already complete
-      before — read as the next line's text, so cut;
+    * where the lines so far give no one-width evidence, under 8 token chars
+      left past a seam the token is already complete before — read as the next
+      line's text, so cut;
     * a continuation that is word-shaped where the lines so far give no
       one-width evidence, when the token is already complete before it or the
       continuation is indented and >= 8 chars — read as a word, so cut;
     * a token whose last line fills the width, followed directly by a line
-      opening with a token-class run of 8+ chars — indistinguishable from a
-      token that continues there;
+      opening with a token-class run — indistinguishable from a token that
+      continues there;
     * a configured value whose own whitespace abuts a seam under added
       indentation — which blank belongs to the value is unknowable.
     """
@@ -261,7 +262,7 @@ def _wrapped_token_case(draw):
         head = sum(len(c) for c in chunks[: k + 1])
         complete = complete_at is not None and head >= complete_at
         rest = sum(len(c) for c in chunks[k + 1 :]) + opener_run
-        assume(not (complete and rest < _WORD_EVIDENCE_LEN))
+        assume(evidence or not (complete and rest < _WORD_EVIDENCE_LEN))
         assume(
             complete_at is None
             or evidence
@@ -269,8 +270,7 @@ def _wrapped_token_case(draw):
             or not (complete or (indent and len(cont) >= _WORD_EVIDENCE_LEN))
         )
     last = len(chunks) - 1
-    if last >= 1 and len(set(widths)) == 1:
-        assume(opener_run < _WORD_EVIDENCE_LEN)
+    assume(not (opener_run and last >= 1 and len(set(widths)) == 1))
 
     before = "".join(_benign_line(words, "") + "\n" for words in prefix)
     after = "\n" * blanks + "".join("\n" + _benign_line(w, i) for w, i in suffix)
