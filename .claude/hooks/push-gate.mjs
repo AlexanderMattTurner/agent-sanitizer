@@ -11,6 +11,9 @@
  * worktree (`cd /tmp/wt && git push`, `git -C …`) never touches it, and its
  * uncommitted edits are not pushed — and concurrent runs in one checkout share
  * build and coverage output. A PR create checks `HEAD` of the call's cwd.
+ * Each worktree is locked with its owner's host and pid, so a gate killed
+ * before its cleanup ran (SIGKILL, a hook timeout) has its worktree removed by
+ * the next gate run in that repository.
  *
  * The deny body is what blocks. Claude Code treats a hook's exit 1 as a
  * non-blocking error and runs the tool call anyway, so a check script that only
@@ -24,7 +27,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir, hostname, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -147,6 +150,42 @@ export async function pushTargets(payload, pushes) {
   return [...targets.values()];
 }
 
+/** A check worktree's lock reason up to its owner's pid: `push-gate <host> `. */
+const GATE_LOCK_PREFIX = `push-gate ${hostname()} `;
+
+/** @param {number} pid */
+function isAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM: the pid exists under another uid, so it is alive.
+    return /** @type {NodeJS.ErrnoException} */ (error).code === "EPERM";
+  }
+}
+
+/**
+ * Remove the check worktrees of `repoDir` whose owning gate, on this host, has
+ * died: its `finally` never ran, so nothing else would. A live owner's worktree,
+ * or one another host locked, is left alone.
+ * @param {string} repoDir
+ */
+export function reapOrphanedWorktrees(repoDir) {
+  const listed = git(repoDir, ["worktree", "list", "--porcelain", "-z"]);
+  if (listed.status !== 0) return;
+  const lockedByGate = `locked ${GATE_LOCK_PREFIX}`;
+  let path = null;
+  for (const field of listed.stdout.split("\0")) {
+    if (field.startsWith("worktree ")) path = field.slice("worktree ".length);
+    if (path === null || !field.startsWith(lockedByGate)) continue;
+    const pid = Number(field.slice(lockedByGate.length));
+    if (!Number.isInteger(pid) || pid <= 0 || isAlive(pid)) continue;
+    git(repoDir, ["worktree", "remove", "--force", "--force", path]);
+    rmSync(path, { recursive: true, force: true });
+  }
+  git(repoDir, ["worktree", "prune"]);
+}
+
 /**
  * Run the checks on `commit` of the repository at `repoDir`, alone in a
  * throwaway worktree. `null` when they pass, else the text that explains the
@@ -155,12 +194,16 @@ export async function pushTargets(payload, pushes) {
  * @returns {string|null}
  */
 export function failedChecks(repoDir, commit, script = CHECK_SCRIPT) {
+  reapOrphanedWorktrees(repoDir);
   const tree = mkdtempSync(join(tmpdir(), "push-gate-"));
   const added = git(repoDir, [
     "worktree",
     "add",
     "--detach",
     "--quiet",
+    "--lock",
+    "--reason",
+    `${GATE_LOCK_PREFIX}${process.pid}`,
     tree,
     commit,
   ]);
@@ -198,7 +241,7 @@ export function failedChecks(repoDir, commit, script = CHECK_SCRIPT) {
     }
     return null;
   } finally {
-    git(repoDir, ["worktree", "remove", "--force", tree]);
+    git(repoDir, ["worktree", "remove", "--force", "--force", tree]);
     rmSync(tree, { recursive: true, force: true });
   }
 }

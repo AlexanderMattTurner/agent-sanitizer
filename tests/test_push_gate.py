@@ -8,6 +8,8 @@ uncommitted edits on top of it, so a gate checking the wrong one is red here.
 """
 
 import json
+import os
+import socket
 import subprocess
 from pathlib import Path
 
@@ -193,3 +195,43 @@ def test_a_deletion_only_push_runs_no_checks(tmp_path: Path) -> None:
     repo = _repo(tmp_path / "repo", committed_ok=False, worktree_ok=False)
     assert _judge("git push origin --delete old-branch", repo) is None
     assert _judge("git push origin :old-branch", repo) is None
+
+
+def test_removes_the_worktree_of_a_gate_that_died_and_spares_a_live_one(
+    tmp_path: Path,
+) -> None:
+    repo = _repo(tmp_path / "repo", committed_ok=True, worktree_ok=True)
+    env = git_env()
+    dead = subprocess.run(["sh", "-c", "echo $$"], capture_output=True, text=True)
+    owners = {
+        "dead": f"push-gate {socket.gethostname()} {dead.stdout.strip()}",
+        "live": f"push-gate {socket.gethostname()} {os.getpid()}",
+        "elsewhere": f"push-gate another-host {dead.stdout.strip()}",
+        "user": "kept by hand",
+    }
+    for name, reason in owners.items():
+        subprocess.run(
+            ["git", "worktree", "add", "-q", "--detach", "--lock"]
+            + ["--reason", reason, str(tmp_path / name)],
+            cwd=repo,
+            env=env,
+            check=True,
+        )
+    assert _judge("git push origin HEAD", repo) is None
+    listed = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    remaining = {
+        line.split(" ", 1)[1]
+        for line in listed.splitlines()
+        if line.startswith("worktree ")
+    }
+    assert remaining == {str(repo)} | {
+        str(tmp_path / name) for name in ("live", "elsewhere", "user")
+    }
+    assert not (tmp_path / "dead").exists()
