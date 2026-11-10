@@ -6,14 +6,14 @@
  * `completion-check.mjs`.
  *
  * The checks run on the PUSHED tree: each commit the push publishes, checked
- * out alone in a throwaway worktree of the repository the push runs in. The
- * session's own checkout is the wrong subject twice over — a push from another
- * worktree (`cd /tmp/wt && git push`, `git -C …`) never touches it, and its
- * uncommitted edits are not pushed — and concurrent runs in one checkout share
- * build and coverage output. A PR create checks `HEAD` of the call's cwd.
- * Each worktree sits beside a file naming its owner, so a gate killed before
- * its cleanup ran (SIGKILL, a hook timeout) has its worktree removed by the
- * next gate run on the same host.
+ * out alone in a throwaway `clone --shared` of the repository the push runs
+ * in. The session's own checkout is the wrong subject twice over — a push from
+ * another worktree (`cd /tmp/wt && git push`, `git -C …`) never touches it, and
+ * its uncommitted edits are not pushed — and concurrent runs in one checkout
+ * share build and coverage output. A PR create checks `HEAD` of the call's cwd.
+ * The clone is registered nowhere in the pushed repository, so a gate killed
+ * before its cleanup ran (SIGKILL, a hook timeout) leaves only its temp
+ * directory, and no later run has to find and remove anything.
  *
  * The deny body is what blocks. Claude Code treats a hook's exit 1 as a
  * non-blocking error and runs the tool call anyway, so a check script that only
@@ -26,16 +26,8 @@
  * Dependency-free on purpose: the template ships no node_modules.
  */
 import { spawnSync } from "node:child_process";
-import {
-  existsSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  readlinkSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { homedir, hostname, tmpdir } from "node:os";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -159,82 +151,35 @@ export async function pushTargets(payload, pushes) {
 }
 
 /**
- * Who owns a check worktree: this host and pid namespace (Linux names it; other
- * platforms have one per host), so a pid is only ever probed where it means
- * the same process.
- */
-const OWNER_SCOPE = `${hostname()} ${pidNamespace()}`;
-
-/** Holds `{scope, pid, repo}` beside each check worktree's `tree/`. */
-const OWNER_FILE = "owner.json";
-
-function pidNamespace() {
-  try {
-    return readlinkSync("/proc/self/ns/pid");
-  } catch {
-    return "";
-  }
-}
-
-/** @param {number} pid */
-function isAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // EPERM: the pid exists under another uid, so it is alive.
-    return /** @type {NodeJS.ErrnoException} */ (error).code === "EPERM";
-  }
-}
-
-/**
- * Remove every check worktree whose owning gate, in this pid namespace, has
- * died: its `finally` never ran (SIGKILL, a hook timeout), so nothing else
- * would. A live gate's worktree, one owned elsewhere, and a directory without a
- * readable owner file (a gate still starting) are left alone.
- */
-export function reapOrphanedWorktrees() {
-  for (const name of readdirSync(tmpdir())) {
-    if (!name.startsWith("push-gate-")) continue;
-    const base = join(tmpdir(), name);
-    let owner;
-    try {
-      owner = JSON.parse(readFileSync(join(base, OWNER_FILE), "utf8"));
-    } catch {
-      continue;
-    }
-    if (owner?.scope !== OWNER_SCOPE || isAlive(owner.pid)) continue;
-    git(owner.repo, ["worktree", "remove", "--force", join(base, "tree")]);
-    rmSync(base, { recursive: true, force: true });
-  }
-}
-
-/**
  * Run the checks on `commit` of the repository at `repoDir`, alone in a
- * throwaway worktree. `null` when they pass, else the text that explains the
+ * throwaway clone. `null` when they pass, else the text that explains the
  * failure.
  * @param {string} repoDir @param {string} commit @param {string} [script]
  * @returns {string|null}
  */
 export function failedChecks(repoDir, commit, script = CHECK_SCRIPT) {
-  reapOrphanedWorktrees();
-  const base = mkdtempSync(join(tmpdir(), "push-gate-"));
-  writeFileSync(
-    join(base, OWNER_FILE),
-    JSON.stringify({ scope: OWNER_SCOPE, pid: process.pid, repo: repoDir }),
-  );
-  const tree = join(base, "tree");
-  const added = git(repoDir, [
-    "worktree",
-    "add",
-    "--detach",
-    "--quiet",
-    tree,
-    commit,
-  ]);
-  if (added.status !== 0) {
-    rmSync(base, { recursive: true, force: true });
-    return `push-gate: could not check out ${commit} of ${repoDir}: ${added.stderr.trim()}`;
+  const tree = mkdtempSync(join(tmpdir(), "push-gate-"));
+  // The common dir holds the objects, also when `repoDir` is a linked worktree
+  // or a subdirectory; rev-parse prints it relative to `repoDir`.
+  const commonDir = git(repoDir, ["rev-parse", "--git-common-dir"]);
+  const cloned =
+    commonDir.status === 0
+      ? git(tree, [
+          "clone",
+          "--quiet",
+          "--shared",
+          "--no-checkout",
+          resolve(repoDir, commonDir.stdout.trim()),
+          ".",
+        ])
+      : commonDir;
+  const checkedOut =
+    cloned.status === 0
+      ? git(tree, ["checkout", "--quiet", "--detach", commit])
+      : cloned;
+  if (checkedOut.status !== 0) {
+    rmSync(tree, { recursive: true, force: true });
+    return `push-gate: could not check out ${commit} of ${repoDir}: ${checkedOut.stderr.trim()}`;
   }
   try {
     const env = {
@@ -266,8 +211,7 @@ export function failedChecks(repoDir, commit, script = CHECK_SCRIPT) {
     }
     return null;
   } finally {
-    git(repoDir, ["worktree", "remove", "--force", tree]);
-    rmSync(base, { recursive: true, force: true });
+    rmSync(tree, { recursive: true, force: true });
   }
 }
 

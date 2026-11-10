@@ -10,7 +10,6 @@ uncommitted edits on top of it, so a gate checking the wrong one is red here.
 import contextlib
 import json
 import os
-import shutil
 import signal
 import subprocess
 import time
@@ -260,29 +259,13 @@ def _registered_worktrees(repo: Path) -> set[str]:
     }
 
 
-def test_removes_the_worktree_of_a_killed_gate_and_spares_a_live_one(
+def test_a_killed_gate_leaves_nothing_registered_in_the_repository(
     tmp_path: Path,
 ) -> None:
     tmp = tmp_path / "tmp"
     tmp.mkdir()
-    killed = _repo(tmp_path / "killed", committed_ok=True, worktree_ok=True)
-    user_tree = tmp_path / "user-tree"
-    subprocess.run(
-        ["git", "worktree", "add", "-q", "--detach", str(user_tree)],
-        cwd=killed,
-        env=git_env(),
-        check=True,
-    )
-    shutil.rmtree(user_tree)
-    with _hung_gate(killed, tmp) as (gate, orphan):
+    repo = _repo(tmp_path / "repo", committed_ok=True, worktree_ok=True)
+    with _hung_gate(repo, tmp) as (gate, _):
         os.killpg(gate.pid, signal.SIGKILL)
         gate.wait()
-    assert orphan.exists()
-
-    live = _repo(tmp_path / "live", committed_ok=True, worktree_ok=True)
-    with _hung_gate(live, tmp) as (_, live_base):
-        other = _repo(tmp_path / "other", committed_ok=True, worktree_ok=True)
-        assert _judge("git push origin HEAD", other, tmp) is None
-        assert not orphan.exists()
-        assert _registered_worktrees(killed) == {str(killed), str(user_tree)}
-        assert any(live_base.rglob("package.json"))
+    assert _registered_worktrees(repo) == {str(repo)}
