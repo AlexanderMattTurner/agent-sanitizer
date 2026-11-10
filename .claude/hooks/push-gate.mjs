@@ -151,6 +151,24 @@ export async function pushTargets(payload, pushes) {
 }
 
 /**
+ * Delete a check checkout. A check can leave a directory it made unwritable (a
+ * permissions fixture), so write access is restored first. A removal that still
+ * fails is reported on stderr and never thrown: a throw here would replace the
+ * verdict with exit 1, which Claude Code runs the push through unchecked.
+ * @param {string} tree
+ */
+function removeCheckout(tree) {
+  spawnSync("chmod", ["-R", "u+rwX", tree]);
+  try {
+    rmSync(tree, { recursive: true, force: true });
+  } catch (error) {
+    process.stderr.write(
+      `push-gate: could not remove ${tree}: ${/** @type {Error} */ (error).message}\n`,
+    );
+  }
+}
+
+/**
  * Run the checks on `commit` of the repository at `repoDir`, alone in a
  * throwaway clone. `null` when they pass, else the text that explains the
  * failure.
@@ -178,7 +196,7 @@ export function failedChecks(repoDir, commit, script = CHECK_SCRIPT) {
       ? git(tree, ["checkout", "--quiet", "--detach", commit])
       : cloned;
   if (checkedOut.status !== 0) {
-    rmSync(tree, { recursive: true, force: true });
+    removeCheckout(tree);
     return `push-gate: could not check out ${commit} of ${repoDir}: ${checkedOut.stderr.trim()}`;
   }
   try {
@@ -211,7 +229,7 @@ export function failedChecks(repoDir, commit, script = CHECK_SCRIPT) {
     }
     return null;
   } finally {
-    rmSync(tree, { recursive: true, force: true });
+    removeCheckout(tree);
   }
 }
 

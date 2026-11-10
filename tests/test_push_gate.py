@@ -269,3 +269,16 @@ def test_a_killed_gate_leaves_nothing_registered_in_the_repository(
         os.killpg(gate.pid, signal.SIGKILL)
         gate.wait()
     assert _registered_worktrees(repo) == {str(repo)}
+
+
+def test_a_checkout_a_check_made_unwritable_is_still_removed(tmp_path: Path) -> None:
+    tmp = tmp_path / "tmp"
+    tmp.mkdir()
+    repo = _repo(tmp_path / "repo", committed_ok=True, worktree_ok=True)
+    (repo / "package.json").write_text(
+        '{"scripts":{"build":"mkdir -p d && touch d/x && chmod 000 d && test -f ok"}}\n',
+        encoding="utf-8",
+    )
+    commit_all(repo, "lock a directory")
+    assert _judge("git push origin HEAD", repo, tmp) is None
+    assert list(tmp.glob("push-gate-*")) == []
