@@ -2096,11 +2096,12 @@ _INDENTED_CONTINUATION_RE = re.compile(r"\n[ \t]")
 
 def _is_word_shaped(continuation: str) -> bool:
     """True when a wrapped line's contribution reads as a word or identifier
-    (``HOME``, ``echo``, ``next_line_here``) rather than a token tail: a random
-    base62/base64url run of any length worth leaking carries a digit or both
-    letter cases, which a word or a SCREAMING/snake_case name does not."""
+    (``HOME``, ``echo``, ``next_line_here``, ``Done``) rather than a token tail:
+    a random base62/base64url run of any length worth leaking carries a digit or
+    a capital past its first letter, which a word, a Capitalized word or a
+    SCREAMING/snake_case name does not."""
     has_case_mix = any(c.islower() for c in continuation) and any(
-        c.isupper() for c in continuation
+        c.isupper() for c in continuation[1:]
     )
     return not has_case_mix and not any(c.isdigit() for c in continuation)
 

@@ -6,7 +6,7 @@ one alone drifts SILENTLY: the guard suites the pre-commit hook spawns keep
 inheriting the override, so a suite that commits into a throwaway repo writes
 those commits onto the developer's real branch and nothing reports an error.
 
-`config/git-location-vars.json` is now the one list. These tests measure each
+`.hooks/lib/git-location-vars.json` is now the one list. These tests measure each
 reader's BEHAVIOUR against it — the exact set of names it removes from a real
 environment — so a reader that grows a private copy, or stops reading the shared
 file, reds here rather than drifting.
@@ -56,7 +56,7 @@ def test_the_python_reader_strips_exactly_the_listed_names(monkeypatch) -> None:
 
 
 # not-a-drift-guard: behavior tested against the one shared JSON config
-# (config/git-location-vars.json), not compared against a second hand-copy.
+# (.hooks/lib/git-location-vars.json), not compared against a second hand-copy.
 def test_the_node_reader_strips_exactly_the_listed_names() -> None:
     env = _probe_env()
     result = subprocess.run(

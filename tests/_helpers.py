@@ -13,7 +13,7 @@ from pathlib import Path
 
 #: The one list of git's repository-location overrides, shared with the JS side
 #: through `.hooks/lib/git-location-env.mjs`.
-GIT_LOCATION_VARS_CONFIG = "config/git-location-vars.json"
+GIT_LOCATION_VARS_CONFIG = ".hooks/lib/git-location-vars.json"
 
 
 def _git_location_vars() -> frozenset[str]:

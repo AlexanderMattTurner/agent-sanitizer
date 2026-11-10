@@ -606,6 +606,9 @@ def _wrap(token: str, width: int, indent: str = "") -> str:
         (f"GH_TOKEN={_CLASSIC}\nHOME=/root", f"GH_TOKEN={_GH}\nHOME=/root"),
         (f"token: {_CLASSIC}\nother: 1", f"token: {_GH}\nother: 1"),
         (f"t {_CLASSIC}\necho done", f"t {_GH}\necho done"),
+        (f"GH_TOKEN={_CLASSIC}\nDone.", f"GH_TOKEN={_GH}\nDone."),
+        (f"t {_CLASSIC}\nHello world", f"t {_GH}\nHello world"),
+        (f"{_wrap(_STATELESS, 76)}\nTraceback (x)", f"{_GH}\nTraceback (x)"),
         (f"a\n  {_CLASSIC}\n  next_line_here", f"a\n  {_GH}\n  next_line_here"),
         (f"{_CLASSIC[:22]}\n{_CLASSIC[22:]}\nend", f"{_GH}\nend"),
         (f"token:\n{_wrap(_STATELESS, 76)}\nend", f"token:\n{_GH}\nend"),
@@ -618,8 +621,8 @@ def test_wrapped_or_whole_token_leaves_the_next_lines_word_verbatim(text, expect
     """The collapsed view glues a token to the next line's first word, which an
     open-ended token run would swallow. Accepted residual, stated here because
     the same geometry is a real wrap: an already-complete token whose genuine
-    continuation on ONE further line is word-shaped (no digit, one letter case)
-    leaves that continuation unredacted."""
+    continuation on ONE further line is word-shaped (no digit, no capital past
+    its first letter) leaves that continuation unredacted."""
     out, found = redact(text)
     assert out == expected
     assert found == ["GitHub Token"]
