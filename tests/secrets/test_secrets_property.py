@@ -252,12 +252,15 @@ def _wrapped_token_case(draw):
     assume(len(chunks) > 1 or blanks or suffix)
 
     widths = [len(line) for line in lines]
+    # The token-class run an open-ended token swallows from a line right after it.
+    body = r"[\w-]*" if token.startswith("ghs_") else r"\w*"
+    opener_run = re.match(body, suffix[0][0][0]).end() if suffix and not blanks else 0
     for k in range(len(chunks) - 1):
         evidence = k >= 1 and len(set(widths[: k + 1])) == 1
         cont = raw[k + 1]
         head = sum(len(c) for c in chunks[: k + 1])
         complete = complete_at is not None and head >= complete_at
-        rest = len(("\n" + indent).join(raw[k + 1 :]))
+        rest = sum(len(c) for c in chunks[k + 1 :]) + opener_run
         assume(not (complete and rest < _WORD_EVIDENCE_LEN))
         assume(
             complete_at is None
@@ -266,8 +269,8 @@ def _wrapped_token_case(draw):
             or not (complete or (indent and len(cont) >= _WORD_EVIDENCE_LEN))
         )
     last = len(chunks) - 1
-    if suffix and not blanks and last >= 1 and len(set(widths)) == 1:
-        assume(re.match(r"[\w-]*", suffix[0][0][0]).end() < _WORD_EVIDENCE_LEN)
+    if last >= 1 and len(set(widths)) == 1:
+        assume(opener_run < _WORD_EVIDENCE_LEN)
 
     before = "".join(_benign_line(words, "") + "\n" for words in prefix)
     after = "\n" * blanks + "".join("\n" + _benign_line(w, i) for w, i in suffix)

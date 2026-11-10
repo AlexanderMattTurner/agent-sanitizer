@@ -620,6 +620,7 @@ def _wrap(token: str, width: int, indent: str = "") -> str:
         (f"{_CLASSIC}\nv2 ok", f"{_GH}\nv2 ok"),
         (f"{_CLASSIC[:20]}\n{_CLASSIC[20:]}\n1 file", f"{_GH}\n1 file"),
         (f"{_wrap(_STATELESS, 76)}\n200 OK", f"{_GH}\n200 OK"),
+        (f"{_CLASSIC}\n\x1b[1;32mv2 ok", f"{_GH}\n\x1b[1;32mv2 ok"),
     ],
 )
 def test_wrapped_or_whole_token_leaves_the_next_lines_word_verbatim(text, expected):

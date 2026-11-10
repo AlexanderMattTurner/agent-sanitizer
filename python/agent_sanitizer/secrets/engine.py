@@ -2127,8 +2127,8 @@ def _settle_wrapped_span(
     The collapsed view glues a token's last line to the next line's first word,
     and an open-ended token run swallows it (``GH_TOKEN=ghp_…`` then
     ``HOME=/root`` loses ``HOME``). A seam is cut, whatever the geometry, where
-    the token is already complete before it and less than
-    :data:`_WORD_EVIDENCE_LEN` of the span remains past it (``1 file changed``,
+    the token is already complete before it and fewer than
+    :data:`_WORD_EVIDENCE_LEN` token chars of the span remain past it (``1 file changed``,
     ``v2 ok``): what stays verbatim is then at most that short a tail of an
     over-long token. Otherwise a wrap's evidence is its geometry: two or more
     broken lines of one width so far. Without it, the first seam is cut where
@@ -2144,7 +2144,7 @@ def _settle_wrapped_span(
         return None
     if not patterns:
         return end
-    completes = _wrap_completion_probe(text, start, end, patterns, charset)
+    completes, chars_after = _wrap_completion_probe(text, start, end, patterns, charset)
     widths: set[int] = set()
     for k, seam in enumerate(seams):
         deadline.check("cross-line wrap settling")
@@ -2152,7 +2152,7 @@ def _settle_wrapped_span(
         continuation = WRAP_SEAM_RE.match(text, seam).end()
         if text[continuation] == "\n":
             break
-        if end - continuation < _WORD_EVIDENCE_LEN and completes(seam):
+        if chars_after(continuation) < _WORD_EVIDENCE_LEN and completes(seam):
             break
         if k >= 1 and len(widths) == 1:
             continue
@@ -2173,27 +2173,42 @@ def _wrap_completion_probe(
     end: int,
     patterns: Sequence[re.Pattern[str]],
     charset: frozenset[int],
-) -> Callable[[int], bool]:
-    """``completes(stop)``: whether ``text[start:stop]``, collapsed, is a whole
-    match of ``patterns`` in one of the detection views discovery used (invisible-
-    and escape-stripped), so a token discovery confirmed through an escape is not
-    rejected here. The views are built once per span; each probe is a bisect plus
-    an ``endpos``-bounded ``fullmatch``."""
+) -> tuple[Callable[[int], bool], Callable[[int], int]]:
+    """``(completes, chars_after)`` over the detection views discovery used
+    (invisible- and escape-stripped) of ``text[start:end]``, collapsed.
+    ``completes(stop)``: whether ``text[start:stop]`` is a whole match of
+    ``patterns`` in one of them, so a token discovery confirmed through an
+    escape is not rejected here. ``chars_after(pos)``: the fewest token chars
+    any view holds from ``pos`` to ``end``, so seams, escapes and invisibles are
+    not counted as token. The views are built once per span; each probe is a
+    bisect plus at most an ``endpos``-bounded ``fullmatch``."""
     collapsed, to_span = wrap_seam_offsets(text[start:end])
     views = _invisible_free_views(collapsed, charset)
 
-    def completes(stop: int) -> bool:
-        for stripped, to_collapsed in views:
-            endpos = bisect.bisect_left(
-                range(len(stripped)),
-                stop - start,
-                key=lambda i, m=to_collapsed: to_span[m[i]],
+    def chars_before(stop: int) -> list[tuple[str, int]]:
+        return [
+            (
+                stripped,
+                bisect.bisect_left(
+                    range(len(stripped)),
+                    stop - start,
+                    key=lambda i, m=to_collapsed: to_span[m[i]],
+                ),
             )
-            if any(p.fullmatch(stripped, 0, endpos) for p in patterns):
-                return True
-        return False
+            for stripped, to_collapsed in views
+        ]
 
-    return completes
+    def completes(stop: int) -> bool:
+        return any(
+            p.fullmatch(stripped, 0, endpos)
+            for stripped, endpos in chars_before(stop)
+            for p in patterns
+        )
+
+    def chars_after(pos: int) -> int:
+        return min(len(stripped) - endpos for stripped, endpos in chars_before(pos))
+
+    return completes, chars_after
 
 
 def _redact_cross_line(
