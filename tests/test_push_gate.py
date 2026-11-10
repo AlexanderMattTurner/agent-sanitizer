@@ -7,8 +7,13 @@ pushed repository disagree in every case, and so do a commit and the
 uncommitted edits on top of it, so a gate checking the wrong one is red here.
 """
 
+import contextlib
 import json
+import os
+import signal
 import subprocess
+import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -43,16 +48,25 @@ def _repo(path: Path, *, committed_ok: bool, worktree_ok: bool) -> Path:
     return path
 
 
-def _judge(command: str, cwd: Path) -> dict | None:
+def _judge_argv(command: str, cwd: Path) -> list[str]:
+    return ["node", "--input-type=module", "-e", _JUDGE, command, str(cwd)]
+
+
+def _judge(command: str, cwd: Path, tmp: Path | None = None) -> dict | None:
     result = subprocess.run(
-        ["node", "--input-type=module", "-e", _JUDGE, command, str(cwd)],
+        _judge_argv(command, cwd),
         cwd=cwd,
-        env={**git_env(), "CLAUDE_PROJECT_DIR": str(cwd)},
+        env=_judge_env(cwd, tmp),
         capture_output=True,
         text=True,
         check=True,
     )
     return json.loads(result.stdout)
+
+
+def _judge_env(cwd: Path, tmp: Path | None) -> dict[str, str]:
+    env = {**git_env(), "CLAUDE_PROJECT_DIR": str(cwd)}
+    return env if tmp is None else {**env, "TMPDIR": str(tmp)}
 
 
 @pytest.mark.parametrize("pushed_ok", [True, False])
@@ -193,3 +207,78 @@ def test_a_deletion_only_push_runs_no_checks(tmp_path: Path) -> None:
     repo = _repo(tmp_path / "repo", committed_ok=False, worktree_ok=False)
     assert _judge("git push origin --delete old-branch", repo) is None
     assert _judge("git push origin :old-branch", repo) is None
+
+
+@contextlib.contextmanager
+def _hung_gate(repo: Path, tmp: Path) -> Iterator[tuple[subprocess.Popen, Path]]:
+    """A real gate run on `repo` whose build hangs, and the directory it checked
+    the push out into, once the checkout exists. Killed on exit."""
+    before = set(tmp.glob("push-gate-*"))
+    (repo / "package.json").write_text(
+        '{"scripts":{"build":"sleep 600"}}\n', encoding="utf-8"
+    )
+    commit_all(repo, "hang the build")
+    gate = subprocess.Popen(
+        _judge_argv("git push origin HEAD", repo),
+        cwd=repo,
+        env=_judge_env(repo, tmp),
+        start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 60
+        while not (
+            started := {
+                d
+                for d in set(tmp.glob("push-gate-*")) - before
+                if any(d.rglob("package.json"))
+            }
+        ):
+            assert gate.poll() is None and time.monotonic() < deadline
+            time.sleep(0.1)
+        [base] = started
+        yield gate, base
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(gate.pid, signal.SIGKILL)
+        gate.wait()
+
+
+def _registered_worktrees(repo: Path) -> set[str]:
+    listed = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        cwd=repo,
+        env=git_env(),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return {
+        line.removeprefix("worktree ")
+        for line in listed.splitlines()
+        if line.startswith("worktree ")
+    }
+
+
+def test_a_killed_gate_leaves_nothing_registered_in_the_repository(
+    tmp_path: Path,
+) -> None:
+    tmp = tmp_path / "tmp"
+    tmp.mkdir()
+    repo = _repo(tmp_path / "repo", committed_ok=True, worktree_ok=True)
+    with _hung_gate(repo, tmp) as (gate, _):
+        os.killpg(gate.pid, signal.SIGKILL)
+        gate.wait()
+    assert _registered_worktrees(repo) == {str(repo)}
+
+
+def test_a_checkout_a_check_made_unwritable_is_still_removed(tmp_path: Path) -> None:
+    tmp = tmp_path / "tmp"
+    tmp.mkdir()
+    repo = _repo(tmp_path / "repo", committed_ok=True, worktree_ok=True)
+    (repo / "package.json").write_text(
+        '{"scripts":{"build":"mkdir -p d && touch d/x && chmod 000 d && test -f ok"}}\n',
+        encoding="utf-8",
+    )
+    commit_all(repo, "lock a directory")
+    assert _judge("git push origin HEAD", repo, tmp) is None
+    assert list(tmp.glob("push-gate-*")) == []

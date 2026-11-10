@@ -14,6 +14,7 @@ chars, and newlines:
 """
 
 import base64
+import re
 
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
@@ -164,9 +165,13 @@ _LEADS = ["", "  ", "GH_TOKEN=", "token: ", "key = "]
 _INDENTS = ["", " ", "  ", "\t", "    "]
 _NOISE = ["\x1b[31m", "\u200b"]
 # Opens the line straight after the token: word-shaped (no digit, no capital
-# past the first letter), the only evidence that tells a next-line word from a
-# token tail. A digit-led or mixed-case opener IS a plausible tail.
+# past the first letter) or a token-class run under 8 chars, the evidence that
+# tells a next-line word from a token tail. A longer mixed-case or digit-bearing
+# run IS a plausible tail.
 _OPENERS = [
+    "1 file changed",
+    "v2 ok",
+    "200 OK",
     "hello",
     "Hello world",
     "Done.",
@@ -190,12 +195,16 @@ def _wrapped_token_case(draw):
     """(text, expected, label) for one token folded at a drawn width.
 
     Shapes excluded, each an ambiguity the wrap geometry cannot resolve (the
-    first is the residual test_secrets_crossline.py documents):
+    first two are the residuals test_secrets_crossline.py documents):
+    * where the lines so far give no one-width evidence, under 8 token chars
+      left past a seam the token is already complete before — read as the next
+      line's text, so cut;
     * a continuation that is word-shaped where the lines so far give no
       one-width evidence, when the token is already complete before it or the
       continuation is indented and >= 8 chars — read as a word, so cut;
-    * a token whose last line fills the width, followed directly by a line —
-      indistinguishable from a token that continues there;
+    * a token whose last line fills the width, followed directly by a line
+      opening with a token-class run — indistinguishable from a token that
+      continues there;
     * a configured value whose own whitespace abuts a seam under added
       indentation — which blank belongs to the value is unknowable.
     """
@@ -244,18 +253,24 @@ def _wrapped_token_case(draw):
     assume(len(chunks) > 1 or blanks or suffix)
 
     widths = [len(line) for line in lines]
+    # The token-class run an open-ended token swallows from a line right after it.
+    body = r"[\w-]*" if token.startswith("ghs_") else r"\w*"
+    opener_run = re.match(body, suffix[0][0][0]).end() if suffix and not blanks else 0
     for k in range(len(chunks) - 1):
         evidence = k >= 1 and len(set(widths[: k + 1])) == 1
         cont = raw[k + 1]
         head = sum(len(c) for c in chunks[: k + 1])
+        complete = complete_at is not None and head >= complete_at
+        rest = sum(len(c) for c in chunks[k + 1 :]) + opener_run
+        assume(evidence or not (complete and rest < _WORD_EVIDENCE_LEN))
         assume(
             complete_at is None
             or evidence
             or not _is_word_shaped(cont)
-            or not (head >= complete_at or (indent and len(cont) >= _WORD_EVIDENCE_LEN))
+            or not (complete or (indent and len(cont) >= _WORD_EVIDENCE_LEN))
         )
     last = len(chunks) - 1
-    assume(not (suffix and not blanks and last >= 1 and len(set(widths)) == 1))
+    assume(not (opener_run and last >= 1 and len(set(widths)) == 1))
 
     before = "".join(_benign_line(words, "") + "\n" for words in prefix)
     after = "\n" * blanks + "".join("\n" + _benign_line(w, i) for w, i in suffix)

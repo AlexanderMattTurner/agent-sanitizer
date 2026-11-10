@@ -8,6 +8,15 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.70.4] - 2026-11-10
+
+### Fixed
+
+- Hooks now properly validate all pushed commits and refuse pushes that cannot be placed when the repository has been relocated via `pushd` or git location variables.
+- The `git-location-vars.json` configuration file is now shipped in the correct location alongside the module that reads it.
+- Secret redaction now preserves capitalized words on the line after a token, preventing incorrect truncation of sensitive content.
+- Property-based testing added for secret token redaction to ensure exact redaction behavior.
+
 ## [2.70.3] - 2026-11-09
 
 ### Fixed
