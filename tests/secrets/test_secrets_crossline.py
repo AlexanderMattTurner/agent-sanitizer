@@ -615,14 +615,20 @@ def _wrap(token: str, width: int, indent: str = "") -> str:
         (f"token:\n{_wrap(_STATELESS, 76)}\n\nend", f"token:\n{_GH}\n\nend"),
         (f"{_wrap(_STATELESS, 76)}\nHOME=/root", f"{_GH}\nHOME=/root"),
         (f"{_wrap(_STATELESS, 76, '  ')}\nnext", f"  {_GH}\nnext"),
+        (f"GH_TOKEN={_CLASSIC}\n1 file changed", f"GH_TOKEN={_GH}\n1 file changed"),
+        (f"t {_CLASSIC}\n2026-11-10 done", f"t {_GH}\n2026-11-10 done"),
+        (f"{_CLASSIC}\nv2 ok", f"{_GH}\nv2 ok"),
+        (f"{_CLASSIC[:20]}\n{_CLASSIC[20:]}\n1 file", f"{_GH}\n1 file"),
+        (f"{_wrap(_STATELESS, 76)}\n200 OK", f"{_GH}\n200 OK"),
     ],
 )
 def test_wrapped_or_whole_token_leaves_the_next_lines_word_verbatim(text, expected):
     """The collapsed view glues a token to the next line's first word, which an
     open-ended token run would swallow. Accepted residual, stated here because
     the same geometry is a real wrap: an already-complete token whose genuine
-    continuation on ONE further line is word-shaped (no digit, no capital past
-    its first letter) leaves that continuation unredacted."""
+    continuation is under 8 chars, or on ONE further line is word-shaped (no
+    digit, no capital past its first letter), leaves that continuation
+    unredacted."""
     out, found = redact(text)
     assert out == expected
     assert found == ["GitHub Token"]

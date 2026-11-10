@@ -2126,12 +2126,16 @@ def _settle_wrapped_span(
 
     The collapsed view glues a token's last line to the next line's first word,
     and an open-ended token run swallows it (``GH_TOKEN=ghp_…`` then
-    ``HOME=/root`` loses ``HOME``). A wrap's evidence is its geometry: two or
-    more broken lines of one width so far. Without it, the first seam is cut
-    where the text taken past it is word-shaped (:func:`_is_word_shaped`) and
-    either the token is already complete before it or the continuation is
-    indented and at least :data:`_WORD_EVIDENCE_LEN` long; a blank line is always cut, since no wrapper emits one. The cut is
-    what keeps the next line's text verbatim. A configured env value (no
+    ``HOME=/root`` loses ``HOME``). A seam is cut, whatever the geometry, where
+    the token is already complete before it and less than
+    :data:`_WORD_EVIDENCE_LEN` of the span remains past it (``1 file changed``,
+    ``v2 ok``): what stays verbatim is then at most that short a tail of an
+    over-long token. Otherwise a wrap's evidence is its geometry: two or more
+    broken lines of one width so far. Without it, the first seam is cut where
+    the text taken past it is word-shaped (:func:`_is_word_shaped`) and either
+    the token is already complete before it or the continuation is indented and
+    at least :data:`_WORD_EVIDENCE_LEN` long. A blank line is always cut, since
+    no wrapper emits one. The cut is what keeps the next line's text verbatim. A configured env value (no
     ``patterns``) is exact, so it is never cut. One pass over the seams, with a
     deadline check per seam: the span is attacker-shaped text.
     """
@@ -2147,6 +2151,8 @@ def _settle_wrapped_span(
         widths.add(seam - (text.rfind("\n", 0, seam) + 1))
         continuation = WRAP_SEAM_RE.match(text, seam).end()
         if text[continuation] == "\n":
+            break
+        if end - continuation < _WORD_EVIDENCE_LEN and completes(seam):
             break
         if k >= 1 and len(widths) == 1:
             continue
