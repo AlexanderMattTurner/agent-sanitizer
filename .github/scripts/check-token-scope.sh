@@ -17,6 +17,13 @@ set -euo pipefail
 # an empty $HEADERS (which would misclassify a classic PAT as fine-grained).
 if ! HEADERS=$(curl --proto '=https' -sSf -I -H "Authorization: token $TOKEN" \
   https://api.github.com/user 2>&1); then
+  # A shared token that has spent its hourly quota fails here too. Name that
+  # cause: "could not validate scopes" sends the reader to the token's scopes.
+  if grep -qiE '^x-ratelimit-remaining: 0[[:space:]]*$' <<<"$HEADERS"; then
+    reset=$(grep -i '^x-ratelimit-reset:' <<<"$HEADERS" | sed 's/^[^:]*: //' | tr -d '\r')
+    echo "::error::${TOKEN_SECRET_NAME} has used its whole GitHub API rate limit until $(date -u -d "@${reset}" '+%H:%M UTC'). Another workflow spends the same token's quota; give this one its own token or move its schedule." >&2
+    exit 1
+  fi
   echo "::error::Could not query GitHub to validate ${TOKEN_SECRET_NAME} scopes:" >&2
   echo "$HEADERS" >&2
   exit 1
