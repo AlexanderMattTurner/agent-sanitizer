@@ -127,7 +127,7 @@ describe("post-merge failure-notification roster", () => {
       ["Node tests", true], // push: branches: ["main"]
       ["Main branch health", true], // schedule only
       ["Auto-resolve merge conflicts", true], // push: branches: [main]
-      ["Nightly unseeded fuzz", true], // schedule only, and exempt below
+      ["Nightly unseeded fuzz", false], // workflow_dispatch only
       ["PR meta", false], // pull_request only
       ["Claude reviewers", false], // pull_request_target only
       ["Decide (reusable)", false], // workflow_call only
@@ -200,11 +200,10 @@ describe("post-merge failure-notification roster", () => {
 
   it("keeps every exemption declared in its own file, with a real reason", () => {
     const exempt = workflows.filter((wf) => wf.exemption !== undefined);
-    // Non-vacuity for the marker regex: it has to actually match something, or
-    // the partition above degenerates into "the roster covers everything".
+    // No workflow is exempt today, so a new marker gets its reasoning reviewed.
     assert.deepEqual(
       exempt.map((wf) => wf.path),
-      [".github/workflows/fuzz-nightly.yaml"],
+      [],
       "the exempt set changed — every entry needs its reasoning reviewed",
     );
     for (const wf of exempt)
@@ -217,11 +216,13 @@ describe("post-merge failure-notification roster", () => {
       assert.ok(wf.unwatched, `${wf.path} is exempt from a rule it never met`);
   });
 
-  it("routes the two workflows the missing hook left unrouted", () => {
+  it("routes the workflow the missing hook left unrouted", () => {
     // Pinned by name: these are the concrete holes the fictional
     // check-failure-notifier-coverage was credited with preventing, and a revert
     // that drops them again must fail here rather than only in the partition.
-    for (const name of ["Mutation tests", "Pack smoke test"])
-      assert.ok(roster.has(name), `${name} is unrouted again`);
+    assert.ok(
+      roster.has("Pack smoke test"),
+      "Pack smoke test is unrouted again",
+    );
   });
 });

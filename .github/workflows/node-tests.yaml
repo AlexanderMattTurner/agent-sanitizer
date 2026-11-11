@@ -48,7 +48,7 @@ jobs:
         run: pnpm test
         # Fixed-seed fast-check replay (see test/test-helpers.mjs::fcRunOptions):
         # mutation.yaml pins this and fuzz-nightly.yaml documents this job as
-        # pinned too; the nightly unseeded run is the exploratory counterpart.
+        # pinned too; the dispatch-only unseeded run is the exploratory counterpart.
         env:
           FC_REPRODUCIBLE: "1"
 
