@@ -26,7 +26,10 @@ if [[ -n "$EXISTING_BRANCH" ]]; then
   if [[ "$(git rev-parse --is-shallow-repository)" == true ]]; then
     timeout --kill-after=10 120 git fetch --unshallow origin "$DEFAULT_BRANCH"
   fi
-  if ! git merge "origin/$DEFAULT_BRANCH" --no-edit; then
+  # The runner has no git identity, and a non-fast-forward merge must commit.
+  if ! git -c user.name="github-actions[bot]" \
+    -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+    merge "origin/$DEFAULT_BRANCH" --no-edit; then
     echo "::error::Merging origin/$DEFAULT_BRANCH into $EXISTING_BRANCH failed (see git's message above)."
     # A refused merge (e.g. unrelated histories in a shallow clone) starts no
     # merge, and an unconditional abort would exit 128 over the real error.
