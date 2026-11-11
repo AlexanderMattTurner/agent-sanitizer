@@ -29,9 +29,23 @@ Public entry points:
   consumer that needs the words rather than the predicate (an alternation for a
   different matcher, a generated config file); the same source is published to
   JavaScript as ``agent-sanitizer/credential-names``.
+* :func:`credential_path_matcher` — a predicate over a file PATH, built from the
+  published credential-file vocabulary (``agent-sanitizer/credential-files`` and
+  ``agent-sanitizer/credential-files-matcher`` in JavaScript). It is
+  case-insensitive and matches a leaf name, a tool-directory path, or any component
+  of a credential directory. :func:`credential_name_globs` /
+  :func:`credential_path_globs` / :func:`credential_directories` return the raw lists.
 """
 
 from .config import DEFAULT_MIN_SECRET_LEN, RedactorConfig
+from .credential_files import (
+    CREDENTIAL_FILES_FILE,
+    credential_directories,
+    credential_name_globs,
+    credential_path_globs,
+    credential_path_matcher,
+    parse_credential_files,
+)
 from .credential_names import (
     ANY_SEGMENT_SCOPE,
     CREDENTIAL_NAMES_FILE,
@@ -64,9 +78,15 @@ __all__ = [
     "RedactionBudgetExceeded",
     "DEFAULT_MIN_SECRET_LEN",
     "CREDENTIAL_NAMES_FILE",
+    "CREDENTIAL_FILES_FILE",
     "TRAILING_SCOPE",
     "ANY_SEGMENT_SCOPE",
     "credential_name_matcher",
+    "credential_path_matcher",
+    "parse_credential_files",
+    "credential_name_globs",
+    "credential_path_globs",
+    "credential_directories",
     "parse_credential_names",
     "credential_name_segments",
     "credential_field_name_patterns",
