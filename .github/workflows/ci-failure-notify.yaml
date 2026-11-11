@@ -20,8 +20,8 @@ name: CI failure notify
 # to say a ci-truth-serum hook (check-failure-notifier-coverage) kept the list in
 # sync; that hook does not exist — the pinned rev provides 18 `check-*` ids and
 # none of them mentions this file — and the gap it was credited with closing was
-# live: Mutation tests and Pack smoke test both run on push-to-main and routed to
-# nobody, so they could fail on main indefinitely and page no one.
+# live: Pack smoke test ran on push-to-main and routed to nobody, so it could
+# fail on main indefinitely and page no one.
 #
 # Binding is by NAME, not filename: a repo that keeps its own release workflow
 # instead of the template's auto-version.yaml must give it the name listed here
@@ -42,7 +42,6 @@ on: # zizmor: ignore[dangerous-triggers]
       - Hook lifecycle
       - Lint
       - Main branch health
-      - Mutation tests
       - Node tests
       - Pack smoke test
       - Plugin dist ruleset

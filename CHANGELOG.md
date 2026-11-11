@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.70.5] - 2026-11-10
+
+### Fixed
+
+- **Secrets:** Improved token detection to avoid cutting wrapped tokens' short last lines and to count only token characters in the short tail, preventing false positive redactions and preserving digit-led lines after complete tokens.
+- **Push Gate:** Fixed verdict retention when checkout cannot be removed, improved worktree detection from owner files instead of locks, and ensured proper worktree cleanup when a push gate is killed.
+- **Push Gate:** Enhanced commit verification in unregistered clones and removed the reaper process as part of gate lifecycle improvements.
+
 ## [2.70.4] - 2026-11-10
 
 ### Fixed

@@ -8,6 +8,7 @@
     "nodeArgs": ["--test-reporter=tap"]
   },
   "coverageAnalysis": "perTest",
+  "disableTypeChecks": false,
   "incremental": true,
   "incrementalFile": "reports/stryker-incremental.json",
   "ignorePatterns": [".venv"],

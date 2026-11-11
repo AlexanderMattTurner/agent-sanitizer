@@ -43,7 +43,7 @@ import {
   renderGfmAutolink,
 } from "../scripts/gen-gfm-autolink.mjs";
 import remarkGfmVendored from "../src/gfm.mjs";
-import { repoRoot } from "./helpers/repo-root.mjs";
+import { repoRoot, unsandbox } from "./helpers/repo-root.mjs";
 
 const ours = unified().use(remarkParse).use(remarkGfmVendored);
 const upstream = unified().use(remarkParse).use(remarkGfmUpstream);
@@ -160,7 +160,8 @@ describe("scripts/gen-gfm-autolink.mjs builds src/vendor/gfm-autolink-literal.mj
   });
 
   it("fails loudly when a hunk does not apply", () => {
-    assert.equal(join(repoRoot, PATCH), PATCH_PATH);
+    // PATCH_PATH is module-relative, so under Stryker it names the sandbox copy.
+    assert.equal(join(repoRoot, PATCH), unsandbox(PATCH_PATH));
     const patch = readFileSync(join(repoRoot, PATCH), "utf8");
     assert.throws(
       () =>
