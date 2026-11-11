@@ -5,24 +5,18 @@ name: Nightly unseeded fuzz
 # reproducible feedback (see test/test-helpers.mjs). That means CI never
 # explores outside that one fixed draw. This workflow is the counterpart:
 # an exploratory, non-blocking run that lets fast-check pick its own random
-# seed so a broader slice of the input space gets tried over time. It is
-# intentionally NOT wired into branch protection — a failure here means "go
-# look", not "block the PR".
+# seed so a broader slice of the input space gets tried. It is intentionally
+# NOT wired into branch protection — a failure here means "go look", not
+# "block the PR".
 #
-# failure-notify-exempt: exploratory, and already routed. A failure here is a
-# newly-explored counterexample, not a broken branch, and nightly-fuzz-issue.js
-# files it as a deduplicated issue precisely so nobody is paged for it. Paging
-# would also LATCH: main-health.mjs re-reports for as long as the newest run is
-# red, so one counterexample would push every sweep until the next nightly
-# happens to clear it. test/failure-notify-roster.test.mjs reads this marker.
+# It runs only on a manual dispatch: the maintainer turned the nightly schedule
+# off. A failure still files a deduplicated issue through nightly-fuzz-issue.js.
 on:
-  schedule:
-    - cron: "17 6 * * *" # daily, off-the-hour to avoid GitHub's peak-minute queueing
   workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}
-  cancel-in-progress: false # let an in-flight nightly run finish; just skip queuing a second
+  cancel-in-progress: false # let an in-flight run finish; just skip queuing a second
 
 permissions:
   contents: read
@@ -43,6 +37,12 @@ jobs:
         # suite needs uv + the Python deps here too.
         with:
           setup-python: "true"
+
+      # The plugin suites run the built plugin, and plugin-bundle.test.mjs
+      # throws at load without the zipapp and engine wheel. node-tests.yaml
+      # builds them the same way before `pnpm test`.
+      - name: Build the redactor zipapp
+        run: pnpm build:redactor
 
       - name: Check if test script is configured
         id: check
