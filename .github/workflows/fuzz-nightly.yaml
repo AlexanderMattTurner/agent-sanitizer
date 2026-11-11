@@ -44,6 +44,12 @@ jobs:
         with:
           setup-python: "true"
 
+      # The plugin suites run the built plugin, and plugin-bundle.test.mjs
+      # throws at load without the zipapp and engine wheel. node-tests.yaml
+      # builds them the same way before `pnpm test`.
+      - name: Build the redactor zipapp
+        run: pnpm build:redactor
+
       - name: Check if test script is configured
         id: check
         run: |
