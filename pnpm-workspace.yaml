@@ -47,12 +47,18 @@ trustPolicy: no-downgrade
 # soon as it ships one. Drop an entry once `pnpm why <name>` shows every path
 # already above the floor.
 overrides:
-  # GHSA-7p8r-x3mc-p8w7 — host confusion via a backslash. Via @commitlint/cli.
-  fast-uri@>=3.0.0 <3.1.5: "^3.1.5"
-  # GHSA-rgw5-rvv9-x895 — denial of service from unbounded expansion. Via eslint.
-  brace-expansion@>=4.0.0 <5.0.9: "^5.0.9"
-  # GHSA-5p4m-2wfm-xmqj — quadratic CPU use parsing !!omap. Via @commitlint/cli.
-  js-yaml@>=4.0.0 <4.3.1: "^4.3.1"
-  # GHSA-q8mj-m7cp-5q26 — remotely triggerable denial of service in qs.stringify.
-  # Via @stryker-mutator/core.
-  qs@>=6.11.1 <=6.15.1: "^6.15.2"
+  # GHSA-qw65-cvwx-89v3, GHSA-58mr-gqgx-xq4g and later fast-uri advisories —
+  # authority/host confusion in serialize. Via @commitlint/cli and @stryker-mutator/core.
+  fast-uri@>=3.0.0 <3.1.9: "^3.1.9"
+  # GHSA-qhr7-859c-m2p7 and later — denial of service from recursion on nested
+  # braces. Via eslint.
+  brace-expansion@>=4.0.0 <5.0.12: "^5.0.12"
+  # GHSA-2883-xcg3-v3hh — maxTotalMergeKeys does not bound CPU use. Via @commitlint/cli.
+  js-yaml@>=4.0.0 <4.3.2: "^4.3.2"
+  # GHSA-q8mj-m7cp-5q26 and later — remotely triggerable denial of service in
+  # qs.stringify. Via @stryker-mutator/core.
+  qs@>=2.2.5 <6.16.1: "^6.16.1"
+  # GHSA-68fv-2mgg-jv7q — Via a build-time transitive.
+  source-map-js@>=1.0.0 <1.2.2: "^1.2.2"
+  # GHSA-mrhx-c7xc-m3w5 — Via a transitive.
+  zod@<4.6.6: "^4.6.6"
