@@ -130,7 +130,7 @@ describe("packaging contract: exports map vs. published tarball", () => {
     );
   });
 
-  // Legacy resolvers (TypeScript `moduleResolution: node10`) ignore `exports`
+  // Legacy resolvers (TypeScript `moduleResolution: "node"`) ignore `exports`
   // and read only the top-level `types` field, so a target the tarball lacks
   // leaves those consumers with no declarations and no error naming why.
   it("ships the declaration the top-level `types` field names", () => {
