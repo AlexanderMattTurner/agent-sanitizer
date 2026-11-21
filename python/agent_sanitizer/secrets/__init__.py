@@ -30,11 +30,9 @@ Public entry points:
   different matcher, a generated config file); the same source is published to
   JavaScript as ``agent-sanitizer/credential-names``.
 * :func:`credential_path_matcher` — a predicate over a file PATH, built from the
-  published credential-file vocabulary (``agent-sanitizer/credential-files`` and
-  ``agent-sanitizer/credential-files-matcher`` in JavaScript). It is
-  case-insensitive and matches a leaf name, a tool-directory path, or any component
-  of a credential directory. :func:`credential_name_globs` /
-  :func:`credential_path_globs` / :func:`credential_directories` return the raw lists.
+  credential-file vocabulary (JavaScript: ``agent-sanitizer/credential-files``);
+  :func:`credential_name_globs`, :func:`credential_path_globs` and
+  :func:`credential_directories` return the lists.
 """
 
 from .config import DEFAULT_MIN_SECRET_LEN, RedactorConfig
