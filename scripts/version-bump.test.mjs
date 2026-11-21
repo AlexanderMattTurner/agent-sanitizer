@@ -645,6 +645,43 @@ test("a release stamps the plugin manifest and commits it with the release docs"
   }
 });
 
+test("a release whose drafted notes are empty still gets a dated changelog heading", () => {
+  // The prompt tells the model to omit internal churn, so a release of only
+  // ci/test commits drafts "". Skipping the promotion then left 2.71.0 on npm
+  // and in a tag while the changelog's top heading still read 2.70.5, and the
+  // release canary went red. The curl stub returns that empty draft.
+  const sandbox = makeReleaseSandbox();
+  const binDir = join(sandbox.work, "stub-bin");
+  writeFileSync(
+    join(binDir, "curl"),
+    `#!/usr/bin/env bash
+out=""
+while [[ $# -gt 0 ]]; do
+  if [[ "$1" == "-o" ]]; then out="$2"; shift; fi
+  shift
+done
+printf '%s' '{"content":[{"type":"tool_use","name":"changelog_draft","input":{"changelog_section":""}}]}' >"$out"
+printf 200
+`,
+  );
+  chmodSync(join(binDir, "curl"), 0o755);
+
+  try {
+    const res = runRelease({
+      ...sandbox,
+      env: { ...sandbox.env, CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-stub" },
+    });
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stderr, /Using Claude-drafted changelog body/);
+    assert.match(
+      showOnRemote(sandbox.remote, "CHANGELOG.md"),
+      /^## Unreleased\n\n## \[1\.1\.0\] - \d{4}-\d{2}-\d{2}\n\nNo user-visible changes\.\n/m,
+    );
+  } finally {
+    rmSync(sandbox.dir, { recursive: true, force: true });
+  }
+});
+
 test("an Unreleased block past the cap still releases, rather than aborting on SIGPIPE", () => {
   // Pins the Unreleased cap against a `| head -c` form: under `set -o pipefail`
   // head exits at its cap and SIGPIPEs the writer, which aborts the whole

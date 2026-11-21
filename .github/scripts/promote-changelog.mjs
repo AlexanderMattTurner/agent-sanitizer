@@ -6,7 +6,7 @@
 //
 //   NEW_VERSION        — the semver string, e.g. "1.2.3"
 //   RELEASE_DATE       — "YYYY-MM-DD" in UTC
-//   CHANGELOG_SECTION  — markdown body for the new dated section
+//   CHANGELOG_SECTION  — markdown body for the new dated section; may be empty
 //
 // Behavior:
 // - Writes diagnostics to stderr, successes to stdout.
@@ -52,7 +52,8 @@ function readEnv() {
   const values = Object.create(null);
   for (const name of required) {
     const value = process.env[name];
-    if (!value) {
+    // An empty body is a release of internal churn, not a missing input.
+    if (value === undefined || (!value && name !== "CHANGELOG_SECTION")) {
       warn(`missing required env var ${name}; skipping.`);
       return null;
     }
@@ -110,11 +111,10 @@ function promoteUnreleased() {
     return;
   }
 
-  const body = normalizeBody(env.section);
-  if (!body) {
-    warn("drafted changelog body is empty; skipping.");
-    return;
-  }
+  // npm and the tag already carry this version, and release-canary.sh fails
+  // when the top dated heading disagrees with them. So a release with nothing
+  // user-visible to report still gets its heading.
+  const body = normalizeBody(env.section) || "No user-visible changes.";
 
   const dated = `## [${env.newVersion}] - ${env.releaseDate}\n\n${body}\n`;
   const afterBlock = split.afterBlock.replace(/^\n+/, "\n");
