@@ -135,6 +135,11 @@ describe("packaging contract: exports map vs. published tarball", () => {
   // leaves those consumers with no declarations and no error naming why.
   it("ships the declaration the top-level `types` field names", () => {
     assert.equal(typeof pkg.types, "string", 'package.json has no "types"');
+    assert.equal(
+      pkg.types,
+      pkg.exports["."].types,
+      'top-level "types" must name the root export\'s declaration',
+    );
     const target = pkg.types.replace(/^\.\//, "");
     assert.ok(
       packed.has(target),
