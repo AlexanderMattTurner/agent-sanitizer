@@ -168,8 +168,8 @@ test("the committed plugin manifest advertises a real released version", () => {
   // The newest dated CHANGELOG section is the last version this repo released;
   // the release commit stamps both files, so the manifest must never sit BELOW
   // it (that is exactly the 0.1.0-vs-npm-2.14.1 drift this guards). Being ahead
-  // is tolerated: a release whose changelog body came back empty publishes and
-  // stamps the manifest without promoting an Unreleased section.
+  // is tolerated: the promotion helper exits 0 on its own errors, so a release
+  // can publish and stamp the manifest without a dated changelog section.
   const dated = readFileSync(CHANGELOG, "utf8").match(
     /^## \[([0-9]+\.[0-9]+\.[0-9]+)\]/m,
   );

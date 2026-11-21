@@ -650,7 +650,9 @@ test("a release whose drafted notes are empty still gets a dated changelog headi
   // ci/test commits drafts "". Skipping the promotion then left 2.71.0 on npm
   // and in a tag while the changelog's top heading still read 2.70.5, and the
   // release canary went red. The curl stub returns that empty draft.
-  const sandbox = makeReleaseSandbox();
+  const sandbox = makeReleaseSandbox({
+    changelog: "# Changelog\n\n## Unreleased\n",
+  });
   const binDir = join(sandbox.work, "stub-bin");
   writeFileSync(
     join(binDir, "curl"),

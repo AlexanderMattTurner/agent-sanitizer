@@ -97,6 +97,17 @@ for (const [name, section] of [
   });
 }
 
+test("an empty draft keeps the entries already under Unreleased", () => {
+  const { result } = run(`${HEADER}\n### Added\n\n- A thing.\n${TAIL}`, {
+    ...RELEASE_ENV,
+    CHANGELOG_SECTION: "",
+  });
+  assert.equal(
+    result,
+    `${HEADER}\n## [1.1.0] - 2026-06-22\n\n### Added\n\n- A thing.\n${TAIL}`,
+  );
+});
+
 test("leaves the file unchanged when there is no Unreleased heading", () => {
   const input = `# Changelog\n${TAIL}`;
   const { result } = run(input, {

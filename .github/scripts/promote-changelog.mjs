@@ -78,11 +78,11 @@ function normalizeBody(raw) {
 }
 
 /**
- * Locate the `## Unreleased` block and return the text before it and the text
- * after it (starting at the next `## ` heading). Returns null if there is no
- * Unreleased heading.
+ * Locate the `## Unreleased` block and return the text before it, its body,
+ * and the text after it (starting at the next `## ` heading). Returns null if
+ * there is no Unreleased heading.
  * @param {string} source
- * @returns {{before: string, afterBlock: string} | null}
+ * @returns {{before: string, unreleased: string, afterBlock: string} | null}
  */
 function splitAroundUnreleased(source) {
   const markerMatch = source.match(/^## Unreleased[ \t]*$/m);
@@ -96,6 +96,7 @@ function splitAroundUnreleased(source) {
 
   return {
     before: source.slice(0, markerMatch.index),
+    unreleased: source.slice(blockStart, bodyEnd),
     afterBlock: source.slice(bodyEnd),
   };
 }
@@ -113,8 +114,12 @@ function promoteUnreleased() {
 
   // npm and the tag already carry this version, and release-canary.sh fails
   // when the top dated heading disagrees with them. So a release with nothing
-  // user-visible to report still gets its heading.
-  const body = normalizeBody(env.section) || "No user-visible changes.";
+  // user-visible to report still gets its heading. An empty draft must not
+  // drop entries already under Unreleased, so they fill the body first.
+  const body =
+    normalizeBody(env.section) ||
+    split.unreleased.trim() ||
+    "No user-visible changes.";
 
   const dated = `## [${env.newVersion}] - ${env.releaseDate}\n\n${body}\n`;
   const afterBlock = split.afterBlock.replace(/^\n+/, "\n");
