@@ -18,7 +18,11 @@ if [[ -f "$root/.pre-commit-config.yaml" ]]; then
     if [[ "$line" =~ repo:[[:space:]]*(.*) ]]; then
       in_ruff=false
       [[ "${BASH_REMATCH[1]}" == *astral-sh/ruff-pre-commit* ]] && in_ruff=true
-    elif $in_ruff && [[ "$line" =~ rev:[[:space:]]*[\"\']?v?([0-9][0-9.]*) ]]; then
+    elif $in_ruff && [[ "$line" =~ rev:[[:space:]]*[\"\']?([0-9a-f]{40})[\"\']?[[:space:]]*#[[:space:]]*v?([0-9][0-9.]*) ]]; then
+      # A SHA-pinned rev carries its version in the trailing comment.
+      pin="${BASH_REMATCH[2]}"
+      break
+    elif $in_ruff && [[ "$line" =~ rev:[[:space:]]*[\"\']?v([0-9][0-9.]*)[\"\']?[[:space:]]*(#.*)?$ ]]; then
       pin="${BASH_REMATCH[1]}"
       break
     fi
