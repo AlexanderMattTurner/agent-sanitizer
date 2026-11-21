@@ -8,6 +8,12 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.71.1] - 2026-11-21
+
+### Fixed
+
+- Add a top-level `types` field to `package.json` that correctly names the shipped TypeScript declaration file.
+
 ## [2.70.5] - 2026-11-10
 
 ### Fixed

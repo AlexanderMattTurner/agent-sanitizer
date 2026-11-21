@@ -130,6 +130,23 @@ describe("packaging contract: exports map vs. published tarball", () => {
     );
   });
 
+  // Legacy resolvers (TypeScript `moduleResolution: "node"`) ignore `exports`
+  // and read only the top-level `types` field, so a target the tarball lacks
+  // leaves those consumers with no declarations and no error naming why.
+  it("ships the declaration the top-level `types` field names", () => {
+    assert.equal(typeof pkg.types, "string", 'package.json has no "types"');
+    assert.equal(
+      pkg.types,
+      pkg.exports["."].types,
+      'top-level "types" must name the root export\'s declaration',
+    );
+    const target = pkg.types.replace(/^\.\//, "");
+    assert.ok(
+      packed.has(target),
+      `"types" names ${target}, which the tarball does not ship`,
+    );
+  });
+
   // Top-level docs a consumer reaches for from an installed copy: the license,
   // the readme, the threat model, and — so a vulnerability is reported privately
   // rather than filed in the open — the disclosure policy. Each must be listed in

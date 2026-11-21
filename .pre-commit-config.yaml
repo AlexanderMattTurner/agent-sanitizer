@@ -166,3 +166,13 @@ repos:
         # Scans its own fixed directory set (.claude/hooks, .github/scripts), so
         # the filter only decides WHEN to run, not what gets scanned.
         files: ^(\.claude/hooks/|\.github/scripts/).*\.(mjs|cjs|js|ts)$
+
+      # check-pipefail-sigpipe.py arrives through template-sync but its caller
+      # does not (SYNC_PATHS delivers no .pre-commit-config.yaml), so it sat
+      # unwired. Own venv: tree-sitter-bash is not on the system python.
+      - id: check-pipefail-sigpipe
+        name: no early-exiting pipe consumer under set -o pipefail
+        entry: python .github/scripts/check-pipefail-sigpipe.py
+        language: python
+        additional_dependencies: ["tree-sitter>=0.25", "tree-sitter-bash>=0.25"]
+        types: [shell]
