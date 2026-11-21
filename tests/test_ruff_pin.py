@@ -35,10 +35,14 @@ def test_pin_comes_from_the_ruff_entry(
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(REPO_ROOT / rel, tmp_path / rel)
     other = "  - repo: https://x/y\n    rev: v0.4.0\n    hooks: []\n"
-    (tmp_path / ".pre-commit-config.yaml").write_text(f"repos:\n{other}  - {entry}\n")
+    (tmp_path / ".pre-commit-config.yaml").write_text(
+        f"repos:\n{other}  - {entry}\n", encoding="utf-8"
+    )
     (tmp_path / "bin").mkdir()
     for tool in ("uvx", "ruff"):
-        (tmp_path / "bin" / tool).write_text(f'#!/bin/bash\necho "{tool} $*"\n')
+        (tmp_path / "bin" / tool).write_text(
+            f'#!/bin/bash\necho "{tool} $*"\n', encoding="utf-8"
+        )
         (tmp_path / "bin" / tool).chmod(0o755)
     env = {**os.environ, "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}"}
     run = subprocess.run(

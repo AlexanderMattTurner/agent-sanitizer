@@ -16,7 +16,8 @@ config="$root/.pre-commit-config.yaml"
 runner="$root/.github/scripts/run-with-pyyaml.sh"
 if [[ -f "$config" && -f "$runner" ]] && command -v uv >/dev/null 2>&1; then
   # A SHA rev takes its version from that line's `# [frozen: ]vX.Y.Z` comment.
-  pin="$(bash "$runner" - "$config" <<'PY'
+  pin="$(
+    bash "$runner" - "$config" <<'PY'
 import re, sys, yaml
 text = open(sys.argv[1], encoding="utf-8").read()
 lines = text.splitlines()
