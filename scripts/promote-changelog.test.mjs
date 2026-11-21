@@ -77,36 +77,21 @@ test("strips a leading version heading the model may emit despite 'body only'", 
   assert.doesNotMatch(result, /- whatever/);
 });
 
-// npm and the tag already carry the version, so release-canary.sh compares
-// them against the top dated heading. A release of internal churn drafts an
-// empty body, and skipping its heading left 2.71.0 published with the
-// changelog still reading 2.70.5.
-for (const [name, section] of [
-  ["blank", "   \n\n"],
-  ["empty", ""],
+const ENTRIES = "### Added\n\n- A thing.";
+for (const [name, section, entries, body] of [
+  ["empty", "", "", "No user-visible changes."],
+  ["blank", "   \n\n", "", "No user-visible changes."],
+  ["empty beside entries", "", `\n${ENTRIES}\n`, ENTRIES],
 ]) {
   test(`still dates the release when the drafted body is ${name}`, () => {
-    const { result } = run(`${HEADER}${TAIL}`, {
-      ...RELEASE_ENV,
-      CHANGELOG_SECTION: section,
-    });
+    const env = { ...RELEASE_ENV, CHANGELOG_SECTION: section };
+    const { result } = run(`${HEADER}${entries}${TAIL}`, env);
     assert.equal(
       result,
-      `${HEADER}\n## [1.1.0] - 2026-06-22\n\nNo user-visible changes.\n${TAIL}`,
+      `${HEADER}\n## [1.1.0] - 2026-06-22\n\n${body}\n${TAIL}`,
     );
   });
 }
-
-test("an empty draft keeps the entries already under Unreleased", () => {
-  const { result } = run(`${HEADER}\n### Added\n\n- A thing.\n${TAIL}`, {
-    ...RELEASE_ENV,
-    CHANGELOG_SECTION: "",
-  });
-  assert.equal(
-    result,
-    `${HEADER}\n## [1.1.0] - 2026-06-22\n\n### Added\n\n- A thing.\n${TAIL}`,
-  );
-});
 
 test("leaves the file unchanged when there is no Unreleased heading", () => {
   const input = `# Changelog\n${TAIL}`;

@@ -6,7 +6,7 @@
 //
 //   NEW_VERSION        — the semver string, e.g. "1.2.3"
 //   RELEASE_DATE       — "YYYY-MM-DD" in UTC
-//   CHANGELOG_SECTION  — markdown body for the new dated section; may be empty
+//   CHANGELOG_SECTION  — markdown body for the new dated section
 //
 // Behavior:
 // - Writes diagnostics to stderr, successes to stdout.
@@ -52,7 +52,6 @@ function readEnv() {
   const values = Object.create(null);
   for (const name of required) {
     const value = process.env[name];
-    // An empty body is a release of internal churn, not a missing input.
     if (value === undefined || (!value && name !== "CHANGELOG_SECTION")) {
       warn(`missing required env var ${name}; skipping.`);
       return null;
@@ -78,9 +77,9 @@ function normalizeBody(raw) {
 }
 
 /**
- * Locate the `## Unreleased` block and return the text before it, its body,
- * and the text after it (starting at the next `## ` heading). Returns null if
- * there is no Unreleased heading.
+ * Locate the `## Unreleased` block and return the text before it and the text
+ * after it (starting at the next `## ` heading). Returns null if there is no
+ * Unreleased heading.
  * @param {string} source
  * @returns {{before: string, unreleased: string, afterBlock: string} | null}
  */
@@ -112,10 +111,7 @@ function promoteUnreleased() {
     return;
   }
 
-  // npm and the tag already carry this version, and release-canary.sh fails
-  // when the top dated heading disagrees with them. So a release with nothing
-  // user-visible to report still gets its heading. An empty draft must not
-  // drop entries already under Unreleased, so they fill the body first.
+  // An empty draft still dates the release: release-canary.sh needs the heading.
   const body =
     normalizeBody(env.section) ||
     split.unreleased.trim() ||
