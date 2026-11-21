@@ -5,29 +5,37 @@
 # enables more default rules, so it rejects a commit or a push of a tree CI
 # passes. lint-staged and .claude/hooks/pre-push-check.sh both call this file.
 # With no pin or no uvx: the locked `uv run ruff`, then the PATH ruff, then a
-# loud failure. Bash builtins only: the hook PATH may hold no awk or sed.
+# loud failure. No pin also prints a warning.
 #
 # Usage: ruff.sh <ruff arguments>
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 pin=""
-if [[ -f "$root/.pre-commit-config.yaml" ]]; then
-  in_ruff=false
-  while IFS= read -r line; do
-    if [[ "$line" =~ repo:[[:space:]]*(.*) ]]; then
-      in_ruff=false
-      [[ "${BASH_REMATCH[1]}" == *astral-sh/ruff-pre-commit* ]] && in_ruff=true
-    elif $in_ruff && [[ "$line" =~ rev:[[:space:]]*[\"\']?([0-9a-f]{40})[\"\']?[[:space:]]*#[[:space:]]*v?([0-9][0-9.]*) ]]; then
-      # A SHA-pinned rev carries its version in the trailing comment.
-      pin="${BASH_REMATCH[2]}"
-      break
-    elif $in_ruff && [[ "$line" =~ rev:[[:space:]]*[\"\']?v([0-9][0-9.]*)[\"\']?[[:space:]]*(#.*)?$ ]]; then
-      pin="${BASH_REMATCH[1]}"
-      break
-    fi
-  done <"$root/.pre-commit-config.yaml"
+config="$root/.pre-commit-config.yaml"
+runner="$root/.github/scripts/run-with-pyyaml.sh"
+if [[ -f "$config" && -f "$runner" ]] && command -v uv >/dev/null 2>&1; then
+  # A SHA rev takes its version from that line's `# [frozen: ]vX.Y.Z` comment.
+  pin="$(bash "$runner" - "$config" <<'PY'
+import re, sys, yaml
+text = open(sys.argv[1], encoding="utf-8").read()
+lines = text.splitlines()
+repos = next((v for k, v in yaml.compose(text).value if k.value == "repos"), None)
+for entry in repos.value if repos else []:
+    fields = {k.value: v for k, v in entry.value}
+    if "astral-sh/ruff-pre-commit" in fields["repo"].value:
+        rev = fields["rev"]
+        comment = lines[rev.end_mark.line][rev.end_mark.column :]
+        m = re.fullmatch(r"v(\d+(?:\.\d+)+)", rev.value) or re.fullmatch(
+            r"\s*#\s*(?:frozen:\s*)?v(\d+(?:\.\d+)+)\s*", comment
+        )
+        if m:
+            print(m[1])
+        break
+PY
+  )"
 fi
+[[ -n "$pin" ]] || echo "WARNING: ruff.sh found no ruff pin in .pre-commit-config.yaml; the ruff it runs may differ from CI." >&2
 
 if [[ -n "$pin" ]] && command -v uvx >/dev/null 2>&1; then
   exec uvx "ruff@${pin}" "$@"
