@@ -123,6 +123,7 @@
     "tool-output",
     "edit-repair"
   ],
+  "types": "./types/index.d.mts",
   "exports": {
     ".": {
       "types": "./types/index.d.mts",
