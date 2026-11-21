@@ -170,6 +170,27 @@ export function defaultOpen(ctx) {
 }
 
 /**
+ * The parts of a warning for an event that cannot block (SessionStart,
+ * InstructionsLoaded): `text` goes to the operator's stderr, the user
+ * (`systemMessage`) and the model (`additionalContext`), and the hook exits 0.
+ * Exit 0 because the hook ran and reached its answer. A non-zero exit with no
+ * envelope reads to the launcher as a bundle that died, which it reports as
+ * "reinstall the plugin".
+ * @param {string} event  the hook's event name
+ * @param {string} text
+ * @returns {FaultParts}
+ */
+export function advisoryParts(event, text) {
+  return {
+    stderr: `${text}\n`,
+    envelope: {
+      systemMessage: text,
+      hookSpecificOutput: { hookEventName: event, additionalContext: text },
+    },
+  };
+}
+
+/**
  * Resolve `hook`'s response to its own failure under the caller's posture. This
  * is the ONLY place {@link failOpenEnabled} is consulted on a hook fault, so the
  * knob cannot be honored in three hooks and skipped in the fourth.

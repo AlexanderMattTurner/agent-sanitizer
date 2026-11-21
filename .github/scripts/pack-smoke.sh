@@ -84,8 +84,8 @@ echo "::endgroup::"
 #    `node <resolved path> --hook=<mode>` from a cwd that is not this project,
 #    with no node_modules of its own beside the hooks. The in-repo suite spawns
 #    the BUNDLE; only this leg proves the un-bundled sources resolve their own
-#    imports (the engine self-reference, agent-control-plane-core,
-#    namespace-guard) and their JSON configs out of the installed tree.
+#    imports (the engine self-reference, agent-control-plane-core — present
+#    only through npm's peer auto-install — and namespace-guard) and their JSON configs out of the installed tree.
 echo "::group::drive the published claude-hooks entry"
 hook_entry="$(node --input-type=module -e '
   import { createRequire } from "node:module";
@@ -110,13 +110,26 @@ node --input-type=module -e '
 unset AGENT_SANITIZER_FAIL_OPEN
 cd /
 prompt_payload='{"hook_event_name":"UserPromptSubmit","prompt":"plain text"}'
-printf '%s' "$prompt_payload" | node "$hook_entry" --hook=sanitize-user-prompt >/dev/null
-
 pre_payload='{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo hi"}}'
-printf '%s' "$pre_payload" | node "$hook_entry" --hook=pretooluse-sanitize >/dev/null
-
 scan_payload='{"hook_event_name":"SessionStart","source":"startup"}'
-printf '%s' "$scan_payload" | node "$hook_entry" --hook=scan-invisible-chars >/dev/null
+
+# A hook that cannot load agent-control-plane-core still exits 0 — it warns
+# (fail-open) or emits a block verdict (fail-closed) — so the exit code alone
+# proves nothing. A clean payload under fail-closed must produce NO output on
+# either stream; a missing or incompatible core shows up as text on both.
+assert_clean_verdict() {
+  local mode="$1" payload="$2" out err_file rc=0
+  err_file="$(mktemp)"
+  out="$(printf '%s' "$payload" | AGENT_SANITIZER_FAIL_OPEN=0 node "$hook_entry" --hook="$mode" 2>"$err_file")" || rc=$?
+  if [ "$rc" -ne 0 ] || [ -n "$out" ] || [ -s "$err_file" ]; then
+    echo "ERROR: --hook=$mode on a clean payload exited $rc with output: $out $(cat "$err_file")" >&2
+    exit 1
+  fi
+  rm -f "$err_file"
+}
+assert_clean_verdict sanitize-user-prompt "$prompt_payload"
+assert_clean_verdict pretooluse-sanitize "$pre_payload"
+assert_clean_verdict scan-invisible-chars "$scan_payload"
 
 # Layer 4 with the redactor unreachable, under the fail-closed opt-out, must
 # SUPPRESS the secret rather than pass it through: that posture is what a
@@ -160,6 +173,31 @@ for posture in open:1 closed:2; do
     exit 1
   }
 done
+cd "$workdir"
+echo "::endgroup::"
+
+# 7. The peer range's floor. Everything above runs against the newest core npm
+#    picked; the in-repo suite runs against the exact dev pin. Neither proves the
+#    published `>=floor` claim, so pin core to the floor and re-drive the hooks.
+echo "::group::drive the hooks against the core peer floor"
+core_floor="$(cd "$REPO_ROOT" && node --input-type=module -e '
+  import { readFileSync } from "node:fs";
+  import semver from "semver";
+  const range = JSON.parse(readFileSync("package.json", "utf8"))
+    .peerDependencies["agent-control-plane-core"];
+  process.stdout.write(semver.minVersion(range).version);
+')"
+echo "core peer floor: $core_floor"
+npm install --no-save "agent-control-plane-core@$core_floor"
+installed_core="$(node -p 'JSON.parse(require("fs").readFileSync("node_modules/agent-control-plane-core/package.json","utf8")).version')"
+[ "$installed_core" = "$core_floor" ] || {
+  echo "ERROR: expected core $core_floor installed, found $installed_core" >&2
+  exit 1
+}
+cd /
+assert_clean_verdict sanitize-user-prompt "$prompt_payload"
+assert_clean_verdict pretooluse-sanitize "$pre_payload"
+assert_clean_verdict scan-invisible-chars "$scan_payload"
 cd "$workdir"
 echo "::endgroup::"
 

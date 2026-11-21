@@ -8,6 +8,61 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.71.1] - 2026-11-21
+
+### Fixed
+
+- Add a top-level `types` field to `package.json` that correctly names the shipped TypeScript declaration file.
+
+## [2.70.5] - 2026-11-10
+
+### Fixed
+
+- **Secrets:** Improved token detection to avoid cutting wrapped tokens' short last lines and to count only token characters in the short tail, preventing false positive redactions and preserving digit-led lines after complete tokens.
+- **Push Gate:** Fixed verdict retention when checkout cannot be removed, improved worktree detection from owner files instead of locks, and ensured proper worktree cleanup when a push gate is killed.
+- **Push Gate:** Enhanced commit verification in unregistered clones and removed the reaper process as part of gate lifecycle improvements.
+
+## [2.70.4] - 2026-11-10
+
+### Fixed
+
+- Hooks now properly validate all pushed commits and refuse pushes that cannot be placed when the repository has been relocated via `pushd` or git location variables.
+- The `git-location-vars.json` configuration file is now shipped in the correct location alongside the module that reads it.
+- Secret redaction now preserves capitalized words on the line after a token, preventing incorrect truncation of sensitive content.
+- Property-based testing added for secret token redaction to ensure exact redaction behavior.
+
+## [2.70.3] - 2026-11-09
+
+### Fixed
+
+- Secrets detection now correctly handles indented token tails and prevents them from being separated from their wrap markers.
+- Fixed cross-line token matching to exclude the next line's leading word, preventing false matches across line boundaries.
+- Improved wrapped span settlement to complete in a single bounded pass for better performance.
+- Expanded stateless GitHub secret payload and signature detection caps for more comprehensive coverage.
+- Test improvements to prevent round-trip fuzz calls from incorrectly releasing each other's refusals.
+
+## [2.70.2] - 2026-11-09
+
+### Fixed
+
+- Improved secret detection for stateless GitHub App installation tokens (ghs_) by scoping the JWT pattern matching and redacting the entire JWT body.
+- Removed stale alignment-hive slug from the repository slug allowlist.
+
+## [2.70.0] - 2026-11-07
+
+### Changed
+
+- **BREAKING:** `agent-control-plane-core` is now a peer dependency (>=0.11.2 <1.0.0) instead of a direct dependency. Projects must explicitly install this package to use this package.
+
+## [2.69.1] - 2026-10-30
+
+### Fixed
+- Gates can now read plugin data and findings correctly when state is stored under $TMPDIR, and live sessions are kept fresh during reads.
+- Instruction scans no longer produce false "InstructionsLoaded never ran" notices when recorded under $TMPDIR.
+- Instruction-scan fault messages now clearly indicate what failed instead of generically suggesting plugin reinstallation.
+- Tool-call gates can now locate findings that writers leave under $TMPDIR.
+- CI syscall-fault handling now properly detects launcher exit and cleanly detaches respawned redactors.
+
 ## [2.69.0] - 2026-10-30
 
 ### Added

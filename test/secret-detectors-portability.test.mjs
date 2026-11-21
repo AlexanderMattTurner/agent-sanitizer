@@ -122,6 +122,7 @@ const PATTERN_EXAMPLES = {
   "XaiApiKeyDetector[0]": `xai-${rep(40)}`,
   "ReplicateApiTokenDetector[0]": `r8_${rep(37)}`,
   "GitHubClassicTokenDetector[0]": `ghp_${rep(36)}`,
+  "GitHubClassicTokenDetector[1]": `ghs_1234567_eyJ${rep(33)}.${rep(120)}.${rep(342)}`,
   "GitLabAccessTokenDetector[0]": `glpat-${rep(30)}`,
   "GitLabAccessTokenDetector[1]": `glcbt-ab_${rep(30)}`,
   "NpmDetector[0]": `//registry.npmjs.org/:_authToken=npm_${rep(30)}`,

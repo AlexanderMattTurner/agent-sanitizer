@@ -2,16 +2,10 @@ name: Mutation tests
 
 # Mutation judges the TREE, not a diff: the shards re-answer the same question
 # on every push and every PR, and the answer moves only when a source or its
-# tests move. So this runs once a day on main — a ~30-shard matrix that
-# dominated every PR run has no business gating a docs typo — never on a PR,
-# under any circumstance.
-#
-# A red scheduled run pages through ci-failure-notify.yaml, which lists this
-# workflow by name.
+# tests move. So the shards run only on a manual dispatch — a ~30-shard matrix
+# that dominated every PR run has no business gating a docs typo — never on a
+# PR, under any circumstance. The maintainer turned the daily schedule off.
 on:
-  schedule:
-    # Daily, off the hour: GitHub queues every :00 cron in the fleet at once.
-    - cron: "37 4 * * *"
   workflow_dispatch:
   # No paths filter, and no `push` trigger to pair one with: the reporter below
   # is a Required check, and a PR that produced no status at all would sit at
@@ -47,8 +41,8 @@ jobs:
 
       - name: Decide whether the shards run
         id: gate
-        # A schedule or a hand dispatch carries no diff to narrow by, so both
-        # mutate the full tree. A pull request never runs the shards — see the
+        # A hand dispatch carries no diff to narrow by, so it mutates the full
+        # tree. A pull request never runs the shards — see the
         # header comment — it only needs `mutation-passed` to report.
         env:
           RUN: ${{ github.event_name != 'pull_request' }}
@@ -57,12 +51,23 @@ jobs:
           [ "$RUN" = "true" ] ||
             echo "::notice::Mutation shards run only on the nightly schedule or a manual dispatch, never on a PR"
 
+      # The shard config splits generated modules (src/joining-type.mjs,
+      # src/standardized-variants.mjs) that only `pnpm install` writes.
+      - name: Setup base environment
+        if: steps.gate.outputs.run == 'true'
+        uses: ./.github/actions/setup-base-env
+
       - name: Load shard matrix
         id: shards
+        if: steps.gate.outputs.run == 'true'
         # Expand the declarative config into concrete line-range slices from the
         # file's current length (see .github/scripts/expand-shards.mjs); the
         # aggregate gate calls the same expander so their shard counts match.
-        run: echo "shards=$(node .github/scripts/expand-shards.mjs)" >> "$GITHUB_OUTPUT"
+        # The assignment on its own line lets `bash -e` fail the step when the
+        # expander throws, instead of writing an empty matrix.
+        run: |
+          shards=$(node .github/scripts/expand-shards.mjs)
+          echo "shards=$shards" >> "$GITHUB_OUTPUT"
 
   # The fast oracle for "does the suite survive instrumentation at all?". Stryker
   # aborts a shard whose initial dry run is red, so ONE test that asserts on the
@@ -194,11 +199,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Node.js
+      # aggregate-mutation.mjs re-expands the shard set, which reads the
+      # generated modules only `pnpm install` writes.
+      - name: Setup base environment
         if: env.SCORE == 'true'
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: "22"
+        uses: ./.github/actions/setup-base-env
 
       - name: Download shard reports
         if: env.SCORE == 'true'

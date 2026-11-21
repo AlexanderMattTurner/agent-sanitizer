@@ -146,14 +146,31 @@ class DeletionOffsets(Sequence[int]):
         return self._kept_before
 
 
-def newline_offsets(text: str) -> DeletionOffsets:
-    """The offset map from ``text.replace("\\n", "")`` back to ``text``."""
+# A line break plus the next line's indentation: what a wrapped token loses
+# when a terminal, a pretty-printer or `base64 -w` breaks it across lines.
+WRAP_SEAM_RE = re.compile(r"\n[ \t]*")
+
+
+def newline_offsets(text: str) -> tuple[str, DeletionOffsets]:
+    """``text`` with every newline deleted, and the offset map back to ``text``."""
     newlines: list[int] = []
     at = text.find("\n")
     while at != -1:
         newlines.append(at)
         at = text.find("\n", at + 1)
-    return DeletionOffsets(newlines, len(text) - len(newlines))
+    return text.replace("\n", ""), DeletionOffsets(newlines, len(text) - len(newlines))
+
+
+def wrap_seam_offsets(text: str) -> tuple[str, DeletionOffsets]:
+    """``text`` with every :data:`WRAP_SEAM_RE` seam deleted, and the offset map
+    back to ``text``. Deleting the indentation too is what lets an indented
+    continuation line rejoin its token instead of leaving a gap in it."""
+    deleted = [
+        i for m in WRAP_SEAM_RE.finditer(text) for i in range(m.start(), m.end())
+    ]
+    return WRAP_SEAM_RE.sub("", text), DeletionOffsets(
+        deleted, len(text) - len(deleted)
+    )
 
 
 def identity_map(text: str) -> tuple[str, Sequence[int]]:

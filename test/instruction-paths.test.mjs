@@ -436,7 +436,7 @@ describe("every scanner-rendered untrusted string goes through displayUntrusted"
       ...HOOK_FAULT,
       "ctx.gapNotice":
         "formatSkipped's output, whose file and reason are wrapped",
-      warning: "ctx.gapNotice and HOOK_NAME around fixed prose",
+      codes: "errno codes from the stale-state sweeps",
       "skipped.length": "a count of unreadable files",
       cleaned: "a count of cleaned files",
     },

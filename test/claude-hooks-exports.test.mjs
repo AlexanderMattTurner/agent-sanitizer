@@ -274,6 +274,7 @@ const PUBLISHED_EXPORTS = {
     "safeErrMessage",
     "scrubUntrustedText",
     "setupRunning",
+    "stateRootCandidates",
     "touchLiveState",
     "writeFileNoFollow",
     "writeSentinelFile",

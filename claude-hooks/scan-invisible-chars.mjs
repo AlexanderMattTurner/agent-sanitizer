@@ -38,6 +38,7 @@ import {
   readStdinJson,
 } from "./lib/hook-io.mjs";
 import {
+  advisoryParts,
   registerFaultPolicy,
   hookFaultOutcome,
   writeFaultOutcome,
@@ -159,28 +160,17 @@ function faultLine(ctx) {
 
 /**
  * The open-posture parts for instruction files the scan could not READ, or null
- * when the fault is anything else. Exit 0 with an envelope, not the fault arm's
- * bare exit 1: the hook ran and is reporting what it could not check, so the
- * user (systemMessage) and the model (additionalContext) are both told, and the
- * launcher forwards it rather than reporting a broken bundle.
+ * when the fault is anything else.
  * @param {import("./lib/hook-fault.mjs").FaultContext} ctx
  * @returns {import("./lib/hook-fault.mjs").FaultParts | null}
  */
 function openGapParts(ctx) {
   if (ctx.gapNotice === undefined) return null;
-  const warning =
+  return advisoryParts(
+    HookEvent.SESSION_START,
     `${ctx.gapNotice}\n${HOOK_NAME}: failing open — nothing is blocked. Set ` +
-    "AGENT_SANITIZER_FAIL_OPEN=0 to have the next tool call ask instead.";
-  return {
-    stderr: `${warning}\n`,
-    envelope: {
-      systemMessage: warning,
-      hookSpecificOutput: {
-        hookEventName: HookEvent.SESSION_START,
-        additionalContext: warning,
-      },
-    },
-  };
+      "AGENT_SANITIZER_FAIL_OPEN=0 to have the next tool call ask instead.",
+  );
 }
 
 // This hook's entry in the one posture table (lib/hook-fault.mjs). SessionStart
@@ -193,18 +183,20 @@ registerFaultPolicy(HOOK_NAME, {
   event: HookEvent.SESSION_START,
   guarded: "instruction files",
   open: (ctx) =>
-    openGapParts(ctx) ?? {
-      stderr: `${faultLine(ctx)} Passing through unguarded; set AGENT_SANITIZER_FAIL_OPEN=0 to arm the tool-call gate instead.\n`,
-      exitCode: 1,
-    },
-  closed: (ctx) =>
-    ctx.gapNotice === undefined
-      ? {
-          stderr: `${faultLine(ctx)} Arming the tool-call gate (AGENT_SANITIZER_FAIL_OPEN=0).\n`,
-          exitCode: 1,
-          armAlert: true,
-        }
-      : { stderr: `${ctx.gapNotice}\n`, armAlert: true },
+    openGapParts(ctx) ??
+    advisoryParts(
+      HookEvent.SESSION_START,
+      `${faultLine(ctx)} Passing through unguarded; set AGENT_SANITIZER_FAIL_OPEN=0 to arm the tool-call gate instead.`,
+    ),
+  closed: (ctx) => ({
+    ...advisoryParts(
+      HookEvent.SESSION_START,
+      ctx.gapNotice === undefined
+        ? `${faultLine(ctx)} Arming the tool-call gate (AGENT_SANITIZER_FAIL_OPEN=0).`
+        : `${ctx.gapNotice}\n${HOOK_NAME}: the next tool call asks first (AGENT_SANITIZER_FAIL_OPEN=0).`,
+    ),
+    armAlert: true,
+  }),
 });
 
 /**
@@ -502,23 +494,14 @@ async function runScanCli({ trace: sink, scan: runScan, sessionId }, out) {
       ),
     );
     persistAlert(alertParts, sessionId);
-    // process.exit skips cliMain's `finally`, which would otherwise flush.
+    // process.exit skips cliMain's `finally`, which would otherwise flush. No
+    // code: the exit is the one reportFault set from the posture table.
     out.flush();
-    process.exit(1);
+    process.exit();
   }
   /* c8 ignore stop */
 
-  // No clear: the store is session-keyed, so this session starts empty by
-  // construction and cannot inherit a previous session's ack. Age out what past
-  // sessions left instead — SessionStart is the once-per-session touchpoint the
-  // sweep belongs on.
-  sweepStaleSessions(sessionId);
-  // The other two stores these hooks own (reveal under STATE_ROOT, confirm in
-  // $TMPDIR). Both are content- or fingerprint-addressed with no natural owner
-  // to delete them, so without a sweep they grow for the life of the machine;
-  // SessionStart is the only touchpoint that runs once per session.
-  sweepStaleReveals();
-  sweepStaleConfirms();
+  sweepStaleStores(sessionId);
 
   // Only a non-errno throw reaches here — a bug in the scanner, not a file it
   // could not read (those are accounted for in `skipped`). It is a fault of THIS
@@ -569,6 +552,46 @@ async function runScanCli({ trace: sink, scan: runScan, sessionId }, out) {
   if (allFindings.length > 0)
     alertParts.push(...autoCleanFindings(allFindings, PROJECT_DIR));
   persistAlert(alertParts, sessionId);
+}
+
+/**
+ * Age out what past sessions left in the three stores these hooks own: the
+ * session-keyed alert store, and the reveal and confirm stores, which are
+ * content- or fingerprint-addressed with no natural owner to delete them.
+ * SessionStart is the one touchpoint that runs once per session. The alert
+ * store needs no clear: it is session-keyed, so this session starts empty and
+ * cannot inherit a past session's ack.
+ *
+ * An I/O error here is reported and the scan still runs. A sweep that fails
+ * leaves stale files behind and costs no coverage, but a throw would abort the
+ * scan before the posture table sees it: the bundle dies, and under
+ * AGENT_SANITIZER_FAIL_OPEN=0 nothing arms the gate. A non-errno throw is a bug
+ * in the sweep and propagates.
+ * @param {string} [sessionId]
+ * @returns {void}
+ */
+function sweepStaleStores(sessionId) {
+  /** @type {string[]} */
+  const failed = [];
+  for (const sweep of [
+    () => sweepStaleSessions(sessionId),
+    sweepStaleReveals,
+    sweepStaleConfirms,
+  ]) {
+    try {
+      sweep();
+    } catch (err) {
+      const code = /** @type {NodeJS.ErrnoException} */ (err).code;
+      if (typeof code !== "string") throw err;
+      failed.push(code);
+    }
+  }
+  if (failed.length === 0) return;
+  // errno codes only: the error messages embed paths under a shared $TMPDIR.
+  const codes = [...new Set(failed)].join(", ");
+  process.stderr.write(
+    `${HOOK_NAME}: could not age out stale session state (${codes}); scanning anyway.\n`,
+  );
 }
 
 /**

@@ -789,7 +789,7 @@ export function resolveStateRoot(env) {
   // A relative path resolves against each hook process's cwd, so two processes
   // would disagree on the root, and it could land inside a scanned tree.
   if (!data || !isAbsolute(data)) return tmpdir();
-  const root = join(data, "session-state");
+  const root = pluginStateRoot(data);
   for (const dir of [data, root]) {
     try {
       mkdirSync(dir, { mode: 0o700 });
@@ -808,6 +808,24 @@ export function resolveStateRoot(env) {
     return tmpdir();
   }
   return root;
+}
+
+/** @param {string} data  an absolute plugin data dir */
+const pluginStateRoot = (data) => join(data, "session-state");
+
+/**
+ * Every root a hook process given `env` can resolve STATE_ROOT to, deduplicated.
+ * Each process resolves its own root, and one whose check faulted takes $TMPDIR
+ * while the rest keep the plugin data dir, so a reader of state another hook
+ * wrote looks under each. Unchecked: the reader's own trust checks apply.
+ * @param {Record<string, string | undefined>} env
+ * @returns {string[]}
+ */
+export function stateRootCandidates(env) {
+  const data = env.CLAUDE_PLUGIN_DATA;
+  return data && isAbsolute(data)
+    ? [pluginStateRoot(data), tmpdir()]
+    : [tmpdir()];
 }
 
 /** {@link resolveStateRoot} for this process, resolved once at load. */

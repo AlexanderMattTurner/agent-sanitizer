@@ -207,8 +207,9 @@ class ReplicateApiTokenDetector(RegexBasedDetector):
 
 
 class GitHubClassicTokenDetector(RegexBasedDetector):
-    """Classic GitHub tokens (``gh[pousr]_``). Non-capturing reimplementation of
-    the bundled ``GitHubTokenDetector`` (which leaked the body). gitleaks rules:
+    """GitHub tokens: classic ``gh[pousr]_`` and the stateless installation
+    token ``ghs_<APPID>_<JWT>``. Non-capturing reimplementation of the bundled
+    ``GitHubTokenDetector`` (which leaked the body). gitleaks rules:
     ``github-pat`` / ``github-oauth`` / ``github-app-token`` /
     ``github-refresh-token``."""
 

@@ -1951,7 +1951,9 @@ test("both postures answer a payload that never parsed, each in its own shape", 
     // note names the scan that did not happen rather than an action that passed.
     InstructionsLoaded: (parsed) =>
       parsed.hookSpecificOutput?.hookEventName === "InstructionsLoaded" &&
-      /UNSCANNED/.test(parsed.hookSpecificOutput?.additionalContext ?? ""),
+      /NOT scanned|nothing was scanned/.test(
+        parsed.hookSpecificOutput?.additionalContext ?? "",
+      ),
   };
   const closedShape = {
     UserPromptSubmit: (parsed) => parsed.decision === "block",
@@ -1978,6 +1980,9 @@ test("both postures answer a payload that never parsed, each in its own shape", 
       ]) {
         const res = launch(plugin, event, hook, payload, { env });
         assert.equal(res.status, 0, `${hook}: ${res.stderr}`);
+        // The hook answered from its own posture arm. The launcher's
+        // dead-bundle fallback names the plugin as broken, which it is not.
+        assert.doesNotMatch(res.stdout, /reinstall the plugin/, hook);
         assert.ok(
           shape[event](JSON.parse(res.stdout)),
           `${hook} answered the wrong shape under ${JSON.stringify(env)}: ${res.stdout}`,
