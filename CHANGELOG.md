@@ -8,6 +8,14 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.71.4] - 2026-11-22
+
+### Fixed
+
+- Fixed ruff pin reading to work with PyYAML runner failures and to consolidate pin reading in one place.
+- Fixed review gate and advisory workflows to stop incorrectly posting cancelled check runs.
+- Fixed shell script formatting to satisfy shfmt and explicit-encoding checks.
+
 ## [2.71.3] - 2026-11-22
 
 ### Fixed
