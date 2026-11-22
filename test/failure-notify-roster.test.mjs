@@ -23,6 +23,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { parse } from "yaml";
 
 import {
   NOTIFIER_WORKFLOW_PATH,
@@ -223,6 +224,31 @@ describe("post-merge failure-notification roster", () => {
     assert.ok(
       roster.has("Pack smoke test"),
       "Pack smoke test is unrouted again",
+    );
+  });
+
+  it("re-runs every paged path-filtered push workflow on a schedule", () => {
+    // main-health judges a workflow by its NEWEST push/schedule run on main, and
+    // a path-filtered push trigger may not fire again for weeks. One rate-limited
+    // `gh api` call in Sync required status checks held main-health red for ten
+    // days. A schedule keeps the newest run current: a transient red clears on
+    // the next run, and a real failure goes red again.
+    const filtered = workflows.filter((wf) => {
+      const push = parse(read(wf.path)).on?.push;
+      return roster.has(wf.name) && (push?.paths ?? push?.["paths-ignore"]);
+    });
+    // Non-vacuity: a scheduled member proves the `paths:` detection works.
+    assert.ok(
+      filtered.some((wf) => wf.name === "Plugin dist ruleset"),
+      `path-filter detection found only: ${filtered.map((wf) => wf.name)}`,
+    );
+    assert.deepEqual(
+      filtered
+        .filter((wf) => parse(read(wf.path)).on.schedule === undefined)
+        .map((wf) => wf.path),
+      [],
+      "main-health can hold one transient red on these indefinitely: add a " +
+        "daily `schedule:` trigger that fires before main-health.yaml's cron",
     );
   });
 });
