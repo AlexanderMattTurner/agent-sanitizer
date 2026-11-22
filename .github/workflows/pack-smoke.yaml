@@ -27,11 +27,11 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  # A PR run is superseded by its next push; a main or scheduled run is an
-  # alert and is never dropped.
+  # A PR run is superseded by its next push. A running main or scheduled run is
+  # never cancelled; GitHub may still replace a pending one with a newer run.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-  # cancellable-required-check-ok: the group is static only on schedule, where
-  # this expression is false, so no run cancels a scheduled one or its reporter.
+  # cancellable-required-check-ok: push and schedule share the static main group,
+  # and this expression is false for both, so neither cancels the other.
 
 permissions:
   contents: read

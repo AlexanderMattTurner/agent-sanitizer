@@ -52,11 +52,13 @@ function makeCheckout({ manifestExtra = {}, rootModules = {} } = {}) {
   };
   // The root node_modules a frozen `pnpm install` leaves behind: one installed
   // version per dependency, which is what the lockfile pins.
-  for (const [name, version] of Object.entries(rootModules)) {
+  for (const [name, entry] of Object.entries(rootModules)) {
+    const { version, dependencies } =
+      typeof entry === "string" ? { version: entry } : entry;
     mkdirSync(join(dir, "node_modules", name), { recursive: true });
     writeFileSync(
       join(dir, "node_modules", name, "package.json"),
-      JSON.stringify({ name, version }),
+      JSON.stringify({ name, version, dependencies }),
     );
   }
   writeFileSync(
@@ -94,6 +96,10 @@ writeFileSync(new URL("../src/vendor/patched.mjs", import.meta.url), "export con
   // than the whole checkout, which is what staging-then-packing preserves.
   writeFileSync(join(dir, "unpublished.txt"), "not in files\n");
   mkdirSync(join(dir, ".github", "scripts"), { recursive: true });
+  writeFileSync(
+    join(dir, ".github", "scripts", "package.json"),
+    '{\n  "type": "commonjs"\n}\n',
+  );
 
   // `git archive HEAD` stages the committed tree, so the fixture needs a commit.
   const git = (...args) =>
@@ -170,7 +176,11 @@ async function startRegistry(packages) {
             const digest = createHash("sha512").update(bytes).digest("base64");
             const tarball = `${base}/-/${name}-${version}.tgz`;
             const dist = { tarball, integrity: `sha512-${digest}` };
-            return [version, { name, version, dist }];
+            // npm resolves dependencies from the packument, never the tarball.
+            const { dependencies } = tgz
+              ? JSON.parse(readFileSync(join(tgz.slice(0, -4), "package.json")))
+              : {};
+            return [version, { name, version, dependencies, dist }];
           }),
         ),
       };
@@ -193,10 +203,13 @@ async function startRegistry(packages) {
 }
 
 /** `npm pack` a dependency-free package, returning the tarball path. */
-function packFixture(root, name, version) {
+function packFixture(root, name, version, dependencies) {
   const src = join(root, `${name}-${version}`);
   mkdirSync(src);
-  writeFileSync(join(src, "package.json"), JSON.stringify({ name, version }));
+  writeFileSync(
+    join(src, "package.json"),
+    JSON.stringify({ name, version, dependencies }),
+  );
   execFileSync("npm", ["pack", "--silent", "--pack-destination", root], {
     cwd: src,
   });
@@ -211,8 +224,13 @@ test("installs the lockfile's dependency versions, not the registry's newest", a
       "0.15.9": null,
     },
     "fake-dep": {
-      "1.0.0": packFixture(work, "fake-dep", "1.0.0"),
+      "1.0.0": packFixture(work, "fake-dep", "1.0.0", { "fake-sub": "^2.0.0" }),
       "1.1.0": null,
+    },
+    // A dependency of a dependency: npm floats it as freely as a direct one.
+    "fake-sub": {
+      "2.0.0": packFixture(work, "fake-sub", "2.0.0"),
+      "2.1.0": null,
     },
   });
   const dir = makeCheckout({
@@ -220,7 +238,11 @@ test("installs the lockfile's dependency versions, not the registry's newest", a
       dependencies: { "fake-dep": "^1.0.0" },
       peerDependencies: { "fake-core": ">=0.11.2 <1.0.0" },
     },
-    rootModules: { "fake-core": "0.12.0", "fake-dep": "1.0.0" },
+    rootModules: {
+      "fake-core": "0.12.0",
+      "fake-dep": { version: "1.0.0", dependencies: { "fake-sub": "^2.0.0" } },
+      "fake-sub": "2.0.0",
+    },
   });
   const registry = `http://127.0.0.1:${server.address().port}/`;
   let result;
@@ -245,7 +267,11 @@ test("installs the lockfile's dependency versions, not the registry's newest", a
       ? JSON.parse(readFileSync(join(modules, name, "package.json"), "utf8"))
           .version
       : undefined;
-  const installed = [versionOf("fake-core"), versionOf("fake-dep")];
+  const installed = ["fake-core", "fake-dep", "fake-sub"].map(versionOf);
+  const prefixManifest = readFileSync(
+    join(dir, ".github", "scripts", "package.json"),
+    "utf8",
+  );
   rmSync(dir, { recursive: true, force: true });
   rmSync(work, { recursive: true, force: true });
 
@@ -254,5 +280,6 @@ test("installs the lockfile's dependency versions, not the registry's newest", a
     0,
     `install failed:\n${result.stdout}\n${result.stderr}`,
   );
-  assert.deepEqual(installed, ["0.12.0", "1.0.0"]);
+  assert.deepEqual(installed, ["0.12.0", "1.0.0", "2.0.0"]);
+  assert.equal(prefixManifest, '{\n  "type": "commonjs"\n}\n');
 });
