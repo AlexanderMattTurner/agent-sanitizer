@@ -2,8 +2,8 @@
 
 PROBLEM CLASS — two readers of the ruff-pre-commit rev that disagree. A regex
 over the YAML reads the SHA of a `# frozen:` rev, and a neighbouring repo's rev
-can match too. This is the one reader; .hooks/ruff.sh and tests/test_version_sync.py
-call it through run-with-pyyaml.sh.
+can match too. This is the one reader; .hooks/ruff.sh calls it through
+run-with-pyyaml.sh.
 
 Usage: run-with-pyyaml.sh ruff_pin.py <pre-commit-config.yaml>
 """
