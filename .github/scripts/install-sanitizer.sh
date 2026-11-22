@@ -83,14 +83,28 @@ if [ "${local_pkg_name}" = "agent-sanitizer" ]; then
   # Fails loudly on an unreadable manifest or a missing `scripts` block: a
   # silently-unstripped copy would reintroduce the pnpm dependency this exists
   # to remove, and only in the jobs that lack pnpm.
-  node - "${staged}/package.json" <<'STRIP_LIFECYCLE'
+  #
+  # It also pins each runtime and peer dependency to the version the frozen
+  # pnpm install put in the root node_modules. npm otherwise resolves the
+  # published RANGES to the registry's newest version: the peer range
+  # `agent-control-plane-core: >=0.11.2 <1.0.0` pulled a release published
+  # 2.5 minutes earlier, whose tarball npm did not serve yet (E404), while the
+  # lockfile pins 0.12.0. A missing root install throws ENOENT here.
+  node - "${staged}/package.json" <<'PIN_MANIFEST'
 const fs = require("node:fs");
+const path = require("node:path");
 const manifest = process.argv[2];
 const pkg = JSON.parse(fs.readFileSync(manifest, "utf8"));
 delete pkg.scripts.prepare;
 delete pkg.scripts.prepack;
+for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+  for (const name of Object.keys(pkg[field] ?? {})) {
+    const installed = path.join("node_modules", name, "package.json");
+    pkg[field][name] = JSON.parse(fs.readFileSync(installed, "utf8")).version;
+  }
+}
 fs.writeFileSync(manifest, `${JSON.stringify(pkg, null, 2)}\n`);
-STRIP_LIFECYCLE
+PIN_MANIFEST
   install_spec="file:${staged}"
 else
   install_spec="agent-sanitizer@${SANITIZER_VERSION}"
