@@ -52,7 +52,7 @@ function readEnv() {
   const values = Object.create(null);
   for (const name of required) {
     const value = process.env[name];
-    if (!value) {
+    if (value === undefined || (!value && name !== "CHANGELOG_SECTION")) {
       warn(`missing required env var ${name}; skipping.`);
       return null;
     }
@@ -81,7 +81,7 @@ function normalizeBody(raw) {
  * after it (starting at the next `## ` heading). Returns null if there is no
  * Unreleased heading.
  * @param {string} source
- * @returns {{before: string, afterBlock: string} | null}
+ * @returns {{before: string, unreleased: string, afterBlock: string} | null}
  */
 function splitAroundUnreleased(source) {
   const markerMatch = source.match(/^## Unreleased[ \t]*$/m);
@@ -95,6 +95,7 @@ function splitAroundUnreleased(source) {
 
   return {
     before: source.slice(0, markerMatch.index),
+    unreleased: source.slice(blockStart, bodyEnd),
     afterBlock: source.slice(bodyEnd),
   };
 }
@@ -110,11 +111,11 @@ function promoteUnreleased() {
     return;
   }
 
-  const body = normalizeBody(env.section);
-  if (!body) {
-    warn("drafted changelog body is empty; skipping.");
-    return;
-  }
+  // An empty draft still dates the release: release-canary.sh needs the heading.
+  const body =
+    normalizeBody(env.section) ||
+    split.unreleased.trim() ||
+    "No user-visible changes.";
 
   const dated = `## [${env.newVersion}] - ${env.releaseDate}\n\n${body}\n`;
   const afterBlock = split.afterBlock.replace(/^\n+/, "\n");
