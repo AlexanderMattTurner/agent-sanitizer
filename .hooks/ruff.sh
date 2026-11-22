@@ -36,7 +36,9 @@ for entry in repos.value if repos else []:
 PY
   )"
 fi
-[[ -n "$pin" ]] || echo "WARNING: ruff.sh found no ruff pin in .pre-commit-config.yaml; the ruff it runs may differ from CI." >&2
+if [[ -z "$pin" ]]; then
+  echo "WARNING: ruff.sh found no ruff pin in .pre-commit-config.yaml; the ruff it runs may differ from CI." >&2
+fi
 
 if [[ -n "$pin" ]] && command -v uvx >/dev/null 2>&1; then
   exec uvx "ruff@${pin}" "$@"
