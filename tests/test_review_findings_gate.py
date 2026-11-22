@@ -664,10 +664,12 @@ def test_an_unparseable_merge_group_ref_fails_loud(tmp_path: Path) -> None:
 PR_GATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review-findings-gate.yaml"
 
 
+def _gate_workflow() -> dict:
+    return yaml.safe_load(PR_GATE_WORKFLOW.read_text(encoding="utf-8"))
+
+
 def _evaluate_job() -> dict:
-    return yaml.safe_load(PR_GATE_WORKFLOW.read_text(encoding="utf-8"))["jobs"][
-        "evaluate"
-    ]
+    return _gate_workflow()["jobs"]["evaluate"]
 
 
 def test_the_evaluate_job_never_cancels_a_running_verdict_post() -> None:
@@ -675,8 +677,15 @@ def test_the_evaluate_job_never_cancels_a_running_verdict_post() -> None:
     # between reading the PR state and POSTing the verdict — that verdict is
     # lost and the head keeps a stale one. With false, a running evaluation
     # always finishes its POST; only the queued run is ever displaced.
-    concurrency = _evaluate_job()["concurrency"]
+    concurrency = _gate_workflow()["concurrency"]
     assert concurrency["cancel-in-progress"] is False
+
+
+def test_the_concurrency_group_sits_on_the_workflow_not_the_job() -> None:
+    # A job-level group cancels a displaced QUEUED job, which posts a CANCELLED
+    # check run on the head that the merge box counts as failing. At the
+    # workflow level GitHub drops the queued RUN before any job starts.
+    assert "concurrency" not in _evaluate_job()
 
 
 def test_the_concurrency_group_is_keyed_per_head_not_per_pr() -> None:
@@ -686,7 +695,7 @@ def test_the_concurrency_group_is_keyed_per_head_not_per_pr() -> None:
     # leaving the live head with no check. The head sha in the key confines
     # displacement to runs that would post to the same sha, so every head
     # always gets its own verdict.
-    group = _evaluate_job()["concurrency"]["group"]
+    group = _gate_workflow()["concurrency"]["group"]
     assert "${{ github.event.pull_request.number }}" in group
     assert "${{ github.event.pull_request.head.sha }}" in group
 

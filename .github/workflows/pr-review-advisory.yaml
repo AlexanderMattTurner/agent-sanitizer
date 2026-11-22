@@ -25,10 +25,12 @@ permissions:
   contents: read
 
 concurrency:
-  # One run per PR; a new push cancels the superseded run (its advisory would be
-  # stale anyway). Scoped to pull_request via the head ref.
+  # One run per branch, and never cancelling a running compute. The job takes
+  # seconds, and a cancelled job posts a CANCELLED check run on the PR head that
+  # the merge box counts as failing. A newer event (a push, a body edit) still
+  # drops a superseded QUEUED run before any job starts, which posts nothing.
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   compute:
