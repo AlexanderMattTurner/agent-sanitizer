@@ -9,18 +9,22 @@
 // non-zero, so this test fails exactly the way CI did if the staging that
 // strips them is removed.
 import { strict as assert } from "node:assert";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 const SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -32,7 +36,7 @@ const SCRIPT = join(
  * the local-checkout branch is taken), dependency-free (so the install needs no
  * registry), carrying a `files` allowlist and lifecycle scripts that fail.
  */
-function makeCheckout() {
+function makeCheckout({ manifestExtra = {}, rootModules = {} } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "install-sanitizer-"));
   const manifest = {
     name: "agent-sanitizer",
@@ -44,7 +48,19 @@ function makeCheckout() {
       prepack: "exit 17",
     },
     files: ["src/*.mjs", "src/vendor/*.mjs"],
+    ...manifestExtra,
   };
+  // The root node_modules a frozen `pnpm install` leaves behind: one installed
+  // version per dependency, which is what the lockfile pins.
+  for (const [name, entry] of Object.entries(rootModules)) {
+    const { version, dependencies } =
+      typeof entry === "string" ? { version: entry } : entry;
+    mkdirSync(join(dir, "node_modules", name), { recursive: true });
+    writeFileSync(
+      join(dir, "node_modules", name, "package.json"),
+      JSON.stringify({ name, version, dependencies }),
+    );
+  }
   writeFileSync(
     join(dir, "package.json"),
     `${JSON.stringify(manifest, null, 2)}\n`,
@@ -58,7 +74,7 @@ function makeCheckout() {
   // `git archive HEAD` omits it, so the install has to generate and stage it.
   writeFileSync(
     join(dir, ".gitignore"),
-    "src/table.mjs\nsrc/vendor/patched.mjs\n",
+    "node_modules/\nsrc/table.mjs\nsrc/vendor/patched.mjs\n",
   );
   mkdirSync(join(dir, "scripts"));
   writeFileSync(
@@ -80,6 +96,10 @@ writeFileSync(new URL("../src/vendor/patched.mjs", import.meta.url), "export con
   // than the whole checkout, which is what staging-then-packing preserves.
   writeFileSync(join(dir, "unpublished.txt"), "not in files\n");
   mkdirSync(join(dir, ".github", "scripts"), { recursive: true });
+  writeFileSync(
+    join(dir, ".github", "scripts", "package.json"),
+    '{\n  "type": "commonjs"\n}\n',
+  );
 
   // `git archive HEAD` stages the committed tree, so the fixture needs a commit.
   const git = (...args) =>
@@ -132,4 +152,134 @@ test("installs the local checkout without running its lifecycle scripts", () => 
     false,
     "installed a file outside `files` — the install no longer mirrors the published package",
   );
+});
+
+/**
+ * A local npm registry. `packages` maps name -> version -> tarball path, or
+ * null for a version the packument lists but whose tarball 404s: the state
+ * registry.npmjs.org was in for minutes after agent-control-plane-core 0.15.9
+ * was published. The last version listed is `latest`.
+ */
+async function startRegistry(packages) {
+  const server = createServer((req, res) => {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const name = decodeURIComponent(req.url.slice(1));
+    if (packages[name]) {
+      const versions = Object.keys(packages[name]);
+      const packument = {
+        name,
+        "dist-tags": { latest: versions.at(-1) },
+        versions: Object.fromEntries(
+          versions.map((version) => {
+            const tgz = packages[name][version];
+            const bytes = tgz ? readFileSync(tgz) : Buffer.from(version);
+            const digest = createHash("sha512").update(bytes).digest("base64");
+            const tarball = `${base}/-/${name}-${version}.tgz`;
+            const dist = { tarball, integrity: `sha512-${digest}` };
+            // npm resolves dependencies from the packument, never the tarball.
+            const { dependencies } = tgz
+              ? JSON.parse(readFileSync(join(tgz.slice(0, -4), "package.json")))
+              : {};
+            return [version, { name, version, dependencies, dist }];
+          }),
+        ),
+      };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(packument));
+      return;
+    }
+    const tarball = req.url.match(/^\/-\/(.+)-(\d+\.\d+\.\d+)\.tgz$/);
+    const tgz = tarball && packages[tarball[1]]?.[tarball[2]];
+    if (tgz) {
+      res.writeHead(200, { "content-type": "application/octet-stream" });
+      res.end(readFileSync(tgz));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((done) => server.listen(0, "127.0.0.1", done));
+  return server;
+}
+
+/** `npm pack` a dependency-free package, returning the tarball path. */
+function packFixture(root, name, version, dependencies) {
+  const src = join(root, `${name}-${version}`);
+  mkdirSync(src);
+  writeFileSync(
+    join(src, "package.json"),
+    JSON.stringify({ name, version, dependencies }),
+  );
+  execFileSync("npm", ["pack", "--silent", "--pack-destination", root], {
+    cwd: src,
+  });
+  return join(root, `${name}-${version}.tgz`);
+}
+
+test("installs the lockfile's dependency versions, not the registry's newest", async () => {
+  const work = mkdtempSync(join(tmpdir(), "install-sanitizer-registry-"));
+  const server = await startRegistry({
+    "fake-core": {
+      "0.12.0": packFixture(work, "fake-core", "0.12.0"),
+      "0.15.9": null,
+    },
+    "fake-dep": {
+      "1.0.0": packFixture(work, "fake-dep", "1.0.0", { "fake-sub": "^2.0.0" }),
+      "1.1.0": null,
+    },
+    // A dependency of a dependency: npm floats it as freely as a direct one.
+    "fake-sub": {
+      "2.0.0": packFixture(work, "fake-sub", "2.0.0"),
+      "2.1.0": null,
+    },
+  });
+  const dir = makeCheckout({
+    manifestExtra: {
+      dependencies: { "fake-dep": "^1.0.0" },
+      peerDependencies: { "fake-core": ">=0.11.2 <1.0.0" },
+    },
+    rootModules: {
+      "fake-core": "0.12.0",
+      "fake-dep": { version: "1.0.0", dependencies: { "fake-sub": "^2.0.0" } },
+      "fake-sub": "2.0.0",
+    },
+  });
+  const registry = `http://127.0.0.1:${server.address().port}/`;
+  let result;
+  try {
+    result = await promisify(execFile)("bash", [SCRIPT], {
+      cwd: dir,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        npm_config_registry: registry,
+        npm_config_cache: join(work, "cache"),
+        NO_PROXY: "127.0.0.1",
+        no_proxy: "127.0.0.1",
+      },
+    }).catch((error) => error);
+  } finally {
+    server.close();
+  }
+  const modules = join(dir, ".github", "scripts", "node_modules");
+  const versionOf = (name) =>
+    existsSync(join(modules, name, "package.json"))
+      ? JSON.parse(readFileSync(join(modules, name, "package.json"), "utf8"))
+          .version
+      : undefined;
+  const installed = ["fake-core", "fake-dep", "fake-sub"].map(versionOf);
+  const prefixManifest = readFileSync(
+    join(dir, ".github", "scripts", "package.json"),
+    "utf8",
+  );
+  rmSync(dir, { recursive: true, force: true });
+  rmSync(work, { recursive: true, force: true });
+
+  assert.equal(
+    result.code ?? 0,
+    0,
+    `install failed:\n${result.stdout}\n${result.stderr}`,
+  );
+  assert.deepEqual(installed, ["0.12.0", "1.0.0", "2.0.0"]);
+  assert.equal(prefixManifest, '{\n  "type": "commonjs"\n}\n');
 });

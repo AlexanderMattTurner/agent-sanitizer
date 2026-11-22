@@ -13,6 +13,12 @@ on:
       - ".github/scripts/pack-smoke.sh"
       - ".github/scripts/check-pack-listing.sh"
       - ".github/workflows/pack-smoke.yaml"
+  schedule:
+    # The paths filter means a push may not re-run this for days, and Main branch
+    # health judges the NEWEST run, so one transient red would hold it red until
+    # the next src/ change. A daily run before main-health.yaml's 11:41 sweep
+    # clears a transient red and keeps a real one red.
+    - cron: "13 10 * * *"
   # No paths filter on pull_request: this is a Required check, and a workflow-level
   # path filter would skip the whole workflow (including the pack-smoke-passed
   # reporter) on PRs that don't touch these paths, stranding the check at
@@ -21,7 +27,11 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # A PR run is superseded by its next push. A running main or scheduled run is
+  # never cancelled; GitHub may still replace a pending one with a newer run.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # cancellable-required-check-ok: push and schedule share the static main group,
+  # and this expression is false for both, so neither cancels the other.
 
 permissions:
   contents: read

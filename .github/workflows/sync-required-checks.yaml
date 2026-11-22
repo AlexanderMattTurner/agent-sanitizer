@@ -8,7 +8,7 @@ name: Sync required status checks
 # reporter's classification and the gate that actually blocks merges can never
 # silently drift apart.
 #
-# Runs only post-merge on main (and on demand). It mutates branch protection, so
+# Runs post-merge on main, daily, and on demand. It mutates branch protection, so
 # it needs a token with `administration: write`; the stock GITHUB_TOKEN cannot
 # edit rulesets. Provide it as the RULESET_SYNC_TOKEN_ORG secret — the job fails loud
 # if it is absent. Not a required check itself (no pull_request trigger).
@@ -19,6 +19,13 @@ on:
       - .github/workflows/**
       - .github/scripts/sync-required-checks.sh
       - .pre-commit-config.yaml
+  schedule:
+    # The paths filter means a push may not re-run this for weeks, and Main
+    # branch health judges the NEWEST run: one rate-limited run on 2026-11-11
+    # held it red for ten days. A daily re-apply clears a transient red, keeps a
+    # real failure red, and converges a ruleset edited outside any push. Before
+    # main-health.yaml's 11:41 sweep.
+    - cron: "47 10 * * *"
   workflow_dispatch:
     inputs:
       check-only:
@@ -35,7 +42,7 @@ concurrency:
   # trigger, so it never backs a required check that a cancelled run could hang.
   group: sync-required-checks
   cancel-in-progress: false
-  # static-concurrency-ok: not a required check (push/dispatch only)
+  # static-concurrency-ok: not a required check (push/schedule/dispatch only)
 
 jobs:
   sync:

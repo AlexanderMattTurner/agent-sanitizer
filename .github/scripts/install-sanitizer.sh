@@ -47,14 +47,20 @@ SANITIZER_VERSION="2.0.0"
 # a `.github/actions/setup-base-env` step ahead of it. Callers that skipped one
 # exited 127 on every PR the moment the local path landed.
 staged=""
+prefix_manifest=".github/scripts/package.json"
+saved_prefix_manifest=""
 cleanup() {
   if [ -n "${staged}" ]; then rm -rf "${staged}"; fi
+  if [ -n "${saved_prefix_manifest}" ]; then
+    printf '%s\n' "${saved_prefix_manifest}" >"${prefix_manifest}"
+  fi
 }
 trap cleanup EXIT
 
 local_pkg_name="$(node -p "try { require('./package.json').name } catch { '' }")"
 if [ "${local_pkg_name}" = "agent-sanitizer" ]; then
   staged="$(mktemp -d)"
+  saved_prefix_manifest="$(cat "${prefix_manifest}")"
   git archive --format=tar HEAD | tar -x -C "${staged}"
   # The Unicode tables and the patched GFM autolink module are generated at
   # install time and git-ignored, so `git archive` left them out, and the staged
@@ -83,14 +89,60 @@ if [ "${local_pkg_name}" = "agent-sanitizer" ]; then
   # Fails loudly on an unreadable manifest or a missing `scripts` block: a
   # silently-unstripped copy would reintroduce the pnpm dependency this exists
   # to remove, and only in the jobs that lack pnpm.
-  node - "${staged}/package.json" <<'STRIP_LIFECYCLE'
+  #
+  # It also pins the WHOLE dependency tree, peers included, to the versions the
+  # frozen pnpm install put in the root node_modules, as npm `overrides` in the
+  # prefix's manifest (cleanup restores it). npm otherwise resolves every range
+  # to the registry's newest version, at any depth: a peer release published
+  # 2.5 minutes earlier, whose tarball npm did not serve yet, failed CI (E404).
+  node - "${staged}/package.json" "${prefix_manifest}" <<'PIN_MANIFEST'
 const fs = require("node:fs");
-const manifest = process.argv[2];
-const pkg = JSON.parse(fs.readFileSync(manifest, "utf8"));
+const path = require("node:path");
+const [manifest, prefixManifest] = process.argv.slice(2);
+const read = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
+const pkg = read(manifest);
 delete pkg.scripts.prepare;
 delete pkg.scripts.prepack;
 fs.writeFileSync(manifest, `${JSON.stringify(pkg, null, 2)}\n`);
-STRIP_LIFECYCLE
+
+// Node's resolution walk from a package's real directory.
+function installedDir(fromDir, name) {
+  for (let dir = fromDir; ; dir = path.dirname(dir)) {
+    const candidate = path.join(dir, "node_modules", name, "package.json");
+    if (path.basename(dir) !== "node_modules" && fs.existsSync(candidate)) {
+      return fs.realpathSync(path.dirname(candidate));
+    }
+    if (path.dirname(dir) === dir) return null;
+  }
+}
+const overrides = {};
+const visited = new Set();
+function pin(fromDir, deps, required) {
+  for (const name of Object.keys(deps ?? {})) {
+    const dir = installedDir(fromDir, name);
+    if (dir === null) {
+      if (required) throw new Error(`${name} is not installed from ${fromDir}`);
+      continue;
+    }
+    const dep = read(path.join(dir, "package.json"));
+    if (dep.name !== name) throw new Error(`${name} is an alias of ${dep.name}`);
+    if (overrides[name] !== undefined && overrides[name] !== dep.version) {
+      throw new Error(`${name} is installed at ${overrides[name]} and ${dep.version}`);
+    }
+    overrides[name] = dep.version;
+    if (visited.has(dir)) continue;
+    visited.add(dir);
+    pin(dir, dep.dependencies, true);
+    pin(dir, dep.optionalDependencies, false);
+    pin(dir, dep.peerDependencies, false);
+  }
+}
+pin(process.cwd(), pkg.dependencies, true);
+pin(process.cwd(), pkg.optionalDependencies, false);
+pin(process.cwd(), pkg.peerDependencies, true);
+const prefix = read(prefixManifest);
+fs.writeFileSync(prefixManifest, `${JSON.stringify({ ...prefix, overrides }, null, 2)}\n`);
+PIN_MANIFEST
   install_spec="file:${staged}"
 else
   install_spec="agent-sanitizer@${SANITIZER_VERSION}"
