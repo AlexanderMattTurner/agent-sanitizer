@@ -54,6 +54,18 @@ on: # zizmor: ignore[dangerous-triggers] — no PR code executes: API-only scrip
 
 permissions: {}
 
+# Keyed per HEAD, and never cancelling a running evaluation. Webhook delivery
+# is unordered, so a PR-only key would let a late event for a stale head
+# displace the queued evaluation for the current one. `cancel-in-progress`
+# stays false because GitHub cancels mid-step, which can lose a verdict between
+# the read and the post. The block is at the WORKFLOW level because one review
+# fires one event per finding: GitHub drops a superseded queued RUN before any
+# job starts, so it posts no check run. A job-level block cancels the queued
+# JOB instead, and that posts a CANCELLED check run on the PR head.
+concurrency:
+  group: review-findings-gate-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: false
+
 jobs:
   evaluate:
     name: Post the review-findings verdict on the PR head
@@ -68,25 +80,6 @@ jobs:
     # inert until ready_for_review.
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Serialized per PR HEAD — the sha is in the group key because webhook
-    # delivery is unordered: with a PR-only key, a late-delivered event
-    # carrying a stale head could displace the queued evaluation for the
-    # current head and then post its verdict on the stale sha, leaving the
-    # live head with no check. Per-head groups make displacement possible only
-    # among runs that would post to the SAME sha. NEVER cancelling the running
-    # evaluation: cancel-in-progress stays false because GitHub cancels
-    # mid-step, so a true here can kill a run between reading the PR state
-    # and POSTing the verdict — that verdict is lost and the head keeps a
-    # stale one. With false, only the QUEUED run is ever cancelled, and only
-    # by a newer same-head run that itself executes unconditionally (no job
-    # `if:`) and posts a fresher verdict — every cancellation is a strict
-    # supersession, so a burst of review-comment events still collapses
-    # toward the newest evaluation. Rapid pushes buy a few extra short jobs
-    # (one per superseded head); their check posts target distinct shas, so
-    # they cannot clobber each other.
-    concurrency:
-      group: review-findings-gate-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
-      cancel-in-progress: false
     permissions:
       contents: read # sparse-checkout the trusted gate script
       statuses: write # post the "Review findings resolved" verdict on the head

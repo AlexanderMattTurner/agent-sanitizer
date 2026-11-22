@@ -8,6 +8,13 @@ adhere to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [2.71.3] - 2026-11-22
+
+### Fixed
+- Preserve Unreleased entries in the changelog when drafted release notes are empty.
+- Ensure the changelog is dated even when the drafted release notes are empty.
+- Wire check-pipefail-sigpipe into pre-commit configuration so the synced script is reachable.
+
 ## [2.71.1] - 2026-11-21
 
 ### Fixed
