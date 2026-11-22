@@ -15,26 +15,10 @@ pin=""
 config="$root/.pre-commit-config.yaml"
 runner="$root/.github/scripts/run-with-pyyaml.sh"
 if [[ -f "$config" && -f "$runner" ]] && command -v uv >/dev/null 2>&1; then
-  # A SHA rev takes its version from that line's `# [frozen: ]vX.Y.Z` comment.
-  pin="$(
-    bash "$runner" - "$config" <<'PY'
-import re, sys, yaml
-text = open(sys.argv[1], encoding="utf-8").read()
-lines = text.splitlines()
-repos = next((v for k, v in yaml.compose(text).value if k.value == "repos"), None)
-for entry in repos.value if repos else []:
-    fields = {k.value: v for k, v in entry.value}
-    if "astral-sh/ruff-pre-commit" in fields["repo"].value:
-        rev = fields["rev"]
-        comment = lines[rev.end_mark.line][rev.end_mark.column :]
-        m = re.fullmatch(r"v(\d+(?:\.\d+)+)", rev.value) or re.fullmatch(
-            r"\s*#\s*(?:frozen:\s*)?v(\d+(?:\.\d+)+)\s*", comment
-        )
-        if m:
-            print(m[1])
-        break
-PY
-  )"
+  # A runner failure (uv offline) leaves the pin empty, so the fallback chain still runs.
+  if ! pin="$(bash "$runner" "$root/.github/scripts/ruff_pin.py" "$config")"; then
+    pin=""
+  fi
 fi
 if [[ -z "$pin" ]]; then
   echo "WARNING: ruff.sh found no ruff pin in .pre-commit-config.yaml; the ruff it runs may differ from CI." >&2

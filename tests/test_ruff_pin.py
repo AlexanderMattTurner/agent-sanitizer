@@ -27,13 +27,35 @@ SHA = "488940d9de1b658fac229e34c521d75a6ea476f2"
 def test_pin_comes_from_the_ruff_entry(
     tmp_path: Path, entry: str, pin: str | None
 ) -> None:
+    run = _run_ruff_sh(tmp_path, entry)
+    assert run.returncode == 0, run.stderr
+    assert run.stdout == (f"uvx ruff@{pin} check\n" if pin else "ruff check\n")
+    assert ("no ruff pin" in run.stderr) == (pin is None)
+
+
+def test_failing_pyyaml_runner_falls_through_to_the_next_ruff(tmp_path: Path) -> None:
+    """A runner that exits non-zero (uv offline) must not abort the hook."""
+    run = _run_ruff_sh(tmp_path, f"{URL}\n    rev: v0.14.5", runner_exit=1)
+    assert run.returncode == 0, run.stderr
+    assert run.stdout == "ruff check\n"
+    assert "no ruff pin" in run.stderr
+
+
+def _run_ruff_sh(
+    tmp_path: Path, entry: str, runner_exit: int = 0
+) -> subprocess.CompletedProcess[str]:
     for rel in (
         ".hooks/ruff.sh",
         ".github/scripts/run-with-pyyaml.sh",
+        ".github/scripts/ruff_pin.py",
         ".github/tool-versions.sh",
     ):
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(REPO_ROOT / rel, tmp_path / rel)
+    if runner_exit:
+        (tmp_path / ".github/scripts/run-with-pyyaml.sh").write_text(
+            f"#!/bin/bash\nexit {runner_exit}\n", encoding="utf-8"
+        )
     other = "  - repo: https://x/y\n    rev: v0.4.0\n    hooks: []\n"
     (tmp_path / ".pre-commit-config.yaml").write_text(
         f"repos:\n{other}  - {entry}\n", encoding="utf-8"
@@ -45,13 +67,10 @@ def test_pin_comes_from_the_ruff_entry(
         )
         (tmp_path / "bin" / tool).chmod(0o755)
     env = {**os.environ, "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}"}
-    run = subprocess.run(
+    return subprocess.run(
         ["bash", str(tmp_path / ".hooks/ruff.sh"), "check"],
         capture_output=True,
         text=True,
         env=env,
         timeout=60,
     )
-    assert run.returncode == 0, run.stderr
-    assert run.stdout == (f"uvx ruff@{pin} check\n" if pin else "ruff check\n")
-    assert ("no ruff pin" in run.stderr) == (pin is None)

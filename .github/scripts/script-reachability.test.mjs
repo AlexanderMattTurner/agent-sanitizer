@@ -13,7 +13,7 @@
 // grep hit that reads as the real thing.
 //
 // The roots are the things that can start execution — workflows, composite
-// actions, and .pre-commit-config.yaml — and reachability is the transitive
+// actions, .pre-commit-config.yaml and .hooks/ruff.sh — and reachability is the transitive
 // closure over references from there. A test suite joins the closure once it
 // references something already reachable, which is what keeps a test-only
 // helper (auto-resolve/fixtures.mjs) live while denying an orphan the ability
@@ -62,6 +62,8 @@ const ROOTS = [
   ...tracked(".github/workflows"),
   ...tracked(".github/actions"),
   ".pre-commit-config.yaml",
+  // lint-staged and pre-push-check.sh start it, and it runs ruff_pin.py.
+  ".hooks/ruff.sh",
 ];
 
 /**
