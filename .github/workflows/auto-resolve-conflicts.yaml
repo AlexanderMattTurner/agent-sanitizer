@@ -85,7 +85,7 @@ jobs:
       (github.event_name != 'pull_request' ||
       github.event.action != 'labeled' ||
       github.event.label.name == 'merge-conflict')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -170,7 +170,7 @@ jobs:
     if: >-
       (github.event_name == 'push' || github.event_name == 'schedule') &&
       needs.discover.outputs.prs != '' && needs.discover.outputs.prs != '[]'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       actions: write

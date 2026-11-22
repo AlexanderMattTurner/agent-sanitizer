@@ -481,7 +481,7 @@ emit_output "published_sha=$PUBLISHED_SHA"
 # Promote "## Unreleased" to a dated version section in CHANGELOG.md, using the
 # drafted body. The helper exits 0 even on its own errors: the package is
 # already published and tagged, so a CHANGELOG hiccup must not mask that.
-if [[ -f CHANGELOG.md ]] && [[ -n "$CHANGELOG_SECTION" ]]; then
+if [[ -f CHANGELOG.md ]]; then
   RELEASE_DATE=$(date -u +%Y-%m-%d)
   NEW_VERSION="$NEW_VERSION" \
     RELEASE_DATE="$RELEASE_DATE" \

@@ -645,6 +645,26 @@ test("a release stamps the plugin manifest and commits it with the release docs"
   }
 });
 
+test("a release with an empty drafted body still gets a dated changelog heading", () => {
+  const sandbox = makeReleaseSandbox();
+  const stub = `#!/usr/bin/env bash
+while [[ $# -gt 0 && $1 != -o ]]; do shift; done
+echo '{"content":[{"type":"tool_use","input":{"changelog_section":""}}]}' >"$2"; printf 200
+`;
+  writeFileSync(join(sandbox.work, "stub-bin", "curl"), stub, { mode: 0o755 });
+  const env = { ...sandbox.env, CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-stub" };
+  try {
+    const res = runRelease({ ...sandbox, env });
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(
+      showOnRemote(sandbox.remote, "CHANGELOG.md"),
+      /^## \[1\.1\.0\] - \d{4}-\d{2}-\d{2}\n\n### Added\n\n- A thing\.\n/m,
+    );
+  } finally {
+    rmSync(sandbox.dir, { recursive: true, force: true });
+  }
+});
+
 test("an Unreleased block past the cap still releases, rather than aborting on SIGPIPE", () => {
   // Pins the Unreleased cap against a `| head -c` form: under `set -o pipefail`
   // head exits at its cap and SIGPIPEs the writer, which aborts the whole

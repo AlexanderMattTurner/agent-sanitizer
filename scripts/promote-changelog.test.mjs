@@ -77,14 +77,21 @@ test("strips a leading version heading the model may emit despite 'body only'", 
   assert.doesNotMatch(result, /- whatever/);
 });
 
-test("leaves the file unchanged when the drafted body is empty", () => {
-  const input = `${HEADER}${TAIL}`;
-  const { result } = run(input, {
-    ...RELEASE_ENV,
-    CHANGELOG_SECTION: "   \n\n",
+const ENTRIES = "### Added\n\n- A thing.";
+for (const [name, section, entries, body] of [
+  ["empty", "", "", "No user-visible changes."],
+  ["blank", "   \n\n", "", "No user-visible changes."],
+  ["empty beside entries", "", `\n${ENTRIES}\n`, ENTRIES],
+]) {
+  test(`still dates the release when the drafted body is ${name}`, () => {
+    const env = { ...RELEASE_ENV, CHANGELOG_SECTION: section };
+    const { result } = run(`${HEADER}${entries}${TAIL}`, env);
+    assert.equal(
+      result,
+      `${HEADER}\n## [1.1.0] - 2026-06-22\n\n${body}\n${TAIL}`,
+    );
   });
-  assert.equal(result, input);
-});
+}
 
 test("leaves the file unchanged when there is no Unreleased heading", () => {
   const input = `# Changelog\n${TAIL}`;
